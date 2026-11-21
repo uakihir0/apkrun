@@ -258,55 +258,6 @@ public enum PackageChange: Codable, Equatable, Sendable {
     }
 }
 
-/// A change published on the `sessions` event topic.
-///
-/// The client fetches a fresh `listSessions` snapshot after this notification. Unknown changes
-/// decode as ``unknown``.
-public enum SessionListChange: Codable, Equatable, Sendable {
-    /// The current live session snapshot changed.
-    case snapshotChanged
-    /// The daemon reported a session change added by a newer API version.
-    case unknown
-
-    private enum CaseKey: String, CodingKey {
-        case snapshotChanged
-    }
-
-    /// Decodes a known session change or preserves a future change as ``unknown``.
-    public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: RuntimeEventCodingKey.self)
-        guard container.allKeys.count == 1, let key = container.allKeys.first else {
-            throw DecodingError.dataCorrupted(
-                .init(codingPath: decoder.codingPath, debugDescription: "Expected one session change case.")
-            )
-        }
-        switch key.stringValue {
-        case "snapshotChanged":
-            self = .snapshotChanged
-        default:
-            self = .unknown
-        }
-    }
-
-    /// Encodes a known session change.
-    public func encode(to encoder: any Encoder) throws {
-        guard case .snapshotChanged = self else {
-            throw EncodingError.invalidValue(
-                self,
-                .init(
-                    codingPath: encoder.codingPath,
-                    debugDescription: "Unknown session changes cannot be encoded."
-                )
-            )
-        }
-        var container = encoder.container(keyedBy: CaseKey.self)
-        _ = container.nestedContainer(
-            keyedBy: RuntimeEventCodingKey.self,
-            forKey: .snapshotChanged
-        )
-    }
-}
-
 /// The payload carried by an event envelope.
 ///
 /// Payloads added by a newer API version decode as ``unknown`` so an older client can keep
@@ -314,8 +265,6 @@ public enum SessionListChange: Codable, Equatable, Sendable {
 public enum EventPayload: Codable, Equatable, Sendable {
     /// Runtime state and boot progress.
     case runtime(RuntimeChange)
-    /// The live app session snapshot changed.
-    case sessions(SessionListChange)
     /// Package install and store changes.
     case packages(PackageChange)
     /// An operation started, progressed, or finished.
@@ -338,10 +287,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case sessions
         case packages
         case operations
-        case resyncRequired
         case wrappers
         case integrations
-        case sessions
+        case resyncRequired
         case stream
     }
 
@@ -361,9 +309,6 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case "runtime":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .runtime(try payload.decode(RuntimeChange.self, forKey: .first))
-        case "sessions":
-            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
-            self = .sessions(try payload.decode(SessionListChange.self, forKey: .first))
         case "packages":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .packages(try payload.decode(PackageChange.self, forKey: .first))
@@ -397,9 +342,6 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case .runtime(let event):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .runtime)
             try payload.encode(event, forKey: .first)
-        case .sessions(let change):
-            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .sessions)
-            try payload.encode(change, forKey: .first)
         case .packages(let change):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .packages)
             try payload.encode(change, forKey: .first)

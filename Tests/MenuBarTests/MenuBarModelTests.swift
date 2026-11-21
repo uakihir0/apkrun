@@ -10,9 +10,9 @@ func menuBarModelListsOnlyRunningSessionsWithPackageNames() async {
     let startingPackage = packageID("io.example.starting")
     let service = MenuBarTestRuntimeService(
         sessions: [
-            RuntimeSessionSnapshot(packageID: firstPackage, phase: .running),
-            RuntimeSessionSnapshot(packageID: secondPackage, phase: .running),
-            RuntimeSessionSnapshot(packageID: startingPackage, phase: .starting),
+            WireSessionSummary(sessionID: UUID(), packageID: firstPackage, phase: .running),
+            WireSessionSummary(sessionID: UUID(), packageID: secondPackage, phase: .running),
+            WireSessionSummary(sessionID: UUID(), packageID: startingPackage, phase: .starting),
         ],
         packages: [
             package(firstPackage, name: "First app"),
@@ -45,7 +45,7 @@ func menuBarModelListsOnlyRunningSessionsWithPackageNames() async {
 func menuBarModelConfirmsStopWhenASessionIsStarting() async {
     let runningPackageID = packageID("io.example.running")
     let service = MenuBarTestRuntimeService(
-        sessions: [RuntimeSessionSnapshot(packageID: runningPackageID, phase: .starting)]
+        sessions: [WireSessionSummary(sessionID: UUID(), packageID: runningPackageID, phase: .starting)]
     )
     let model = MenuBarModel(service: service)
     await model.reload()
@@ -88,7 +88,7 @@ func menuBarModelReloadsAfterASessionSnapshotChangedEvent() async {
     }
 
     let packageID = packageID("io.example.session")
-    service.sessions = [RuntimeSessionSnapshot(packageID: packageID, phase: .running)]
+    service.sessions = [WireSessionSummary(sessionID: UUID(), packageID: packageID, phase: .running)]
     service.emit(.sessions)
 
     await waitUntil { model.snapshot.sessions.map(\.packageID) == [packageID.rawValue] }
@@ -119,14 +119,14 @@ func menuBarModelReloadsSnapshotAfterAnEventStreamReconnects() async {
     }
 
     let interimPackageID = packageID("io.example.interim")
-    service.sessions = [RuntimeSessionSnapshot(packageID: interimPackageID, phase: .running)]
+    service.sessions = [WireSessionSummary(sessionID: UUID(), packageID: interimPackageID, phase: .running)]
     service.emit(.runtime)
     await waitUntil {
         model.isConnected
             && model.snapshot.sessions.map(\.packageID) == [interimPackageID.rawValue]
     }
 
-    service.sessions = [RuntimeSessionSnapshot(packageID: appPackageID, phase: .running)]
+    service.sessions = [WireSessionSummary(sessionID: UUID(), packageID: appPackageID, phase: .running)]
     service.releaseHeldSubscription()
 
     await waitUntil {
@@ -141,7 +141,7 @@ func menuBarModelReloadsSnapshotAfterAnEventStreamReconnects() async {
 func menuBarModelLaunchesTheSelectedAppPackage() async {
     let appPackageID = packageID("io.example.launch")
     let service = MenuBarTestRuntimeService(
-        sessions: [RuntimeSessionSnapshot(packageID: appPackageID, phase: .running)],
+        sessions: [WireSessionSummary(sessionID: UUID(), packageID: appPackageID, phase: .running)],
         packages: [package(appPackageID, name: "Launch app")]
     )
     let model = MenuBarModel(service: service)
@@ -219,7 +219,7 @@ func menuBarModelRetriesSnapshotAfterResyncFailure() async {
 @MainActor
 private final class MenuBarTestRuntimeService: MenuBarRuntimeService {
     var status: RuntimeHostStatus
-    var sessions: [RuntimeSessionSnapshot]
+    var sessions: [WireSessionSummary]
     var packages: RuntimePackageListResult
     var failNextRuntimeStatusRead = false
     private(set) var runtimeStatusReadCount = 0
@@ -234,7 +234,7 @@ private final class MenuBarTestRuntimeService: MenuBarRuntimeService {
 
     init(
         status: RuntimeHostStatus = sampleRuntimeStatus("ready"),
-        sessions: [RuntimeSessionSnapshot] = [],
+        sessions: [WireSessionSummary] = [],
         packages: [RuntimePackageSummary] = []
     ) {
         self.status = status
@@ -251,7 +251,7 @@ private final class MenuBarTestRuntimeService: MenuBarRuntimeService {
         return status
     }
 
-    func listSessions() async throws -> [RuntimeSessionSnapshot] {
+    func listSessions() async throws -> [WireSessionSummary] {
         sessions
     }
 

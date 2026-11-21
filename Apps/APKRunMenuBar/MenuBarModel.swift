@@ -7,7 +7,7 @@ import RuntimeClient
 @MainActor
 protocol MenuBarRuntimeService {
     func runtimeStatus() async throws -> RuntimeHostStatus
-    func listSessions() async throws -> [RuntimeSessionSnapshot]
+    func listSessions() async throws -> [WireSessionSummary]
     func listPackages() async throws -> RuntimePackageListResult
     func startRuntime() async throws -> RuntimeHostStatus
     func stopRuntime() async throws -> RuntimeHostStatus
@@ -27,7 +27,7 @@ private final class RuntimeClientMenuBarService: MenuBarRuntimeService {
         try await client.runtimeStatus()
     }
 
-    func listSessions() async throws -> [RuntimeSessionSnapshot] {
+    func listSessions() async throws -> [WireSessionSummary] {
         try await client.listSessions()
     }
 
@@ -133,7 +133,7 @@ final class MenuBarModel: ObservableObject {
         do {
             let sessions = try await service.listSessions()
             isPerformingAction = false
-            if sessions.contains(where: { $0.phase != .ended }) {
+            if !sessions.isEmpty {
                 isShowingStopConfirmation = true
             } else {
                 await stopAndroid()
@@ -253,7 +253,7 @@ final class MenuBarModel: ObservableObject {
             snapshot = MenuBarSnapshot(
                 runtimeStatus: runtimeStatus,
                 sessions: runningSessions,
-                hasOpenSessions: sessions.contains { $0.phase != .ended },
+                hasOpenSessions: !sessions.isEmpty,
                 availableUpdates: nil,
                 liveHealthNeedsAttention: nil,
                 developerModeEnabled: nil
@@ -382,7 +382,7 @@ final class MenuBarModel: ObservableObject {
         let errorCode: String
         if let clientError = error as? RuntimeControlClientError {
             switch clientError {
-            case .remoteFailure(let code, _):
+            case .remoteFailure(let code, _, _):
                 errorCode = code
             case .transportFailure, .requestTimedOut, .endpointRejected(.hostShuttingDown):
                 errorCode = "runtime.serviceUnavailable"

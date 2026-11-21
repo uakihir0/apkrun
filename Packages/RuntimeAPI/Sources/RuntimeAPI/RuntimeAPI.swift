@@ -2,15 +2,6 @@
 
 /// The major and minor version used by RuntimeAPI compatibility checks.
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    /// Version 1.0 introduces the authenticated control endpoint; 1.1 adds Guest Agent status fields;
-    /// 1.2 adds control-endpoint launch and terminate operations; 1.3 adds bounded endpoint admission;
-    /// 1.4 adds package queries; 1.5 adds runtime reset; 1.6 adds one-request runtime restart;
-    /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
-    /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
-    /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
-    /// 1.12 adds the authenticated `listSessions` operation; 1.13 adds session snapshot change events.
-    public static let current = APIVersion(major: 1, minor: 13)
-    /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
     /// 1.12 adds the createWrapper long operation, the wrappers event topic, and WrapperInfo;
     /// 1.13 adds approval prompts and decisions, denied wrappers, and broker requestApproval;
     /// 1.14 adds `perfStatistics`, `frameStatistics`, and `RuntimeLaunchRequest.launchTiming`;
@@ -739,9 +730,8 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     /// Requests cancellation at the operation's next cancellation point, if it is still cancellable.
     func cancelOperation(_ request: Data, reply: @escaping (Data) -> Void)
     /// Lists running operations and recently finished operations retained by the daemon.
+    /// Lists running operations and recently finished operations retained by the daemon.
     func listOperations(_ request: Data, reply: @escaping (Data) -> Void)
-    /// Lists the current live app sessions.
-    func listSessions(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the latest snapshot for one operation, or a typed not-found error.
     func operationStatus(_ request: Data, reply: @escaping (Data) -> Void)
     /// Subscribes this connection to the requested topics.

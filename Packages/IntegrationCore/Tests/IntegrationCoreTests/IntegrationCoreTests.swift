@@ -1,9 +1,17 @@
+import CryptoKit
 import Foundation
 import GuestProtocol
 import RuntimeAPI
 import Testing
 
 @testable import IntegrationCore
+
+/// A real 1x1 PNG; inbound image clips are verified against the actual
+/// bytes, so tests need decodable data, not filler.
+private let testPNG = Data(
+    base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)!
 
 private func policy(
     packageValues: [String: String] = [:],
@@ -398,16 +406,27 @@ struct ClipboardLoopTests {
 
 private func imageItem(
     text: String? = nil,
-    png: Data = Data([1, 2, 3]),
+    png: Data = testPNG,
     width: Int = 4,
     height: Int = 4
 ) -> ClipItem {
     let image = ClipImage(png: png, pixelWidth: width, pixelHeight: height)
+    // The combined digest of ClipboardCoordinator.item(for:) — text plus
+    // the image digest — so a pushed item and its echo compare equal.
+    let digest: RuntimeSHA256Digest?
+    if let imageDigest = ClipboardCoordinator.digest(imageBytes: png) {
+        var hasher = SHA256()
+        hasher.update(data: Data((text ?? "").utf8))
+        hasher.update(data: Data(imageDigest.rawValue.utf8))
+        digest = RuntimeSHA256Digest(
+            rawValue: "sha256:" + hasher.finalize().map { String(format: "%02x", $0) }.joined())
+    } else {
+        digest = ClipboardCoordinator.digest(text: text ?? "")
+    }
     return ClipItem(
         text: text,
         image: image,
-        digest: ClipboardCoordinator.digest(imageBytes: png)
-            ?? ClipboardCoordinator.digest(text: text ?? "")!,
+        digest: digest ?? ClipboardCoordinator.digest(text: text ?? "")!,
         truncated: false
     )
 }
@@ -559,7 +578,7 @@ struct ClipboardImageTests {
         }
         let session = UUID()
         await subject.noteFocusChanged(sessionID: session, packageID: package, isKey: true)
-        let png = Data([4, 5, 6])
+        let png = testPNG
         await channel.setInbound(3, data: png)
         var clip = guestClip("")
         clip.image.transferID = 3
@@ -572,7 +591,8 @@ struct ClipboardImageTests {
         let deliveries = await box.deliveries
         #expect(deliveries.count == 1)
         #expect(deliveries[0].item.image?.png == png)
-        #expect(deliveries[0].item.image?.pixelWidth == 2)
+        // The announced 2x2 is not trusted: the item carries the PNG's real size.
+        #expect(deliveries[0].item.image?.pixelWidth == 1)
     }
 
     @Test func aGuestImageClipWithoutItsBytesStillDeliversTheText() async {
@@ -608,7 +628,7 @@ struct ClipboardImageTests {
         }
         let session = UUID()
         await subject.noteFocusChanged(sessionID: session, packageID: package, isKey: true)
-        let png = Data([7, 7])
+        let png = testPNG
         _ = try await subject.push(
             sessionID: session, packageID: package, item: imageItem(png: png))
         // The guest echoes the clip it just wrote: same image bytes.
@@ -621,5 +641,62 @@ struct ClipboardImageTests {
         await subject.guestChanged(echo)
 
         #expect(await box.deliveries.isEmpty)
+    }
+
+    @Test func aDifferentImageWithTheSameTextIsNotAnEcho() async throws {
+        let channel = FakeChannel()
+        let box = CheckedContinuationBox()
+        let subject = ClipboardCoordinator(
+            policy: policy(), channel: channel
+        ) { sessionID, packageID, item in
+            await box.record(sessionID: sessionID, packageID: packageID, item: item)
+        }
+        let session = UUID()
+        await subject.noteFocusChanged(sessionID: session, packageID: package, isKey: true)
+        _ = try await subject.push(
+            sessionID: session, packageID: package,
+            item: imageItem(text: "same caption", png: testPNG))
+        // The guest then copies a different image under the same text.
+        let otherPNG = Data(
+            base64Encoded:
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        )!
+        var copy = GPClipData()
+        copy.origin = .guest
+        copy.text = "same caption"
+        copy.image.transferID = 7
+        copy.image.mimeType = "image/png"
+        await channel.setInbound(7, data: otherPNG)
+
+        await subject.guestChanged(copy)
+
+        let deliveries = await box.deliveries
+        #expect(deliveries.count == 1)
+        #expect(deliveries[0].item.image?.png == otherPNG)
+    }
+
+    @Test func aNonPNGInboundImageIsDroppedNotTrusted() async {
+        let channel = FakeChannel()
+        let box = CheckedContinuationBox()
+        let subject = ClipboardCoordinator(
+            policy: policy(), channel: channel
+        ) { sessionID, packageID, item in
+            await box.record(sessionID: sessionID, packageID: packageID, item: item)
+        }
+        let session = UUID()
+        await subject.noteFocusChanged(sessionID: session, packageID: package, isKey: true)
+        await channel.setInbound(9, data: Data([0x00, 0x01, 0x02]))
+        var clip = guestClip("text survives a bad image")
+        clip.image.transferID = 9
+        clip.image.width = 1
+        clip.image.height = 1
+        clip.image.mimeType = "image/png"
+
+        await subject.guestChanged(clip)
+
+        let deliveries = await box.deliveries
+        #expect(deliveries.count == 1)
+        #expect(deliveries[0].item.text == "text survives a bad image")
+        #expect(deliveries[0].item.image == nil)
     }
 }

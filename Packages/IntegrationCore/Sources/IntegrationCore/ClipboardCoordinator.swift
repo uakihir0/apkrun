@@ -242,18 +242,38 @@ public actor ClipboardCoordinator {
     }
 
     /// Builds the wire `ClipItem` of a guest clip (§11.2). `imageBytes` is
-    /// the resolved payload of `clip.image`, fetched by the caller.
+    /// the resolved payload of `clip.image`, fetched by the caller. The
+    /// bytes are verified on the host — the announced dimensions are not
+    /// trusted: a bad PNG or one over the limits is dropped while the
+    /// clip's text and HTML still go through.
     public static func item(for clip: GPClipData, imageBytes: Data? = nil) -> ClipItem? {
         var image: ClipImage?
-        var imageDigest: RuntimeSHA256Digest?
-        if clip.hasImage, let imageBytes {
+        if clip.hasImage, let imageBytes,
+            let size = pngPixelSize(imageBytes),
+            Int64(imageBytes.count) <= imageByteLimit,
+            max(size.0, size.1) <= imagePixelLimit
+        {
             image = ClipImage(
                 png: imageBytes,
-                pixelWidth: Int(clip.image.width),
-                pixelHeight: Int(clip.image.height))
-            imageDigest = digest(imageBytes: imageBytes)
+                pixelWidth: size.0,
+                pixelHeight: size.1)
         }
-        guard let digest = digest(text: clip.text) ?? imageDigest else {
+        // The dedup digest covers every part of the clip (the guest's
+        // contentHash does the same), so a second copy with the same text
+        // but a different image is not swallowed as an echo.
+        let clipDigest: RuntimeSHA256Digest?
+        if let image, let imageDigest = digest(imageBytes: image.png) {
+            var hasher = SHA256()
+            hasher.update(data: Data(clip.text.utf8))
+            hasher.update(data: Data(clip.html.utf8))
+            hasher.update(data: Data(imageDigest.rawValue.utf8))
+            clipDigest = RuntimeSHA256Digest(
+                rawValue: "sha256:"
+                    + hasher.finalize().map { String(format: "%02x", $0) }.joined())
+        } else {
+            clipDigest = digest(text: clip.text)
+        }
+        guard let digest = clipDigest else {
             return nil
         }
         return ClipItem(
@@ -272,6 +292,23 @@ public actor ClipboardCoordinator {
         let hash = SHA256.hash(data: Data(text.precomposedStringWithCanonicalMapping.utf8))
         return RuntimeSHA256Digest(
             rawValue: "sha256:" + hash.map { String(format: "%02x", $0) }.joined())
+    }
+
+    /// The pixel size a PNG declares in its IHDR chunk, or nil when the
+    /// bytes are not a PNG. Host-side verification of image clips (§4.4):
+    /// the guest's announced dimensions are never trusted.
+    public static func pngPixelSize(_ data: Data) -> (Int, Int)? {
+        let signature: [UInt8] = [137, 80, 78, 71, 13, 10, 26, 10]
+        let bytes = [UInt8](data.prefix(24))
+        guard bytes.count == 24, Array(bytes[0...7]) == signature,
+            Array(bytes[12...15]) == Array("IHDR".utf8)
+        else {
+            return nil
+        }
+        let width = bytes[16...19].reduce(0) { $0 << 8 | Int($1) }
+        let height = bytes[20...23].reduce(0) { $0 << 8 | Int($1) }
+        guard width > 0, height > 0 else { return nil }
+        return (width, height)
     }
 
     /// The §4.4 digest of an image clip: SHA-256 over the PNG bytes.

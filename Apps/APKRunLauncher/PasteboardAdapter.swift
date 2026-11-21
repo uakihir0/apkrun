@@ -141,9 +141,16 @@ final class PasteboardAdapter {
             clipped = Self.truncate(unclipped, to: Self.textByteLimit)
             truncated = true
         }
+        // The digest covers the image too (the coordinator and the guest's
+        // contentHash do the same), so a second copy with the same text and
+        // a different image is not swallowed as an echo.
         let digest =
-            (clipped.flatMap { Self.digest(text: $0) })
-            ?? image.flatMap { Self.digest(imageBytes: $0.png) }
+            image.flatMap { image in
+                Self.digest(imageBytes: image.png).flatMap {
+                    Self.combinedDigest(text: clipped ?? "", html: html ?? "", imageDigest: $0)
+                }
+            }
+            ?? clipped.flatMap { Self.digest(text: $0) }
         guard let digest else {
             return nil
         }
@@ -262,6 +269,22 @@ final class PasteboardAdapter {
         let hash = SHA256.hash(data: imageBytes)
         return RuntimeSHA256Digest(
             rawValue: "sha256:" + hash.map { String(format: "%02x", $0) }.joined())
+    }
+
+    /// The digest of a clip that carries an image: SHA-256 over the clip's
+    /// text, HTML, and the image's own digest — the same combination the
+    /// IntegrationCore coordinator and the guest's contentHash use.
+    static func combinedDigest(
+        text: String,
+        html: String,
+        imageDigest: RuntimeSHA256Digest
+    ) -> RuntimeSHA256Digest? {
+        var hasher = SHA256()
+        hasher.update(data: Data(text.utf8))
+        hasher.update(data: Data(html.utf8))
+        hasher.update(data: Data(imageDigest.rawValue.utf8))
+        return RuntimeSHA256Digest(
+            rawValue: "sha256:" + hasher.finalize().map { String(format: "%02x", $0) }.joined())
     }
 
     /// Cuts the text at the character boundary within `byteLimit` UTF-8 bytes.

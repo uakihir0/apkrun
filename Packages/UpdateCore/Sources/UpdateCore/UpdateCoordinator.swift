@@ -233,20 +233,18 @@ public actor UpdateCoordinator {
                 return .upToDate
             }
 
-            // Save the cursor of every processed candidate (§4.2) and persist
-            // the `available` phase (§10.1).
+            // Persist the `available` phase (§10.1). The candidate's cursor
+            // is *not* consumed here: a found-but-undealt candidate (a
+            // deferred download, a check-only report) is not processed —
+            // the cursor is written when the run reaches a terminal
+            // outcome (install, skip, terminal failure) so the next check
+            // finds it again (§4.2).
             let newCursor = candidate.cursor
             await stateStore.update(packageID) { state in
                 state.lastCheckAt = started
                 state.nextCheckAt = Self.nextCheck(
                     after: started, intervalHours: checkIntervalHours, failures: 0)
                 state.consecutiveFailures = 0
-                // A `--check-only` report does not consume the candidate: the
-                // next real check must find it again (§4.2 cursors mark
-                // processed candidates only).
-                if !checkOnly {
-                    state.cursor = newCursor
-                }
                 state.phase = "available"
                 // A found candidate clears a recorded §4.5 note.
                 state.incompatibleReason = nil
@@ -487,7 +485,15 @@ public actor UpdateCoordinator {
         started: Date
     ) async {
         await stateStore.update(packageID) { state in
-            state.cursor = candidate.cursor
+            // A transient failure (unreachable, rate-limited) does not
+            // consume the candidate: the next check offers it again. Only
+            // terminal failures mark the cursor processed (§4.2).
+            switch failure {
+            case .providerUnreachable, .providerRateLimited:
+                break
+            default:
+                state.cursor = candidate.cursor
+            }
             state.phase = nil
             state.candidate = nil
         }

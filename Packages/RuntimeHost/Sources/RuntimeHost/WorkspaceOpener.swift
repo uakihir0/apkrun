@@ -10,13 +10,21 @@ enum WorkspaceOpener {
     /// Opens an application with `NSWorkspace.openApplication(at:configuration:)`.
     /// Returns whether the workspace accepted the request.
     @discardableResult
-    static func openApplication(at url: URL, arguments: [String] = [], activates: Bool = true)
+    static func openApplication(
+        at url: URL,
+        arguments: [String] = [],
+        activates: Bool = true,
+        hides: Bool = false,
+        addsToRecentItems: Bool = true
+    )
         async -> Bool
     {
         #if canImport(AppKit)
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.arguments = arguments
             configuration.activates = activates
+            configuration.hides = hides
+            configuration.addsToRecentItems = addsToRecentItems
             do {
                 _ = try await NSWorkspace.shared.openApplication(
                     at: url, configuration: configuration)

@@ -46,6 +46,14 @@ public enum DevelopmentGuestTaskEvent: Equatable, Sendable {
     case vanished(packageID: String, taskID: Int32)
 }
 
+/// A notification lifecycle event relayed from the Guest Agent (desktop-integration.md §5.3).
+public enum DevelopmentNotificationEvent: Equatable, Sendable {
+    /// The Guest Agent reported a forwarded notification.
+    case posted(GPNotification)
+    /// The Guest Agent reported a notification that has gone.
+    case removed(GPNotificationRemoved)
+}
+
 /// The development Guest Agent of one boot (guest-components.md §3, §6.1): it installs and starts the agent, keeps
 /// the control connection, restarts a dead agent within the restart budget, and removes its forwards when it stops.
 public actor DevelopmentGuestAgent {
@@ -60,6 +68,8 @@ public actor DevelopmentGuestAgent {
     public nonisolated let displayEvents: AsyncStream<GuestDisplayEvent>
     /// `clipboard_changed` events from the guest (desktop-integration.md §4.3).
     public nonisolated let clipboardEvents: AsyncStream<GPClipData>
+    /// `notification_posted`/`notification_removed` events (desktop-integration.md §5.3).
+    public nonisolated let notificationEvents: AsyncStream<DevelopmentNotificationEvent>
     /// Android reboot notifications inferred from consecutive supervisor snapshots.
     public nonisolated var androidRestartEvents: AsyncStream<GuestAndroidRestart> {
         supervisor.androidRestartEvents
@@ -86,6 +96,7 @@ public actor DevelopmentGuestAgent {
     private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
     private let displayEventContinuation: AsyncStream<GuestDisplayEvent>.Continuation
     private let clipboardEventContinuation: AsyncStream<GPClipData>.Continuation
+    private let notificationEventContinuation: AsyncStream<DevelopmentNotificationEvent>.Continuation
     private var taskEventRelay: Task<Void, Never>?
 
     /// Creates the coordinator for `bundle`, reached through `adb`.
@@ -129,6 +140,12 @@ public actor DevelopmentGuestAgent {
         )
         self.clipboardEvents = clipboardEvents
         self.clipboardEventContinuation = clipboardEventContinuation
+        let (notificationEvents, notificationEventContinuation) = AsyncStream.makeStream(
+            of: DevelopmentNotificationEvent.self,
+            bufferingPolicy: .bufferingNewest(512)
+        )
+        self.notificationEvents = notificationEvents
+        self.notificationEventContinuation = notificationEventContinuation
         relay.set { [weak self] loss in
             guard let self else {
                 return false
@@ -392,6 +409,7 @@ public actor DevelopmentGuestAgent {
         let continuation = taskEventContinuation
         let displayContinuation = displayEventContinuation
         let clipboardContinuation = clipboardEventContinuation
+        let notificationContinuation = notificationEventContinuation
         taskEventRelay = Task {
             for await event in updates {
                 guard let kind = event.kind else {
@@ -412,6 +430,10 @@ public actor DevelopmentGuestAgent {
                     displayContinuation.yield(.tasksCleared(displayID: tasks.displayID))
                 case .clipboardChanged(let clip):
                     clipboardContinuation.yield(clip)
+                case .notificationPosted(let notification):
+                    notificationContinuation.yield(.posted(notification))
+                case .notificationRemoved(let removal):
+                    notificationContinuation.yield(.removed(removal))
                 default:
                     break
                 }

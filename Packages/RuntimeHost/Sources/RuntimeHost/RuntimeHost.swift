@@ -157,8 +157,13 @@ public actor RuntimeHost {
     /// The §2.3 policy and §4 clipboard coordinator (desktop-integration.md);
     /// internal so the RuntimeHostIntegrations extension can build it lazily.
     var clipboardCoordinator: ClipboardCoordinator?
+    /// The §5.3 notification coordinator; internal so the
+    /// RuntimeHostIntegrations extension can build it lazily.
+    var notificationCoordinatorLazy: NotificationCoordinator?
     /// The guest→coordinator clip relay; alive while the guest agent is.
     var clipboardRelayTask: Task<Void, Never>?
+    /// The guest→coordinator notification relay; alive while the agent is.
+    var notificationRelayTask: Task<Void, Never>?
     /// Cached settings and capabilities for the synchronous policy closures.
     let integrationSettings = IntegrationSettingsCache()
 
@@ -3770,8 +3775,10 @@ public actor RuntimeHost {
         }
         if case .ready = snapshot.state {
             startClipboardRelay()
+            startNotificationRelay()
         } else if case .stopped = snapshot.state {
             stopClipboardRelay()
+            stopNotificationRelay()
         }
     }
 

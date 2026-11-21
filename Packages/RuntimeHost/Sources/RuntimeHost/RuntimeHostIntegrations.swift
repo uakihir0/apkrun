@@ -54,6 +54,104 @@ final class IntegrationSettingsCache: @unchecked Sendable {
     }
 }
 
+/// The channel that sends notification ops to the Guest Agent
+/// (desktop-integration.md §5.1, guest-protocol.md §7.5).
+private struct GuestNotificationsChannel: NotificationGuestChannel {
+    /// Resolves the live agent supervisor; nil while no agent is connected.
+    let supervisor: @Sendable () async -> GuestAgentSupervisor?
+
+    func setNotificationForwarding(_ packages: [String]) async throws(IntegrationFailure) {
+        try await send { try await $0.send(GuestSetNotificationForwarding(packages: packages)) }
+    }
+
+    func activateNotification(
+        key: String, actionIndex: Int?, displayID: Int32
+    ) async throws(IntegrationFailure) {
+        try await send {
+            try await $0.send(
+                GuestActivateNotification(
+                    key: key, actionIndex: actionIndex.map(Int32.init), displayID: displayID))
+        }
+    }
+
+    func dismissNotification(key: String) async throws(IntegrationFailure) {
+        try await send { try await $0.send(GuestDismissNotification(key: key)) }
+    }
+
+    private func send(
+        _ body: @Sendable (GuestAgentSupervisor) async throws -> GPEmpty
+    ) async throws(IntegrationFailure) {
+        guard let agent = await supervisor() else {
+            throw .guestUnavailable
+        }
+        do {
+            _ = try await body(agent)
+        } catch let failure as GuestProtocolFailure {
+            if case .capabilityMissing(let capability) = failure {
+                throw .notSupportedOnImage(capability: capability)
+            }
+            throw .guestUnavailable
+        } catch {
+            throw .guestUnavailable
+        }
+    }
+}
+
+/// The §5.3 host deliveries over `RuntimeStreamCenter`, the wrapper registry,
+/// and `WorkspaceOpener`.
+private struct HostNotificationSink: NotificationSink {
+    /// The daemon; the sink outlives nothing it touches.
+    weak var host: RuntimeHost?
+
+    func relay(_ message: RelayMessage, to packageID: RuntimePackageID) async -> Bool {
+        host?.streamCenter.sendRelay(message, to: packageID) ?? false
+    }
+
+    func hostNotify(_ message: HostNotificationMessage) async -> Bool {
+        host?.streamCenter.sendHostNotification(message) ?? false
+    }
+
+    func wrapperExists(for packageID: RuntimePackageID) async -> Bool {
+        guard let host,
+            let entry = await host.wrapperRegistryInstance().entry(packageID: packageID)
+        else {
+            return false
+        }
+        return entry.state != .pending
+    }
+
+    func startWrapperInBackground(_ packageID: RuntimePackageID) async {
+        guard let host,
+            let entry = await host.wrapperRegistryInstance().entry(packageID: packageID),
+            entry.state != .pending
+        else {
+            return
+        }
+        let candidates = WorkspaceOpener.applicationURLs(bundleIdentifier: entry.bundleId)
+        guard let appURL = candidates.first else {
+            return
+        }
+        await WorkspaceOpener.openApplication(
+            at: appURL,
+            arguments: ["--apkrun-background", "notifications"],
+            activates: false,
+            hides: true,
+            addsToRecentItems: false
+        )
+    }
+
+    func displayName(for packageID: RuntimePackageID) async -> String? {
+        guard let host else { return nil }
+        if let entry = await host.wrapperRegistryInstance().entry(packageID: packageID),
+            !entry.displayName.isEmpty
+        {
+            return entry.displayName
+        }
+        return (try? await host.packageServiceForIntegrations()?.packageInfo(
+            RuntimePackageRequest(packageID: packageID)))??.summary.displayName
+    }
+}
+
 /// The channel that sends host clips to the Guest Agent (desktop-integration.md §3.3).
 private struct GuestClipboardChannel: IntegrationChannel {
     /// `RuntimeHost`'s async send; throws any error, mapped here.
@@ -295,6 +393,139 @@ extension RuntimeHost {
             return nil
         }
         return RuntimePackageID(rawValue: raw)
+    }
+
+    // MARK: - Notifications (desktop-integration.md §5)
+
+    /// The §5.3 coordinator, built on first use. Also installs the stream
+    /// callbacks so relay responses reach it.
+    func notificationCoordinator() -> NotificationCoordinator {
+        if let notificationCoordinatorLazy { return notificationCoordinatorLazy }
+        let settings = integrationSettings
+        let policy = IntegrationPolicy(
+            source: IntegrationSettingsSource(
+                packageValue: { kind, packageID in
+                    settings.packageValue(packageID.rawValue, kind.rawValue)
+                },
+                globalEnabled: { kind in
+                    settings.globalEnabled(kind.rawValue)
+                },
+                supported: { capability in
+                    settings.supports(capability)
+                }
+            )
+        )
+        let channel = GuestNotificationsChannel { [weak self] in
+            await self?.runtimeSupervisorForIntegrations()?.developmentGuestAgent?.supervisor
+        }
+        let sink = HostNotificationSink(host: self)
+        let coordinator = NotificationCoordinator(policy: policy, channel: channel, sink: sink)
+        let center = streamCenter
+        center.onRelayStreamOpened = { packageID, _ in
+            Task { await coordinator.relayOpened(packageID: packageID) }
+        }
+        center.onRelayResponse = { [weak self] streamID, response in
+            guard let self else { return }
+            switch response {
+            case .activated(let identifier, let actionIndex):
+                Task {
+                    await coordinator.activated(
+                        identifier: identifier, actionIndex: actionIndex,
+                        displayID: await self.displayIDForActivation(of: identifier))
+                }
+            case .dismissed(let identifier):
+                Task { await coordinator.dismissed(identifier: identifier) }
+            case .authorizationChanged(let state):
+                if state == .denied, let packageID = center.relayPackageID(for: streamID) {
+                    Task { await coordinator.noteAuthorizationDenied(packageID: packageID) }
+                }
+            case .unknown:
+                break
+            }
+        }
+        center.onHostNotificationResponse = { [weak self] _, response in
+            guard let self else { return }
+            switch response {
+            case .activated(let identifier, let action):
+                let index: Int?
+                if case .android(let i, _) = action { index = i } else { index = nil }
+                Task {
+                    await coordinator.activated(
+                        identifier: identifier, actionIndex: index,
+                        displayID: await self.displayIDForActivation(of: identifier))
+                }
+            case .dismissed(let identifier):
+                Task { await coordinator.dismissed(identifier: identifier) }
+            case .unknown:
+                break
+            }
+        }
+        notificationCoordinatorLazy = coordinator
+        return coordinator
+    }
+
+    /// The session display of the package a wire identifier belongs to (§5.4);
+    /// 0 when the package has no session (the primary display).
+    private func displayIDForActivation(of identifier: String) async -> Int32 {
+        guard let packageRaw = identifier.split(separator: "|").first.map(String.init) else {
+            return 0
+        }
+        let snapshots = await sessionServiceForIntegrations()?.sessionSnapshots() ?? []
+        return snapshots.first { $0.packageID == packageRaw }?.displayID ?? 0
+    }
+
+    /// Starts the guest→coordinator notification relay once the agent is
+    /// ready, and pushes the forwarding allowlist (§3.2, §5.1).
+    func startNotificationRelay() {
+        guard notificationRelayTask == nil, let supervisor = runtimeSupervisorForIntegrations() else {
+            return
+        }
+        notificationRelayTask = Task.detached { [weak self] in
+            guard let self, let agent = await supervisor.developmentGuestAgent else { return }
+            await self.pushNotificationForwarding()
+            for await event in agent.notificationEvents {
+                guard !Task.isCancelled else { return }
+                switch event {
+                case .posted(let notification):
+                    await self.notificationFromGuest(notification)
+                case .removed(let removal):
+                    await self.removedFromGuest(removal)
+                }
+            }
+        }
+    }
+
+    /// Ends the notification relay.
+    func stopNotificationRelay() {
+        notificationRelayTask?.cancel()
+        notificationRelayTask = nil
+    }
+
+    /// Pushes `SetNotificationForwarding` for every managed package (§5.1).
+    func pushNotificationForwarding() async {
+        guard let service = packageServiceForIntegrations() else { return }
+        guard let result = try? await service.listPackages(RuntimeListPackagesRequest()) else {
+            return
+        }
+        var candidates: [RuntimePackageID] = []
+        for summary in result.packages {
+            await refreshIntegrationSettings(for: summary.packageID)
+            candidates.append(summary.packageID)
+        }
+        try? await notificationCoordinator().pushForwardingList(candidates)
+    }
+
+    /// One `notification_posted` event for the coordinator (§5.3).
+    func notificationFromGuest(_ notification: GPNotification) async {
+        if let packageID = RuntimePackageID(rawValue: notification.package) {
+            await refreshIntegrationSettings(for: packageID)
+        }
+        await notificationCoordinator().posted(notification)
+    }
+
+    /// One `notification_removed` event for the coordinator (§5.3).
+    func removedFromGuest(_ removal: GPNotificationRemoved) async {
+        await notificationCoordinator().removed(removal)
     }
 
     /// Maps an `IntegrationFailure` to its catalog wire error (§13.1).

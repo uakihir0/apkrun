@@ -179,6 +179,12 @@ public enum BootstrapDocumentCodec {
             throw .bootstrapInvalid(.malformed)
         }
         var total: Int64 = 0
+        var previousSplit = ""
+        for file in document.files.dropFirst() {
+            let split = String(file.name.dropFirst("split_".count).dropLast(".apk".count))
+            guard split > previousSplit else { throw .bootstrapInvalid(.malformed) }
+            previousSplit = split
+        }
         for file in document.files {
             guard BootstrapFileName.isValid(file.name),
                 (1...BootstrapDocument.maximumFileBytes).contains(file.size),
@@ -198,7 +204,7 @@ public enum BootstrapDocumentCodec {
 /// The APK set the generator clones into `Contents/Resources/bootstrap/`
 /// (wrapper.md §10.1). RuntimeHost fills it from the package's `current/`
 /// slot or an import ticket's files.
-public struct BootstrapPayload: Sendable, Equatable {
+public struct BootstrapSet: Sendable, Equatable {
     /// One payload file: its bootstrap name and its source on disk.
     public struct SourceFile: Sendable, Equatable {
         /// The file name inside `bootstrap/`.

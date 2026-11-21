@@ -464,7 +464,7 @@ public actor AppWrapperGenerator {
     /// Writes `bootstrap.json` (sorted keys) and clones the payload files
     /// into `bootstrap/` (wrapper.md §10.1).
     private static func writeBootstrap(
-        _ payload: BootstrapPayload, into resources: URL
+        _ payload: BootstrapSet, into resources: URL
     ) throws(WrapperFailure) {
         let bootstrap = resources.appendingPathComponent("bootstrap")
         do {

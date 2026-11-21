@@ -321,7 +321,7 @@ public struct WrapperConfiguration: Sendable, Equatable {
     public var kind: WrapperKind
     /// The APK set a portable wrapper bundles (wrapper.md §10). Required for
     /// `.portable`, ignored otherwise.
-    public var bootstrap: BootstrapPayload?
+    public var bootstrap: BootstrapSet?
 
     /// Creates a generation configuration.
     public init(
@@ -333,7 +333,7 @@ public struct WrapperConfiguration: Sendable, Equatable {
         updates: WrapperUpdateDefaults = WrapperUpdateDefaults(),
         integrations: IntegrationDefaults = IntegrationDefaults(),
         kind: WrapperKind = .local,
-        bootstrap: BootstrapPayload? = nil
+        bootstrap: BootstrapSet? = nil
     ) {
         self.packageID = packageID
         self.displayName = displayName

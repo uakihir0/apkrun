@@ -4122,6 +4122,45 @@ public actor PackageStore {
         return try artifactSet(in: current)
     }
 
+    /// The installed `current/` set and its directory for a portable
+    /// wrapper's `bootstrap/` (wrapper.md §10.1). The files live beside
+    /// `artifact.json` under their `ArtifactFile.name`s.
+    public func bootstrapSet(for packageID: PackageID) async throws -> (
+        set: ArtifactSet, directory: URL
+    ) {
+        try requireOpen()
+        guard let directory = directories[packageID] else {
+            throw PackageStoreFailure.packageNotFound
+        }
+        let current =
+            packagesDirectory
+            .appendingPathComponent(directory, isDirectory: true)
+            .appendingPathComponent("current", isDirectory: true)
+        guard let set = try artifactSet(in: current) else {
+            throw PackageStoreFailure.packageNotFound
+        }
+        return (set, current)
+    }
+
+    /// An open import ticket's inspected set, `incoming/` directory, and
+    /// display name for a portable wrapper's `bootstrap/` (wrapper.md
+    /// §10.1). Throws `importTicketNotFound` when the ticket is unknown.
+    public func bootstrapSet(ticket: UUID) async throws -> (
+        set: ArtifactSet, directory: URL, displayName: String
+    ) {
+        try requireOpen()
+        guard let manifest = tickets[ticket] else {
+            throw PackageStoreFailure.importTicketNotFound
+        }
+        let packageID = manifest.preview.packageID
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        return (
+            manifest.preview.artifactSet,
+            incomingDirectory(packageID: packageID, directory: directory, ticket: ticket),
+            manifest.preview.displayName
+        )
+    }
+
     /// Promotes `staged/` to `current/` for the `update` transaction
     /// (package-store.md §5.2, §5.5):
     ///

@@ -164,7 +164,7 @@ struct PortableWrapperTests {
         )
         var configuration = try fixture.configuration()
         configuration.kind = .portable
-        configuration.bootstrap = BootstrapPayload(
+        configuration.bootstrap = BootstrapSet(
             document: document,
             files: [
                 .init(

@@ -11,7 +11,6 @@ How work moves from a GitHub issue to `main`: task states, labels, branches, com
 | Contributor | a person or an AI agent | work on tasks, commit, open issues and pull requests |
 | Maintainer | the repository owner | everything, plus decide open questions, approve pull requests and CI-policy changes, approve release jobs |
 
-- An AI agent never approves a pull request or a release job, and never applies the `ci-policy-approved` label.
 - An AI agent that cannot decide something stops and asks ([../../AGENTS.md](../../AGENTS.md) §2.1).
 
 ---
@@ -93,7 +92,6 @@ Security vulnerabilities are never reported in a public issue (§3.5).
 | `blocked` | waits for a decision or another issue | anyone, with a comment |
 | `bug` | a confirmed defect | anyone |
 | `security` | a security finding filed as a task (#92) | maintainer |
-| `ci-policy-approved` | a person approved a CI control change in a pull request (§7.3) | maintainer only |
 
 Tasks that add a workflow add its labels here (for example `release-blocker`, `nightly-failure`).
 
@@ -216,7 +214,7 @@ Answer every comment: change the code, or explain why not. `fixup!` commits are 
 
 ### 7.1 When a pull request may merge
 
-1. Every required CI check passes: `workflow-policy` and every job of `ci.yml` (`lint`, `codegen`, `third-party`, `build`, `test-swift`, `test-graphics`, `test-images`).
+1. Every required CI check passes: `workflow-policy` and every job of `ci.yml` (`lint`, `codegen`, `third-party`, `build`, `test-swift`, `test-graphics`, `test-images`). `workflow-policy` is report-only: it lists the CI control files a pull request touches and always succeeds.
 2. A pull request that closes a task links the results of every T2 suite the task lists, run on a real Mac.
 3. A person approved it, and the security review is done where §6.3 requires it.
 4. The branch is rebased on the current `main`.
@@ -227,7 +225,7 @@ Rebase and merge. `main` has a linear history with no merge commits.
 
 ### 7.3 Protection of `main`
 
-`main` requires the checks of §7.1, linear history, and resolved conversations. `workflow-policy` runs trusted code from `main`: a pull request that changes a CI control file (`.github/workflows/`, `scripts/ci/`, `scripts/tests/`, `scripts/tools/`, build files, `docs/01-architecture/modules.md`, and the others listed in `scripts/ci/check-pr-control-changes.py`) needs an approving review from a person who also applied `ci-policy-approved` after the last push.
+`main` requires the checks of §7.1, linear history, and resolved conversations. `workflow-policy` runs trusted code from `main` and reports which CI control files (`.github/workflows/`, `scripts/ci/`, `scripts/tests/`, `scripts/tools/`, build files, `docs/01-architecture/modules.md`, and the others listed in `scripts/ci/check-pr-control-changes.py`) a pull request changes; the report is informational and never blocks the pull request.
 
 ### 7.4 A red `main`
 

@@ -76,6 +76,9 @@ public actor ImageUpdateCoordinator {
     /// after `ImageStore.install`.
     public func noteReady(_ version: ImageCore.ImageVersion) {
         state.phase = .ready(version)
+        state.readyAt = clock()
+        state.downloadFailures = 0
+        state.installFailures = 0
         save()
         publish(.imageUpdateChanged(WireImageUpdatePhase(state.phase)))
     }
@@ -217,6 +220,129 @@ public actor ImageUpdateCoordinator {
         )
         save()
         publish(.imageUpdateChanged(WireImageUpdatePhase(state.phase)))
+    }
+
+    // MARK: - Checks, downloads, installs (#88, runtime-maintenance.md §4.2–§4.5)
+
+    /// A feed check starts. `checking` is transient: the persisted phase stays
+    /// the previous one so a restart runs the check again (§4.3).
+    public func beginCheck() {
+        publish(.imageUpdateChanged(.checking))
+    }
+
+    /// Records a successful check: daily schedule, cleared backoff, and the
+    /// phase of §4.3 (`available` with a candidate, `idle` without). A `ready`
+    /// image is replaced only by a newer candidate; an equal one is kept.
+    public func noteCheckResult(
+        candidate: ImageCandidate?, requiresNewerAPKRun: ImageCore.ImageVersion?
+    ) {
+        state.lastCheckAt = clock()
+        state.nextCheckAt = clock().addingTimeInterval(24 * 3600)
+        state.checkFailures = 0
+        state.requiresNewerAPKRun = requiresNewerAPKRun
+        if let candidate {
+            state.candidate = candidate
+            if case .ready(let ready) = state.phase, candidate.version <= ready {
+                // The ready image stays unless the feed offers something newer.
+            } else {
+                state.phase = .available(candidate)
+            }
+        } else if case .ready = state.phase {
+            // A ready image is unaffected by an empty check.
+        } else {
+            state.phase = .idle
+            state.candidate = nil
+        }
+        logger.notice(
+            "IMAGE_CHECK_END candidate \(state.candidate?.version.description ?? "-", .public)")
+        save()
+        publish(.imageUpdateChanged(WireImageUpdatePhase(state.phase)))
+    }
+
+    /// Records a failed check: the 1 h / 6 h backoff, then the daily
+    /// schedule (§4.2).
+    public func noteCheckFailed(reason: String) {
+        let failures = (state.checkFailures ?? 0) + 1
+        state.checkFailures = failures
+        state.lastCheckAt = clock()
+        let delay: TimeInterval =
+            switch failures {
+            case 1: 3600
+            case 2: 6 * 3600
+            default: 24 * 3600
+            }
+        state.nextCheckAt = clock().addingTimeInterval(delay)
+        state.phase = .failed(state.candidate, reason: reason, retryAt: state.nextCheckAt)
+        logger.notice("IMAGE_CHECK_END failed: \(reason, .public)")
+        save()
+        publish(.imageUpdateChanged(WireImageUpdatePhase(state.phase)))
+    }
+
+    /// A candidate's download starts; the phase is persisted so a restart can
+    /// resume the partial file (§4.3).
+    public func noteDownloadStarted(_ candidate: ImageCandidate) {
+        state.phase = .downloading(candidate, progress: 0)
+        logger.notice(
+            "IMAGE_DOWNLOAD_START \(candidate.version.description, .public) from \(candidate.archiveLocation ?? "-", .public)"
+        )
+        save()
+        publish(.imageUpdateChanged(WireImageUpdatePhase(state.phase)))
+    }
+
+    /// Progress ticks of a running download; published, not persisted.
+    public func noteDownloadProgress(_ candidate: ImageCandidate, fraction: Double) {
+        publish(.imageUpdateChanged(.downloading(WireImageCandidate(candidate), progress: fraction)))
+    }
+
+    /// Records a failed download: 15 minutes, 1 hour, then 6 hours; the
+    /// partial file stays for resume (§4.3–§4.4).
+    public func noteDownloadFailed(_ candidate: ImageCandidate, reason: String) {
+        let failures = (state.downloadFailures ?? 0) + 1
+        state.downloadFailures = failures
+        let delay: TimeInterval =
+            switch failures {
+            case 1: 15 * 60
+            case 2: 3600
+            default: 6 * 3600
+            }
+        state.phase = .failed(candidate, reason: reason, retryAt: clock().addingTimeInterval(delay))
+        logger.notice("IMAGE_DOWNLOAD_END failed: \(reason, .public)")
+        save()
+        publish(.imageUpdateChanged(WireImageUpdatePhase(state.phase)))
+    }
+
+    /// Records a failed install: one retry downloads the archive again; after
+    /// a second failure nothing retries until the feed changes (§4.3).
+    public func noteInstallFailed(_ candidate: ImageCandidate, reason: String) {
+        let failures = (state.installFailures ?? 0) + 1
+        state.installFailures = failures
+        if failures < 2 {
+            state.phase = .available(candidate)
+        } else {
+            state.phase = .failed(candidate, reason: reason, retryAt: nil)
+        }
+        save()
+        publish(.imageUpdateChanged(WireImageUpdatePhase(state.phase)))
+    }
+
+    /// True when 24 hours passed since the last automatic apply attempt (A7).
+    public func automaticApplyWindowOpen() -> Bool {
+        guard let last = state.lastAutomaticApplyAt else { return true }
+        return clock().timeIntervalSince(last) >= 24 * 3600
+    }
+
+    /// Records that an automatic apply attempt started (A7).
+    public func noteAutomaticApplyAttempt() {
+        state.lastAutomaticApplyAt = clock()
+        save()
+    }
+
+    /// The version the user was last asked about (§4.6 ask-mode reminders).
+    public func noteNotified(_ version: ImageCore.ImageVersion) {
+        if !state.notifiedVersions.contains(version.description) {
+            state.notifiedVersions.append(version.description)
+            save()
+        }
     }
 
     // MARK: - Persistence

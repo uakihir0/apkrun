@@ -1428,6 +1428,7 @@ enum RuntimeControlOperation {
     case applyImage
     case rollbackImage
     case deleteImageRecoveryPoint
+    case imageFeedAction
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1549,7 +1550,7 @@ enum RuntimeControlOperation {
             .updateSkipped, .updatePackage, .getConfig, .setConfig,
             .packageSettings, .updatePackageSettings, .installImage,
             .imageStatus, .applyImage, .rollbackImage,
-            .deleteImageRecoveryPoint:
+            .deleteImageRecoveryPoint, .imageFeedAction:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -3018,6 +3019,47 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             }
             do {
                 let result = try await host.rollbackImage()
+                response.send(Self.encode(WireImageApplyReply(result: result)))
+            } catch {
+                response.send(Self.encode(WireImageApplyReply(error: Self.imageWireError(error))))
+            }
+        }
+    }
+
+    func imageFeedAction(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireImageApplyReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .imageFeedAction,
+                as: WireImageFeedActionRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireImageApplyReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    WireImageFeedActionRequest.self, from: request)
+            else {
+                response.send(Self.encode(WireImageApplyReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let result: String
+                if decoded.action == "install-latest" {
+                    result = try await host.imageInstallLatest()
+                } else {
+                    result = await host.imageCheckNow()
+                }
                 response.send(Self.encode(WireImageApplyReply(result: result)))
             } catch {
                 response.send(Self.encode(WireImageApplyReply(error: Self.imageWireError(error))))
@@ -5387,6 +5429,7 @@ extension WireImageInstallRequest: VersionedControlRequest {}
 extension WireImageStatusRequest: VersionedControlRequest {}
 extension WireImageApplyRequest: VersionedControlRequest {}
 extension WireImageRollbackRequest: VersionedControlRequest {}
+extension WireImageFeedActionRequest: VersionedControlRequest {}
 extension WireImageRecoveryPointDeleteRequest: VersionedControlRequest {}
 extension SelfUpdateNote: VersionedControlRequest {}
 extension MaintenanceControlRequest: VersionedControlRequest {}

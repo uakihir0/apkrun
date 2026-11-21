@@ -308,7 +308,7 @@ extension RuntimeHost {
         return await service.maintenanceSessionPackageIDs()
     }
 
-    private func maintenanceBackgroundTaskPackageIDs() async -> [RuntimePackageID] {
+    func maintenanceBackgroundTaskPackageIDs() async -> [RuntimePackageID] {
         guard let service = sessionServiceForIntegrations() else { return [] }
         return await service.maintenanceBackgroundTaskPackageIDs()
     }

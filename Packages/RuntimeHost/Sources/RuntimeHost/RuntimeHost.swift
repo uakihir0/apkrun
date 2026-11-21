@@ -187,6 +187,8 @@ public actor RuntimeHost {
     var _selfUpdateProbe: SelfUpdateProbe?
     /// The 24 h probe task, started after startup (§3.4).
     var selfUpdateProbeTask: Task<Void, Never>?
+    /// The §4.2/§4.6 loop: due feed checks plus the apply gate tick.
+    var imageUpdateLoopTask: Task<Void, Never>?
     /// Whether APKRun.app reported during this daemon run (§3.4 pitfall).
     var apkrunAppReported = false
     /// Whether an image migration is in progress (#59 reports it here).
@@ -518,6 +520,7 @@ public actor RuntimeHost {
         logger.notice("Daemon startup completed with host state \(hostState, .public)")
         startBundleWatcher()
         startSelfUpdateProbeLoop()
+        startImageUpdateLoop()
         completeStartup()
     }
 

@@ -191,6 +191,12 @@ extension InstanceStore {
     }
     /// The instance's recorded userdata schema (android-image.md §12.1), when a
     /// configuration exists.
+    /// The instance ID; the rollout bucket (C6) hashes it with the version.
+    public func instanceID() -> UUID? {
+        (try? loadConfiguration())?.instanceID
+    }
+
+    /// The userdata schema version the current instance was created at.
     public func userdataSchemaVersion() -> Int? {
         (try? loadConfiguration())?.userdataSchemaVersion
     }

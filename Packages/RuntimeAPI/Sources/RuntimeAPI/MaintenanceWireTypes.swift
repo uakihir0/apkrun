@@ -766,6 +766,21 @@ public struct WireImageRecoveryPointDeleteRequest: Codable, Sendable {
     }
 }
 
+/// `imageFeedAction` request: a user-initiated feed action (`check` or
+/// `install-latest`, runtime-maintenance.md §4.2, §4.5).
+public struct WireImageFeedActionRequest: Codable, Sendable {
+    /// Call metadata and API version.
+    public var header: APIRequestHeader
+    /// `check` (§4.2 user check) or `install-latest` (§4.5 user install).
+    public var action: String
+
+    /// Creates the request.
+    public init(header: APIRequestHeader, action: String) {
+        self.header = header
+        self.action = action
+    }
+}
+
 /// Shared reply for `applyImage`, `rollbackImage`, and
 /// `deleteImageRecoveryPoint`: `result` is a human one-liner for the CLI.
 public struct WireImageApplyReply: Codable, Sendable {

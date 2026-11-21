@@ -2121,6 +2121,14 @@ public actor RuntimeControlClient {
             on: { try await $0.rollbackImage($1) })
     }
 
+    /// Runs a user-initiated feed action (`apkrun image check`,
+    /// `apkrun image install --latest`). Returns the result line.
+    public func imageFeedAction(_ action: String) async throws(RuntimeControlClientError) -> String {
+        try await imageAction(
+            WireImageFeedActionRequest(header: makeHeader(), action: action),
+            on: { try await $0.imageFeedAction($1) })
+    }
+
     /// Deletes one recovery point (`apkrun image recovery-points delete`).
     public func deleteImageRecoveryPoint(name: String) async throws(RuntimeControlClientError) {
         _ = try await imageAction(
@@ -3348,6 +3356,7 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func imageStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func applyImage(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func rollbackImage(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func imageFeedAction(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func deleteImageRecoveryPoint(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func getConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func setConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -4606,6 +4615,20 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.rollbackImage(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func imageFeedAction(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.imageFeedAction(request) { response in finish(.success(response)) }
         }
     }
 

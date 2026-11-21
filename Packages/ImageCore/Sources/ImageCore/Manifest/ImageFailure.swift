@@ -81,6 +81,31 @@ public enum ImageFailure: APKRunError, Equatable {
     /// An image apply is already running.
     case imageUpdateBusy(detail: String)
 
+    /// The feed signature was missing or untrusted.
+    case imageFeedSignatureInvalid
+
+    /// A feed with a sequence below the highest accepted one.
+    case imageFeedReplayed(sequence: Int, highest: Int)
+
+    /// A feed past its `expiresAt`.
+    case imageFeedExpired
+
+    /// The feed, or an entry, failed the field rules, or the installed
+    /// manifest disagreed with the feed entry.
+    case imageFeedInvalid(detail: String)
+
+    /// No feed image can run on this APKRun and instance.
+    case noCompatibleImage
+
+    /// The server sent more bytes than the entry's `size`.
+    case imageArchiveSizeMismatch(expected: Int64, received: Int64)
+
+    /// The downloaded archive's SHA-256 differs from the entry's.
+    case imageArchiveHashMismatch
+
+    /// The network refused the request or dropped mid-download.
+    case imageDownloadFailed(detail: String)
+
     /// The stable error-code namespace owned by ImageCore.
     public static let domain: ErrorDomain = .image
 
@@ -113,6 +138,14 @@ public enum ImageFailure: APKRunError, Equatable {
         case .migrationHealthFailed: "migrationHealthFailed"
         case .imageRejected: "imageRejected"
         case .imageUpdateBusy: "imageUpdateBusy"
+        case .imageFeedSignatureInvalid: "imageFeedSignatureInvalid"
+        case .imageFeedReplayed: "imageFeedReplayed"
+        case .imageFeedExpired: "imageFeedExpired"
+        case .imageFeedInvalid: "imageFeedInvalid"
+        case .noCompatibleImage: "noCompatibleImage"
+        case .imageArchiveSizeMismatch: "imageArchiveSizeMismatch"
+        case .imageArchiveHashMismatch: "imageArchiveHashMismatch"
+        case .imageDownloadFailed: "imageDownloadFailed"
         }
     }
 
@@ -169,6 +202,17 @@ public enum ImageFailure: APKRunError, Equatable {
         case .imageRejected(let version, let reason):
             ["version": .text(version), "reason": .text(reason)]
         case .imageUpdateBusy(let detail):
+            ["detail": .text(detail)]
+        case .imageFeedSignatureInvalid, .imageFeedExpired, .noCompatibleImage,
+            .imageArchiveHashMismatch:
+            [:]
+        case .imageFeedReplayed(let sequence, let highest):
+            ["sequence": .count(sequence), "highest": .count(highest)]
+        case .imageFeedInvalid(let detail):
+            ["detail": .text(detail)]
+        case .imageArchiveSizeMismatch(let expected, let received):
+            ["expected": .bytes(expected), "received": .bytes(received)]
+        case .imageDownloadFailed(let detail):
             ["detail": .text(detail)]
         }
     }

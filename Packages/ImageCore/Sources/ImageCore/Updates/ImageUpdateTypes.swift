@@ -127,6 +127,17 @@ public struct ImageUpdateState: Codable, Equatable, Sendable {
     public var notifiedVersions: [String]
     /// The outcome of the last apply.
     public var lastResult: ImageUpdateResult?
+    /// A newer image exists but needs a newer APKRun (C2, §4.2).
+    public var requiresNewerAPKRun: ImageVersion?
+    /// When the current `ready` image became ready (§4.6 reminders).
+    public var readyAt: Date?
+    /// Consecutive failed checks, for the 1 h/6 h backoff (§4.2).
+    public var checkFailures: Int?
+    /// Consecutive failed downloads, for the 15 m/1 h/6 h backoff (§4.3).
+    public var downloadFailures: Int?
+    /// Consecutive failed installs; after two the archive is not retried until
+    /// the feed changes (§4.3).
+    public var installFailures: Int?
 
     /// Creates an empty state for `channel`.
     public init(channel: String = "stable") {
@@ -142,6 +153,11 @@ public struct ImageUpdateState: Codable, Equatable, Sendable {
         lastAutomaticApplyAt = nil
         notifiedVersions = []
         lastResult = nil
+        requiresNewerAPKRun = nil
+        readyAt = nil
+        checkFailures = nil
+        downloadFailures = nil
+        installFailures = nil
     }
 }
 

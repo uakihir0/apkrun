@@ -5625,6 +5625,160 @@
         "raisedBy": "RuntimeHost",
         "ref": "wrapper.md §9.3"
       }
+    },
+    {
+      "code": "image.imageFeedSignatureInvalid",
+      "parameters": [],
+      "message": {
+        "en": "The Android system update feed could not be verified."
+      },
+      "remediation": {
+        "en": "Update APKRun. If this keeps happening, report a problem."
+      },
+      "action": "reportProblem",
+      "cliExit": 1,
+      "doc": {
+        "case": "imageFeedSignatureInvalid",
+        "when": "the image feed signature is missing or untrusted",
+        "raisedBy": "ImageFeedClient",
+        "ref": "runtime-maintenance.md §4.1"
+      }
+    },
+    {
+      "code": "image.imageFeedReplayed",
+      "parameters": [
+        "sequence",
+        "highest"
+      ],
+      "message": {
+        "en": "The Android system update feed is older than the one already accepted."
+      },
+      "remediation": {
+        "en": "Try again later."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "imageFeedReplayed(sequence:highest:)",
+        "when": "the feed sequence is below the highest accepted sequence for the channel",
+        "raisedBy": "ImageFeedClient",
+        "ref": "runtime-maintenance.md §4.1"
+      }
+    },
+    {
+      "code": "image.imageFeedExpired",
+      "parameters": [],
+      "message": {
+        "en": "The Android system update feed has expired."
+      },
+      "remediation": {
+        "en": "Try again later."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "imageFeedExpired",
+        "when": "the feed's expiresAt has passed",
+        "raisedBy": "ImageFeedClient",
+        "ref": "runtime-maintenance.md §4.1"
+      }
+    },
+    {
+      "code": "image.imageFeedInvalid",
+      "parameters": [
+        "detail"
+      ],
+      "message": {
+        "en": "The Android system update feed is malformed."
+      },
+      "remediation": {
+        "en": "Update APKRun. If this keeps happening, report a problem."
+      },
+      "action": "reportProblem",
+      "cliExit": 1,
+      "doc": {
+        "case": "imageFeedInvalid(detail:)",
+        "when": "a feed or entry fails the field rules, or an installed manifest disagrees with its feed entry",
+        "raisedBy": "ImageFeedClient, RuntimeHost",
+        "ref": "runtime-image-manifest.md §9.4"
+      }
+    },
+    {
+      "code": "image.noCompatibleImage",
+      "parameters": [],
+      "message": {
+        "en": "No Android image update can run with this version of APKRun."
+      },
+      "remediation": {
+        "en": "Install the previous APKRun release from the download page."
+      },
+      "action": "openDownloadsPage",
+      "cliExit": 1,
+      "doc": {
+        "case": "noCompatibleImage",
+        "when": "the feed has no image this APKRun can boot",
+        "raisedBy": "ImageUpdateCoordinator",
+        "ref": "runtime-maintenance.md §4.10"
+      }
+    },
+    {
+      "code": "image.imageArchiveSizeMismatch",
+      "parameters": [
+        "expected",
+        "received"
+      ],
+      "message": {
+        "en": "The Android system download was the wrong size."
+      },
+      "remediation": {
+        "en": "Try again."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "imageArchiveSizeMismatch(expected:received:)",
+        "when": "the server sends more than the entry's archive size",
+        "raisedBy": "ImageDownloader",
+        "ref": "runtime-maintenance.md §4.4"
+      }
+    },
+    {
+      "code": "image.imageArchiveHashMismatch",
+      "parameters": [],
+      "message": {
+        "en": "The Android system download failed verification."
+      },
+      "remediation": {
+        "en": "Try again. The download starts over."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "imageArchiveHashMismatch",
+        "when": "the archive SHA-256 differs from the feed entry",
+        "raisedBy": "ImageDownloader",
+        "ref": "runtime-maintenance.md §4.4"
+      }
+    },
+    {
+      "code": "image.imageDownloadFailed",
+      "parameters": [
+        "detail"
+      ],
+      "message": {
+        "en": "The Android system download failed."
+      },
+      "remediation": {
+        "en": "Check the network and try again."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "imageDownloadFailed(detail:)",
+        "when": "the archive download errors or loses connectivity",
+        "raisedBy": "ImageDownloader",
+        "ref": "runtime-maintenance.md §4.4"
+      }
     }
   ]
 }

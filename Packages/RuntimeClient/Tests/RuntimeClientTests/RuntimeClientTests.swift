@@ -1673,6 +1673,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         throw .remoteFailure(code: "unsupported", message: "unsupported in mock", parameters: [:])
     }
 
+    func imageFeedAction(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .remoteFailure(code: "unsupported", message: "unsupported in mock", parameters: [:])
+    }
+
     func requestEndpoint(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeBrokerEndpointReply {
         let (data, endpoint) = lock.withLock {
             endpointRequestsValue.append(request)

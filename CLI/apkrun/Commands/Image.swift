@@ -11,6 +11,7 @@ struct ImageCommand: AsyncParsableCommand {
         abstract: "Manage Android images and image updates.",
         subcommands: [
             ImageListCommand.self,
+            ImageCheckCommand.self,
             ImageInstallCommand.self,
             ImageApplyCommand.self,
             ImageRollbackCommand.self,
@@ -62,6 +63,27 @@ struct ImageListCommand: AsyncParsableCommand {
     }
 }
 
+/// `apkrun image check`: a user-initiated feed check (§4.2): fetch the feed,
+/// pick a candidate through C1–C7, and download and install it.
+struct ImageCheckCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "check",
+        abstract: "Check the image feed for an update now."
+    )
+
+    mutating func run() async throws {
+        do {
+            let client = try RuntimeControlClient(clientKind: .cli)
+            let result = try await client.imageFeedAction("check")
+            Output.write(result)
+        } catch let failure as RuntimeWireError {
+            throw failure
+        } catch {
+            throw await RuntimeStatusOutput.commandFailure(error)
+        }
+    }
+}
+
 /// `apkrun image install <file.aar> [--yes]`: installs an `.aar` beside the
 /// current image as a `ready` candidate (§4.7). The user's file is only read;
 /// it is never moved or deleted.
@@ -72,12 +94,33 @@ struct ImageInstallCommand: AsyncParsableCommand {
     )
 
     @Argument(help: "The .aar file to install.")
-    var file: String
+    var file: String?
+
+    @Flag(name: .long, help: "Download and install the newest image the feed offers.")
+    var latest = false
 
     @Flag(name: .long, help: "Skip the confirmation prompt.")
     var yes = false
 
     mutating func run() async throws {
+        if latest {
+            guard file == nil else {
+                throw ValidationError("Pass either a file or --latest, not both.")
+            }
+            do {
+                let client = try RuntimeControlClient(clientKind: .cli)
+                let result = try await client.imageFeedAction("install-latest")
+                Output.write(result)
+            } catch let failure as RuntimeWireError {
+                throw failure
+            } catch {
+                throw await RuntimeStatusOutput.commandFailure(error)
+            }
+            return
+        }
+        guard let file else {
+            throw ValidationError("Pass an .aar file or --latest.")
+        }
         let url = URL(fileURLWithPath: file)
         do {
             let handle = try FileHandle(forReadingFrom: url)

@@ -73,10 +73,8 @@ struct HomeView: View {
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             for provider in providers {
-                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
-                    guard let data = item as? Data,
-                        let url = URL(dataRepresentation: data, relativeTo: nil)
-                    else { return }
+                provider.loadObject(ofClass: NSURL.self) { item, _ in
+                    guard let url = item as? URL else { return }
                     DispatchQueue.main.async { model.importFiles([url]) }
                 }
             }

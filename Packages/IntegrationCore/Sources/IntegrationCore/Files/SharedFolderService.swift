@@ -12,6 +12,7 @@ public enum SharedFolderAccess: String, Sendable, Equatable, Comparable {
     case readOnly
     case readWrite
 
+    /// `readOnly` sorts before `readWrite`, so `min` is the tighter access.
     public static func < (lhs: Self, rhs: Self) -> Bool {
         lhs == .readOnly && rhs == .readWrite
     }
@@ -29,6 +30,7 @@ public struct SharedFolderRoot: Sendable, Equatable {
     /// The most the root ever grants.
     public var maxAccess: SharedFolderAccess
 
+    /// Creates a root row.
     public init(rootID: String, title: String, url: URL, maxAccess: SharedFolderAccess) {
         self.rootID = rootID
         self.title = title
@@ -39,12 +41,18 @@ public struct SharedFolderRoot: Sendable, Equatable {
 
 /// A `RootInfo` row of guest-protocol.md §7.5.
 public struct SharedRootInfo: Sendable, Equatable {
+    /// The stable document-ID prefix of the root.
     public var rootID: String
+    /// The title shown in the Android picker.
     public var title: String
+    /// The access the caller has in this root.
     public var access: SharedFolderAccess
+    /// Whether the folder is reachable right now.
     public var available: Bool
+    /// Free space on the volume, in bytes.
     public var bytesFree: Int64
 
+    /// Creates a root-info row.
     public init(
         rootID: String, title: String, access: SharedFolderAccess, available: Bool,
         bytesFree: Int64
@@ -59,13 +67,20 @@ public struct SharedRootInfo: Sendable, Equatable {
 
 /// A `DocInfo` row of guest-protocol.md §7.5.
 public struct SharedDocInfo: Sendable, Equatable {
+    /// The path relative to the root.
     public var path: String
+    /// The leaf name.
     public var name: String
+    /// Whether the entry is a directory.
     public var isDirectory: Bool
+    /// The file size in bytes.
     public var size: Int64
+    /// The modification time in milliseconds since the epoch.
     public var mtimeMilliseconds: Int64
+    /// The guessed MIME type.
     public var mimeType: String
 
+    /// Creates a doc-info row.
     public init(
         path: String, name: String, isDirectory: Bool, size: Int64,
         mtimeMilliseconds: Int64, mimeType: String
@@ -81,9 +96,12 @@ public struct SharedDocInfo: Sendable, Equatable {
 
 /// A `HostQueryChildren` page (§7.5).
 public struct SharedDocPage: Sendable, Equatable {
+    /// The entries of this page.
     public var entries: [SharedDocInfo]
+    /// The token for the next page, empty when this is the last.
     public var nextPageToken: String
 
+    /// Creates a page.
     public init(entries: [SharedDocInfo], nextPageToken: String) {
         self.entries = entries
         self.nextPageToken = nextPageToken
@@ -103,6 +121,7 @@ public enum SharedOpenMode: Sendable, Equatable {
 /// (§6.4, error-catalog.md §13.3). `SharedFolderFailure` is thrown only by
 /// ``SharedFolderService``.
 public struct SharedFolderFailure: Error, Sendable, Equatable {
+    /// The `GuestErrorCode` a failed request replies with (§7.5).
     public enum Code: String, Sendable, Equatable {
         case invalidArgument = "INVALID_ARGUMENT"
         case notFound = "NOT_FOUND"
@@ -112,9 +131,12 @@ public struct SharedFolderFailure: Error, Sendable, Equatable {
         case `internal` = "INTERNAL"
     }
 
+    /// The reply's `GuestErrorCode`.
     public var code: Code
+    /// The catalog error for the log, when one maps.
     public var failure: IntegrationFailure?
 
+    /// Creates a failure.
     public init(_ code: Code, _ failure: IntegrationFailure? = nil) {
         self.code = code
         self.failure = failure

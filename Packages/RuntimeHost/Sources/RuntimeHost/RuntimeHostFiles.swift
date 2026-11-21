@@ -264,7 +264,7 @@ struct HostFileTransferChannel: FileTransferChannel {
     }
 
     func resolveExport(
-        offerID: String, package: RuntimePackageID,
+        offerID: String, package: RuntimePackageID?,
         accept: Bool, writeTo: FileHandle?
     ) async throws(IntegrationFailure) {
         guard let supervisor = await supervisor() else { throw .guestUnavailable }
@@ -628,19 +628,23 @@ extension RuntimeHost {
     /// (§6.3). With no matching session the offer declines at once.
     private func handleExportOffer(_ offer: GPExportFileOffered) async {
         let snapshots = await sessionSnapshotsForIntegrations()
+        // A malformed `source_package` never passes the package-id grammar;
+        // the offer is declined before any policy evaluation (NFR-SEC-01).
+        guard let package = RuntimePackageID(rawValue: offer.sourcePackage) else {
+            await fileTransferService().declineExport(offerID: String(offer.offerID))
+            return
+        }
         guard
             let session = snapshots.first(where: {
                 $0.displayID == offer.displayID
                     && $0.packageID == offer.sourcePackage
             }),
-            case .app(let sessionID) = session.id,
-            let package = RuntimePackageID(rawValue: offer.sourcePackage)
+            case .app(let sessionID) = session.id
         else {
             try? await fileTransferService().exportOffered(
                 FileExportOffer(
                     offerID: String(offer.offerID), sessionID: UUID(),
-                    sourcePackage: RuntimePackageID(rawValue: offer.sourcePackage)
-                        ?? RuntimePackageID(rawValue: "unknown")!,
+                    sourcePackage: package,
                     name: offer.name,
                     size: Self.offerSize(offer.size),
                     type: offer.mimeType),
@@ -698,13 +702,13 @@ extension RuntimeHost {
             switch request.op {
             case .hostListRoots(let op):
                 let roots = try await service.listRoots(
-                    package: packageID(op.package))
+                    package: try packageID(op.package))
                 var list = GPRootList()
                 list.roots = roots.map { Self.rootInfo($0) }
                 result = .hostListRoots(list)
             case .hostQueryChildren(let op):
                 let page = try await service.queryChildren(
-                    package: packageID(op.package), rootID: op.rootID,
+                    package: try packageID(op.package), rootID: op.rootID,
                     path: op.path, pageToken: op.pageToken)
                 var gpPage = GPDocPage()
                 gpPage.entries = page.entries.map { Self.docInfo($0) }
@@ -712,12 +716,12 @@ extension RuntimeHost {
                 result = .hostQueryChildren(gpPage)
             case .hostStat(let op):
                 let info = try await service.stat(
-                    package: packageID(op.package), rootID: op.rootID, path: op.path)
+                    package: try packageID(op.package), rootID: op.rootID, path: op.path)
                 result = .hostStat(Self.docInfo(info))
             case .hostOpenFile(let op):
                 let mode = try Self.openMode(op.mode)
                 let (handle, size) = try await service.openFile(
-                    package: packageID(op.package), rootID: op.rootID,
+                    package: try packageID(op.package), rootID: op.rootID,
                     path: op.path, mode: mode)
                 var opened = GPOpenFile()
                 opened.handle = handle
@@ -738,17 +742,17 @@ extension RuntimeHost {
                 result = .hostCloseFile(GPEmpty())
             case .hostCreateDocument(let op):
                 let info = try await service.createDocument(
-                    package: packageID(op.package), rootID: op.rootID,
+                    package: try packageID(op.package), rootID: op.rootID,
                     parentPath: op.parentPath, name: op.name,
                     isDirectory: op.isDir)
                 result = .hostCreateDocument(Self.docInfo(info))
             case .hostDeleteDocument(let op):
                 try await service.deleteDocument(
-                    package: packageID(op.package), rootID: op.rootID, path: op.path)
+                    package: try packageID(op.package), rootID: op.rootID, path: op.path)
                 result = .hostDeleteDocument(GPEmpty())
             case .hostRenameDocument(let op):
                 let info = try await service.renameDocument(
-                    package: packageID(op.package), rootID: op.rootID,
+                    package: try packageID(op.package), rootID: op.rootID,
                     path: op.path, newName: op.newName)
                 result = .hostRenameDocument(Self.docInfo(info))
             default:
@@ -770,8 +774,13 @@ extension RuntimeHost {
         try? await channel.respond(replyTo: id, result: result)
     }
 
-    private func packageID(_ raw: String) -> RuntimePackageID {
-        RuntimePackageID(rawValue: raw) ?? RuntimePackageID(rawValue: "invalid")!
+    /// Parses the `package` of a `Host*` request; a malformed name is an
+    /// `INVALID_ARGUMENT` reply, never a mapping onto another package.
+    private func packageID(_ raw: String) throws(SharedFolderFailure) -> RuntimePackageID {
+        guard let package = RuntimePackageID(rawValue: raw) else {
+            throw SharedFolderFailure(.invalidArgument)
+        }
+        return package
     }
 
     // MARK: Conversions

@@ -25,7 +25,7 @@ final class FileTransferServiceTests: XCTestCase {
         }
 
         func resolveExport(
-            offerID: String, package: RuntimePackageID, accept: Bool, writeTo: FileHandle?
+            offerID: String, package: RuntimePackageID?, accept: Bool, writeTo: FileHandle?
         ) async throws(IntegrationFailure) {
             resolves.append((offerID, accept))
         }

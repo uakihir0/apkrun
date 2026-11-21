@@ -17,6 +17,7 @@ public struct FileExportOffer: Sendable, Equatable {
     /// The MIME type.
     public var type: String
 
+    /// Creates an offer row.
     public init(
         offerID: String, sessionID: UUID, sourcePackage: RuntimePackageID,
         name: String, size: Int64?, type: String
@@ -45,8 +46,10 @@ public protocol FileTransferChannel: Sendable {
     /// Answers `ResolveExport` and, on accept, streams the file to `handle`,
     /// verifying its SHA-256 from `BulkEnd` (§6.3). On a hash or transport
     /// failure the partial file is already deleted before this throws.
+    /// `package` is nil only for a decline of an offer whose
+    /// `source_package` never parsed — the answer carries only the offer id.
     func resolveExport(
-        offerID: String, package: RuntimePackageID, accept: Bool, writeTo: FileHandle?
+        offerID: String, package: RuntimePackageID?, accept: Bool, writeTo: FileHandle?
     ) async throws(IntegrationFailure)
 }
 
@@ -185,6 +188,14 @@ public actor FileTransferService {
         pending.removeValue(forKey: offerID)
         try await channel.resolveExport(
             offerID: offerID, package: entry.package, accept: handle != nil, writeTo: handle)
+    }
+
+    /// Declines an offer whose `source_package` failed to parse — a
+    /// malformed or hostile frame with no package for the policy
+    /// (NFR-SEC-01). The decline itself only echoes the offer id.
+    public func declineExport(offerID: String) async {
+        try? await channel.resolveExport(
+            offerID: offerID, package: nil, accept: false, writeTo: nil)
     }
 
     /// Drops every pending offer of a session (window closed or session

@@ -113,6 +113,7 @@ struct AddFlowView: View {
                     model.install()
                 }
                 .keyboardShortcut(.defaultAction)
+                .disabled(model.needsLocationChoice)
             } else {
                 Button("Done") { model.dismiss() }
                     .keyboardShortcut(.defaultAction)
@@ -172,6 +173,11 @@ struct AddFlowView: View {
                     } else {
                         model.location = .userApplications
                     }
+                }
+                if model.needsLocationChoice {
+                    Text("Choose where the Mac app goes.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 if model.location == .other, let url = model.customDirectoryURL {
                     Text(url.path(percentEncoded: false))

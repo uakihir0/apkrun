@@ -330,7 +330,9 @@ public actor EmbeddedPackageService: RuntimeService {
                 patch[key] = value
             }
             for key in request.patch.clear {
-                patch[key] = nil
+                // `[String: String?]` deletes on `= nil`; `.some(nil)` keeps the
+                // clear instruction for the store.
+                patch[key] = .some(nil)
             }
             let settings = try await store.updatePackageSettings(id, patch: patch)
             return wireSettings(settings)

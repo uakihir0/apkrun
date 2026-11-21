@@ -49,6 +49,15 @@ if [[ "$marketing" != "$version" ]]; then
     exit 65
 fi
 
+# The Release product verifies feeds against a baked-in public key
+# (project.yml `APKRUN_RELEASE_PUBLIC_ED_KEY`). When the pipeline only
+# supplied the private key, derive the public half — a missing key would
+# build a product whose signed-update checks always fail.
+if [[ -z "${APKRUN_RELEASE_PUBLIC_ED_KEY:-}" && -n "${APKRUN_SPARKLE_ED_PRIVATE_KEY:-}" ]]; then
+    APKRUN_RELEASE_PUBLIC_ED_KEY="$(xcrun swift scripts/release/sign-update.swift --public-key)"
+    export APKRUN_RELEASE_PUBLIC_ED_KEY
+fi
+
 # Build the Release products; the guest agent is embedded by the standard
 # build phase when its artifacts exist.
 scripts/generate-project.sh

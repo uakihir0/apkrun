@@ -719,28 +719,6 @@ public actor RuntimeHost {
         return try await service.adoptPackage(request)
     }
 
-    /// The stored `settings.json` of a package (host-ui.md §7).
-    public func packageSettings(
-        _ packageID: RuntimePackageID
-    ) async throws(RuntimeWireError) -> PackageSettingsWire? {
-        let service = packageQueryServiceInstance()
-        try await service.open()
-        return try await service.packageSettings(for: packageID)
-    }
-
-    /// Applies a `settings.json` patch and publishes `settingsChanged`
-    /// (host-ui.md §7, API 1.24).
-    public func updatePackageSettings(
-        _ request: RuntimeUpdatePackageSettingsRequest
-    ) async throws(RuntimeWireError) -> PackageSettingsWire {
-        let service = packageQueryServiceInstance()
-        try await service.open()
-        let result = try await service.updatePackageSettings(request)
-        eventHub.publishPackageChange(
-            .settingsChanged(request.packageID), operationID: nil)
-        return result
-    }
-
     /// Starts Android on demand, attaches its package channel, and installs an inspected import.
     public func installImported(
         _ request: RuntimeInstallImportedRequest

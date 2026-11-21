@@ -117,9 +117,24 @@ public struct GitHubProvider: UpdateProvider {
         return headers
     }
 
-    /// The parsed cursor: `<etag>\t<releaseID>:<assetID>:<updated_at>:<size>`.
+    /// The identity that decides whether a candidate was already processed:
+    /// `<releaseID>:<assetID>:<updated_at>:<size>` (§4.6). Listing edits that
+    /// only move the ETag do not re-offer the same asset.
+    private func identity(release: Release, asset: Release.Asset) -> String {
+        "\(release.id):\(asset.id):\(asset.updatedAt ?? ""):\(asset.size ?? 0)"
+    }
+
+    /// The config the stored cursor is valid for; a change forces a fresh
+    /// listing fetch because the stable/prerelease selection and the asset
+    /// glob pick different candidates.
+    private var configKey: String {
+        "\(channel.rawValue):\(assetPattern)"
+    }
+
+    /// The parsed cursor:
+    /// `<etag>\t<identity>\t<channel>:<assetPattern>` (§4.6).
     private func cursorValue(etag: String, release: Release, asset: Release.Asset) -> String {
-        "\(etag)\t\(release.id):\(asset.id):\(asset.updatedAt ?? ""):\(asset.size ?? 0)"
+        "\(etag)\t\(identity(release: release, asset: asset))\t\(configKey)"
     }
 
     /// Maps a response to its §4.6 failure: a `403`/`429` with an exhausted
@@ -145,12 +160,19 @@ public struct GitHubProvider: UpdateProvider {
         // user-initiated check refetches in full so a candidate that was
         // only shown can still be applied.
         var etag: String?
+        var storedIdentity: String?
         if !context.userInitiated, let cursor = package.lastCursor,
-            cursor.type == .github,
-            let separator = cursor.value.firstIndex(of: "\t")
+            cursor.type == .github
         {
-            let stored = String(cursor.value[..<separator])
-            if !stored.isEmpty { etag = stored }
+            let fields = cursor.value.split(separator: "\t", omittingEmptySubsequences: false)
+                .map(String.init)
+            if fields.count >= 2 {
+                if !fields[0].isEmpty { etag = fields[0] }
+                storedIdentity = fields[1]
+            }
+            // A config change invalidates the listing cache but not the
+            // processed-asset identity (§4.6).
+            if fields.count < 3 || fields[2] != configKey { etag = nil }
         }
         log.debug("github releases check host=\(apiBase.host ?? "-", .public)")
         guard let releasesURL else { throw .providerNotConfigured }
@@ -186,7 +208,10 @@ public struct GitHubProvider: UpdateProvider {
             response.etag ?? "sha256:\(APKStoreCore.SHA256Digest(data: response.body).hexValue)"
         let cursor = ProviderCursor(
             type: .github, value: cursorValue(etag: listingTag, release: release, asset: asset))
-        if !context.userInitiated, package.lastCursor == cursor {
+        if !context.userInitiated, storedIdentity == identity(release: release, asset: asset) {
+            // Same asset, but the listing may carry a new ETag: hand the
+            // refreshed cursor up so the next check stays conditional.
+            context.cursorRefresh?(cursor)
             return nil
         }
         return UpdateCandidate(
@@ -275,11 +300,16 @@ public struct GitHubProvider: UpdateProvider {
 
     /// The one §2.3 test request of `setUpdatePolicy`: fetch the release
     /// listing so a wrong repository or token fails before anything writes.
-    public func testConnection(context: ProviderContext) async throws(UpdateFailure) {
+    /// `token` is the effective token the caller is about to store: nil
+    /// means none, so a replacement or deletion is tested with the new
+    /// credentials, not the possibly stale stored ones.
+    public func testConnection(context: ProviderContext, token: String?) async throws(UpdateFailure) {
         guard let releasesURL else { throw .providerNotConfigured }
+        var requestHeaders = headers(context: context)
+        requestHeaders["Authorization"] = token.map { "Bearer \($0)" }
         let response = try await context.http.get(
             releasesURL,
-            headers: headers(context: context),
+            headers: requestHeaders,
             byteLimit: Self.listingByteLimit)
         guard (200...299).contains(response.status) else {
             throw Self.failure(

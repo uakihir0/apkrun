@@ -52,9 +52,12 @@
             let fileExists = FileManager.default.fileExists(atPath: inputURL.path)
             let isValidPackageID =
                 !package.isEmpty && RuntimePackageID(rawValue: package) != nil
+            // A valid package ID names the installed package; a file wins only
+            // when it is no valid ID or it is a real `.apk` on disk (a path
+            // like ./com.example keeps working through the same rule).
             let isFile =
-                fileExists
-                || (package.hasSuffix(".apk") && !isValidPackageID)
+                (fileExists && !isValidPackageID)
+                || (package.hasSuffix(".apk") && (fileExists || !isValidPackageID))
             guard isFile == install else {
                 throw CLIFailure.invalidArgument(
                     argument: isFile ? "install" : "package",

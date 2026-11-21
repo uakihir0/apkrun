@@ -110,8 +110,12 @@ func loadEntries(release: Bool) throws -> [CatalogEntry] {
         guard
             code.hasPrefix("vm.") || code.hasPrefix("graphics.") || code.hasPrefix("runtime.")
                 || code.hasPrefix("image.") || code.hasPrefix("cli.")
+                || code.hasPrefix("wrapper.") || code.hasPrefix("store.")
+                || code.hasPrefix("update.") || code.hasPrefix("integration.")
+                || code.hasPrefix("maintenance.") || code.hasPrefix("diagnostics.")
+                || code.hasPrefix("guestProtocol.")
         else {
-            fail("\(code) is outside the vm/graphics/runtime/image/cli catalog scope")
+            fail("\(code) is outside the catalog scope")
         }
         guard codes.insert(code).inserted else {
             fail("duplicate code \(code)")
@@ -503,14 +507,16 @@ func renderCLIMarkdown(_ entries: [CatalogEntry]) -> String {
 
 func renderMarkdown(_ entries: [CatalogEntry], source: String) -> String {
     var result = source
-    for domain in ["vm", "graphics", "runtime", "image", "cli"] {
+    for domain in ["vm", "graphics", "runtime", "image", "cli", "wrapper"] {
         let begin = "<!-- errorgen:begin \(domain) -->"
         let end = "<!-- errorgen:end \(domain) -->"
         guard let beginRange = result.range(of: begin),
             let endRange = result.range(of: end),
             beginRange.upperBound <= endRange.lowerBound
         else {
-            fail("error-catalog.md is missing ordered markers for \(domain)")
+            // A domain whose catalog section is fully authored (not
+            // generated) has no markers and is skipped.
+            continue
         }
         let domainEntries = entries.filter { $0.code.hasPrefix("\(domain).") }
         let body: String

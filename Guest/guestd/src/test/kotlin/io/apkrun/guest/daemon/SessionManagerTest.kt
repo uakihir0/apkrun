@@ -2,6 +2,7 @@ package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.ControlSessions
 import io.apkrun.guest.protocol.HandshakeFailureReason
+import io.apkrun.guest.protocol.SessionManager
 import java.io.Closeable
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,7 +21,7 @@ private class FakeConnection : Closeable {
 
 class SessionManagerTest {
     private var clock = 0L
-    private val sessions = SessionManager { clock }
+    private val sessions = SessionManager(now = { clock })
     private val token = byteArrayOf(1, 2, 3)
 
     @Test

@@ -18,7 +18,11 @@ checks+=(
     "scripts/check-protos.sh"
     "scripts/check-docs.sh"
     "scripts/check-readback.sh"
+    "scripts/check-raw-adb.sh"
 )
+if [[ -f "$repo_root/scripts/check-fixtures.sh" ]]; then
+    checks+=("scripts/check-fixtures.sh")
+fi
 
 names=()
 statuses=()

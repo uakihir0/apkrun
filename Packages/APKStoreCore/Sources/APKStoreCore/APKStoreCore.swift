@@ -125,6 +125,9 @@ public struct SHA256Digest: RawRepresentable, Codable, Sendable, Hashable {
 public enum PackageArtifact: Sendable, Hashable {
     case apk(URL)
     case splitSet(base: URL, splits: [URL])
+    /// A downloaded container (`.apks`, `.xapk`, `.apkm`); extraction and split
+    /// selection run as for a file import (update-system.md §4.1).
+    case container(URL)
 }
 
 /// One file of an inspected APK set.
@@ -175,6 +178,45 @@ public struct InspectionProvenance: Codable, Sendable, Hashable {
     }
 }
 
+/// The capability flags one signing-lineage node grants to its signer's
+/// certificate (apksig's `PAST_CERT_*`; update-system.md §6).
+public struct SignerCapabilities: OptionSet, Codable, Sendable, Hashable {
+    /// The raw flag mask.
+    public let rawValue: UInt32
+
+    /// Creates the mask.
+    public init(rawValue: UInt32) {
+        self.rawValue = rawValue
+    }
+
+    /// The update may carry over data installed by this signer.
+    public static let installedData = SignerCapabilities(rawValue: 1)
+    /// The signer may share a sharedUserId package.
+    public static let sharedUserID = SignerCapabilities(rawValue: 2)
+    /// Signature-level permissions may be granted to this signer.
+    public static let permission = SignerCapabilities(rawValue: 4)
+    /// The package may update back to this signer.
+    public static let rollback = SignerCapabilities(rawValue: 8)
+    /// AccountManager authenticator access is preserved.
+    public static let auth = SignerCapabilities(rawValue: 16)
+}
+
+/// One node of an APK signing lineage, oldest signer first. Each node's
+/// signature is verified with the previous node's key when the verifier
+/// builds it, so the flags here can be trusted (package-store.md §4.5).
+public struct SignerLineageNode: Codable, Sendable, Hashable {
+    /// The SHA-256 of the node's DER certificate.
+    public var certificateDigest: SHA256Digest
+    /// The capabilities this node grants to its certificate.
+    public var capabilities: SignerCapabilities
+
+    /// Creates a lineage node.
+    public init(certificateDigest: SHA256Digest, capabilities: SignerCapabilities) {
+        self.certificateDigest = certificateDigest
+        self.capabilities = capabilities
+    }
+}
+
 /// The content of `artifact.json` in a package artifact slot.
 public struct ArtifactSet: Codable, Sendable, Hashable {
     /// The artifact metadata schema version.
@@ -193,6 +235,13 @@ public struct ArtifactSet: Codable, Sendable, Hashable {
     public var signerDigests: [SHA256Digest]
     /// The signing lineage, oldest signer first.
     public var lineage: [SHA256Digest]
+    /// The lineage nodes with their capability flags, matching `lineage`
+    /// one to one when a rotation attribute was present.
+    public var lineageNodes: [SignerLineageNode]
+    /// The `uses-permission` list of the base APK (§6 notes).
+    public var permissions: [String]
+    /// The base APK's target SDK, when inspection read it (§6 notes).
+    public var targetSdk: Int?
     /// The host inspection provenance for the set.
     public var inspection: InspectionProvenance
 
@@ -206,6 +255,9 @@ public struct ArtifactSet: Codable, Sendable, Hashable {
         setDigest: SHA256Digest,
         signerDigests: [SHA256Digest],
         lineage: [SHA256Digest],
+        lineageNodes: [SignerLineageNode] = [],
+        permissions: [String] = [],
+        targetSdk: Int? = nil,
         inspection: InspectionProvenance
     ) {
         self.schemaVersion = schemaVersion
@@ -216,7 +268,31 @@ public struct ArtifactSet: Codable, Sendable, Hashable {
         self.setDigest = setDigest
         self.signerDigests = signerDigests
         self.lineage = lineage
+        self.lineageNodes = lineageNodes
+        self.permissions = permissions
+        self.targetSdk = targetSdk
         self.inspection = inspection
+    }
+
+    /// Decodes a set, tolerating files written before `lineageNodes`,
+    /// `permissions`, and `targetSdk` existed.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        packageID = try container.decode(PackageID.self, forKey: .packageID)
+        versionCode = try container.decode(VersionCode.self, forKey: .versionCode)
+        versionName = try container.decodeIfPresent(String.self, forKey: .versionName)
+        files = try container.decode([ArtifactFile].self, forKey: .files)
+        setDigest = try container.decode(SHA256Digest.self, forKey: .setDigest)
+        signerDigests = try container.decode([SHA256Digest].self, forKey: .signerDigests)
+        lineage = try container.decode([SHA256Digest].self, forKey: .lineage)
+        lineageNodes =
+            try container.decodeIfPresent([SignerLineageNode].self, forKey: .lineageNodes)
+            ?? []
+        permissions =
+            try container.decodeIfPresent([String].self, forKey: .permissions) ?? []
+        targetSdk = try container.decodeIfPresent(Int.self, forKey: .targetSdk)
+        inspection = try container.decode(InspectionProvenance.self, forKey: .inspection)
     }
 
     /// Computes §3.3's digest from files sorted by their stored file name.
@@ -235,6 +311,18 @@ public struct ArtifactSet: Codable, Sendable, Hashable {
             "\($0.name)\t\($0.sha256.hexValue)\n"
         }.joined()
         return SHA256Digest(data: Data(canonicalLines.utf8))
+    }
+
+    /// The `ArtifactSpec` list for `BeginInstall` and `install-multiple`: the
+    /// base APK first, then splits by stored name (guest-protocol.md §11.3,
+    /// package-store.md §6.4). `files` already stores this order; the
+    /// property makes the contract explicit for decoded sets.
+    public var installSpecs: [ArtifactFile] {
+        files.sorted {
+            if $0.splitName == nil { return $1.splitName != nil }
+            if $1.splitName == nil { return false }
+            return $0.name < $1.name
+        }
     }
 }
 
@@ -255,6 +343,14 @@ public enum UpdateAuthority: String, Codable, Sendable {
     case googlePlay
     case external
     case manual
+
+    /// Whether installs request Android update ownership (package-store.md §6.3).
+    public var claimsUpdateOwnership: Bool {
+        switch self {
+        case .apkrun, .manual: true
+        case .googlePlay, .external: false
+        }
+    }
 }
 
 /// A supported Android application update provider.
@@ -478,6 +574,54 @@ public struct StagedArtifactSlotSummary: Codable, Sendable, Hashable {
         self.size = size
         self.fileCount = fileCount
         self.origin = origin
+    }
+}
+
+/// A verified update candidate the store is asked to stage (package-store.md §7.1).
+///
+/// The ticket's incoming set has passed §4.6 and UpdateCore's relational checks;
+/// the store records it as `artifacts.staged` with this candidate's source.
+public struct StagedUpdateInfo: Codable, Sendable, Hashable {
+    /// Android's long version code of the staged set.
+    public var versionCode: VersionCode
+    /// The display-only Android version name, when present.
+    public var versionName: String?
+    /// The digest of all APK files in the staged set.
+    public var setDigest: SHA256Digest
+    /// The combined size of the staged APK files in bytes.
+    public var size: Int64
+    /// The number of APK files in the staged set.
+    public var fileCount: Int
+    /// The provider or local source that supplied the set.
+    public var origin: ArtifactOrigin
+
+    /// Creates a staged-update description.
+    public init(
+        versionCode: VersionCode,
+        versionName: String? = nil,
+        setDigest: SHA256Digest,
+        size: Int64,
+        fileCount: Int,
+        origin: ArtifactOrigin
+    ) {
+        self.versionCode = versionCode
+        self.versionName = versionName
+        self.setDigest = setDigest
+        self.size = size
+        self.fileCount = fileCount
+        self.origin = origin
+    }
+
+    /// The staged slot summary this candidate records.
+    var slotSummary: StagedArtifactSlotSummary {
+        StagedArtifactSlotSummary(
+            versionCode: versionCode,
+            versionName: versionName,
+            setDigest: setDigest,
+            size: size,
+            fileCount: fileCount,
+            origin: origin
+        )
     }
 }
 
@@ -733,6 +877,9 @@ public enum BrokenReason: Sendable, Equatable {
     case signerChanged
     case artifactMissing
     case reinstallFailed(StoredError)
+    /// A rollback after a failed health check could not restore the
+    /// previous set; the failed update stays installed (update-system.md §8.3).
+    case rollbackFailed
 
     private enum CodingKeys: String, CodingKey {
         case reinstallFailed
@@ -750,6 +897,7 @@ extension BrokenReason: Codable {
             case "removedInAndroid": self = .removedInAndroid
             case "signerChanged": self = .signerChanged
             case "artifactMissing": self = .artifactMissing
+            case "rollbackFailed": self = .rollbackFailed
             default:
                 throw DecodingError.dataCorruptedError(
                     in: container,
@@ -781,6 +929,9 @@ extension BrokenReason: Codable {
         case .artifactMissing:
             var container = encoder.singleValueContainer()
             try container.encode("artifactMissing")
+        case .rollbackFailed:
+            var container = encoder.singleValueContainer()
+            try container.encode("rollbackFailed")
         case .reinstallFailed(let error):
             var container = encoder.container(keyedBy: CodingKeys.self)
             var payload = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .reinstallFailed)

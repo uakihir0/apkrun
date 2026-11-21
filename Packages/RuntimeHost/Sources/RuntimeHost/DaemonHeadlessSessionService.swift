@@ -1,10 +1,9 @@
 import CoreGraphics
 import DiagnosticsCore
 import Foundation
-import GraphicsCore
-import GuestProtocol
 import RuntimeAPI
 import RuntimeCore
+import UpdateCore
 
 /// Launches CLI-owned sessions on secondary displays before the daemon has a window client (#33).
 ///
@@ -15,9 +14,9 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     private let displayPool: DisplayPool
     private let registry: SessionRegistry
     private let displayConfiguration: DisplayConfiguration
-    private let onSessionSnapshotChanged: @Sendable () -> Void
     private var sessionsByPackage: [String: SessionID] = [:]
-    private var lastPublishedSessions: [RuntimeSessionSnapshot] = []
+    /// Whether any session is still live; the §3.5 idle stop asks this.
+    var hasLiveSessions: Bool { !sessionsByPackage.isEmpty }
     private var frameDrainers: [SessionID: Task<Void, Never>] = [:]
     private var taskEventMonitor: Task<Void, Never>?
     private var guestResynchronizationHandlerID: UUID?
@@ -30,33 +29,58 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
     private var activeResynchronizations = 0
     private var isShuttingDown = false
     private var didCompleteShutdown = false
+    /// Called once when a session's first frame lands on its scanout (`FIRST_FRAME_DISPLAYED`).
+    var firstFrameObserver: (@Sendable (SessionID) -> Void)?
+    /// §7.2 (update-system.md, runtime-daemon.md §7.1): before a session is
+    /// requested for a package with a pending update transaction this waits
+    /// or cancels it — a pre-commit install returns to `staged`, a
+    /// committing one is awaited up to 30 s.
+    var packageTransactionWaiter: (@Sendable (RuntimePackageID) async -> Void)?
+    /// Packages whose next session's first frame is the update's H4 (§7.2).
+    private var postUpdateLaunchPackages = Set<String>()
+    /// Fires when a session's first frame counts as an update's H4 (§7.2):
+    /// the session waited on a committing install, then launched the new
+    /// version.
+    var postUpdateFirstFrameObserver: (@Sendable (RuntimePackageID) async -> Void)?
+
+    /// Installs the §7.2 hooks once (the gate and the service are each
+    /// created lazily; whichever comes second calls this).
+    func setUpdateHooks(
+        transactionWaiter: @escaping @Sendable (RuntimePackageID) async -> Void,
+        firstFrameObserver: @escaping @Sendable (RuntimePackageID) async -> Void
+    ) {
+        packageTransactionWaiter = transactionWaiter
+        postUpdateFirstFrameObserver = firstFrameObserver
+    }
+    /// Called when a session is forgotten; the reason feeds the launch record's outcome.
+    var sessionEndedObserver: (@Sendable (SessionID, String) -> Void)?
+    private var firstFrameMarked: Set<SessionID> = []
+    /// Per-session `(sampleTime, framesPresented)` samples for the 10 s fps window.
+    private var frameRateSamples: [SessionID: [(time: ContinuousClock.Instant, frames: UInt64)]] =
+        [:]
 
     /// Creates the daemon's Guest Agent-backed headless session service.
     public init(
         guestAgent: DevelopmentGuestAgent,
         displayPool: DisplayPool,
-        logSink: (any LogSink)? = nil,
-        onSessionSnapshotChanged: @escaping @Sendable () -> Void = {}
+        logSink: (any LogSink)? = nil
     ) {
         self.guestAgent = guestAgent
         self.displayPool = displayPool
         registry = SessionRegistry(logSink: logSink)
         displayConfiguration = Self.defaultDisplayConfiguration
-        self.onSessionSnapshotChanged = onSessionSnapshotChanged
     }
 
     init(
         guestAgent: any DaemonHeadlessGuestAgent,
         displayPool: DisplayPool,
         registry: SessionRegistry,
-        displayConfiguration: DisplayConfiguration,
-        onSessionSnapshotChanged: @escaping @Sendable () -> Void = {}
+        displayConfiguration: DisplayConfiguration
     ) {
         self.guestAgent = guestAgent
         self.displayPool = displayPool
         self.registry = registry
         self.displayConfiguration = displayConfiguration
-        self.onSessionSnapshotChanged = onSessionSnapshotChanged
     }
 
     /// Stops background observers before Android is shut down by the daemon.
@@ -119,9 +143,8 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         let packageID = request.packageID.rawValue
         if let existing = await registry.session(packageID: packageID) {
             sessionsByPackage[packageID] = existing.id
-            let result = try await launchExisting(existing)
-            await publishSessionListChangeIfNeeded()
-            return result
+            noteActivity(packageID, .started)
+            return try await launchExisting(existing)
         }
 
         let isInstalled: Bool
@@ -138,6 +161,14 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             )
         }
 
+        // §7.2 race (update-system.md, runtime-daemon.md §7.1): a pending
+        // update transaction for this package is cancelled (pre-commit) or
+        // awaited up to 30 s (committing) before the session requests its
+        // display.
+        if let packageTransactionWaiter {
+            await packageTransactionWaiter(request.packageID)
+        }
+
         let session: AppSessionSnapshot
         do throws(SessionRegistryFailure) {
             session = try await registry.requestLeased(
@@ -149,7 +180,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             throw Self.wireError(for: error)
         }
         sessionsByPackage[packageID] = session.id
-        await publishSessionListChangeIfNeeded()
+        noteActivity(packageID, .started)
         guard session.state == .acquiringDisplay,
             let lease = await registry.displayLease(session.id)
         else {
@@ -164,7 +195,6 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             await endFailedLaunch(session.id)
             throw Self.wireError(for: error)
         }
-        await publishSessionListChangeIfNeeded()
 
         let report: GuestLaunchReport
         do throws(GuestAgentFailure) {
@@ -172,8 +202,6 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         } catch {
             if !Self.isTransientLaunchFailure(error) {
                 await endFailedLaunch(session.id)
-            } else {
-                await publishSessionListChangeIfNeeded()
             }
             throw Self.wireError(for: error)
         }
@@ -181,7 +209,6 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         guard let completed = await registry.launchCompleted(packageID: packageID, taskID: report.taskID) else {
             if let current = await registry.session(session.id), Self.isEnded(current.state) {
                 await stopDrainingFrames(for: session.id)
-                await publishSessionListChangeIfNeeded()
                 return try Self.launchResult(for: current)
             }
             if let current = await registry.session(session.id),
@@ -194,7 +221,6 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         }
         guard !Self.isEnded(completed.state) else {
             await stopDrainingFrames(for: session.id)
-            await publishSessionListChangeIfNeeded()
             return try Self.launchResult(for: completed)
         }
 
@@ -204,15 +230,12 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         } catch {
             if let current = await registry.session(session.id), Self.isEnded(current.state) {
                 await stopDrainingFrames(for: session.id)
-                await publishSessionListChangeIfNeeded()
                 return try Self.launchResult(for: current)
             }
             await endFailedLaunch(session.id)
             throw Self.wireError(for: error)
         }
-        let result = try Self.launchResult(for: running)
-        await publishSessionListChangeIfNeeded()
-        return result
+        return try Self.launchResult(for: running)
     }
 
     /// Stops package tasks and completes the session, releasing its secondary-display lease.
@@ -243,7 +266,6 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         if current.state != .closing {
             do throws(SessionRegistryFailure) {
                 _ = try await registry.transition(current.id, to: .closing)
-                await publishSessionListChangeIfNeeded()
             } catch {
                 guard let latest = await registry.session(current.id), Self.isEnded(latest.state) else {
                     throw Self.wireError(for: error)
@@ -258,12 +280,10 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 stopped = try await guestAgent.forceStopApplication(package: packageID)
             } catch {
                 _ = await registry.stopFailed(packageID: packageID)
-                await publishSessionListChangeIfNeeded()
                 throw Self.wireError(for: error)
             }
             guard stopped else {
                 _ = await registry.stopFailed(packageID: packageID)
-                await publishSessionListChangeIfNeeded()
                 throw Self.guestTasksStillRunningError
             }
         }
@@ -271,22 +291,63 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         await stopDrainingFrames(for: current.id)
         _ = await registry.stopCompleted(sessionID: current.id)
         forgetSession(packageID: packageID, sessionID: current.id)
-        await publishSessionListChangeIfNeeded()
         return RuntimeTerminateResult(packageID: request.packageID, hadSession: true)
     }
 
-    /// Lists live app sessions owned by this daemon service.
-    func listSessions() async -> [RuntimeSessionSnapshot] {
-        await registry.snapshot().compactMap { session in
-            guard case .app = session.id,
-                session.state != .closing,
-                !Self.isEnded(session.state),
-                let packageID = RuntimePackageID(rawValue: session.packageID)
-            else {
-                return nil
-            }
-            return RuntimeSessionSnapshot(packageID: packageID, phase: Self.phase(for: session.state))
+    /// update-system.md §8.2: launches the package and watches for its
+    /// first frame or a process death within `timeouts`. The health-check
+    /// session then ends without force-stopping the app — the display
+    /// lease releases and Android keeps or reclaims the process on its own.
+    func healthCheckLaunch(
+        packageID: RuntimePackageID,
+        timeouts: UpdateHealthCheckTimeouts
+    ) async -> HealthLaunchResult {
+        do {
+            _ = try await launch(RuntimeLaunchRequest(packageID: packageID))
+        } catch {
+            return .launchFailed(detail: "\(error.code)")
         }
+        let aliveDeadline = ContinuousClock.now + timeouts.processAlive
+        let frameDeadline = aliveDeadline + timeouts.firstFrame
+        var frameSeen = false
+        while ContinuousClock.now < frameDeadline {
+            if let sessionID = sessionsByPackage[packageID.rawValue],
+                firstFrameMarked.contains(sessionID)
+            {
+                frameSeen = true
+            }
+            // §8.1: H3 watches the process for the whole survival window,
+            // even after a first frame — a crash inside it is a failure.
+            if frameSeen, ContinuousClock.now >= aliveDeadline { break }
+            guard let current = await registry.session(packageID: packageID.rawValue),
+                !Self.isEnded(current.state)
+            else {
+                if ContinuousClock.now < aliveDeadline {
+                    return .processDied(detail: "session ended")
+                }
+                // The survival window already passed; no frame means H4
+                // fails, not H3.
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        // §8.2: the health session ends; the app process is not stopped.
+        if let current = await registry.session(packageID: packageID.rawValue) {
+            _ = try? await registry.transition(current.id, to: .closing)
+            await stopDrainingFrames(for: current.id)
+            _ = await registry.stopCompleted(
+                sessionID: current.id, endReason: .updateHealthCheck)
+            forgetSession(packageID: packageID.rawValue, sessionID: current.id)
+        }
+        return frameSeen ? .frameDrawn : .processAlive
+    }
+
+    /// Whether the package's session has already drawn a frame
+    /// (update-system.md §8.1: a drawn frame downgrades the level to
+    /// `processOnly`).
+    func hasDrawnFrame(packageID: RuntimePackageID) async -> Bool {
+        guard let sessionID = sessionsByPackage[packageID.rawValue] else { return false }
+        return firstFrameMarked.contains(sessionID)
     }
 
     /// Reports whether this package still owns a live app session.
@@ -311,7 +372,6 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         if current.state != .closing {
             do throws(SessionRegistryFailure) {
                 _ = try await registry.transition(current.id, to: .closing)
-                await publishSessionListChangeIfNeeded()
             } catch {
                 guard let latest = await registry.session(current.id), Self.isEnded(latest.state) else {
                     throw Self.wireError(for: error)
@@ -326,12 +386,10 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 stopped = try await guestAgent.forceStopApplication(package: packageID)
             } catch {
                 _ = await registry.stopFailed(packageID: packageID)
-                await publishSessionListChangeIfNeeded()
                 throw Self.wireError(for: error)
             }
             guard stopped else {
                 _ = await registry.stopFailed(packageID: packageID)
-                await publishSessionListChangeIfNeeded()
                 throw Self.guestTasksStillRunningError
             }
         }
@@ -339,7 +397,6 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         await stopDrainingFrames(for: current.id)
         _ = await registry.stopCompleted(sessionID: current.id, endReason: .packageUninstalled)
         forgetSession(packageID: packageID, sessionID: current.id)
-        await publishSessionListChangeIfNeeded()
     }
 
     static func terminateWithoutSession(
@@ -518,15 +575,11 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             } catch {
                 return
             }
-            await publishSessionListChangeIfNeeded()
         case .vanished(let package, let taskID):
             let updated = await registry.taskVanished(packageID: package, taskID: taskID)
-            if let updated {
-                if Self.isEnded(updated.state) {
-                    await stopDrainingFrames(for: updated.id)
-                    forgetSession(packageID: package, sessionID: updated.id)
-                }
-                await publishSessionListChangeIfNeeded()
+            if let updated, Self.isEnded(updated.state) {
+                await stopDrainingFrames(for: updated.id)
+                forgetSession(packageID: package, sessionID: updated.id)
             }
         }
     }
@@ -564,7 +617,6 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 scheduleRelaunch(sessionID: sessionID)
             }
         }
-        await publishSessionListChangeIfNeeded()
     }
 
     private func scheduleResynchronizationCompletion() {
@@ -620,7 +672,6 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 forgetSession(packageID: current.packageID, sessionID: sessionID)
             }
         }
-        await publishSessionListChangeIfNeeded()
     }
 
     private func relaunchAfterResynchronization(sessionID: SessionID) async {
@@ -674,7 +725,6 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 forgetSession(packageID: current.packageID, sessionID: sessionID)
             }
         }
-        await publishSessionListChangeIfNeeded()
     }
 
     private func startDrainingFrames(from lease: DisplayLease) {
@@ -689,6 +739,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 }
                 if case .frameReady(_, _, let sequence) = frame {
                     pool.frameDisplayed(sequence: sequence)
+                    await self.noteFirstFrame(of: lease.session)
                 }
             }
         }
@@ -711,22 +762,199 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             _ = try? await registry.transition(sessionID, to: .ended(.error(.runtimeFailed)))
         }
         forgetSession(packageID: current.packageID, sessionID: sessionID)
-        await publishSessionListChangeIfNeeded()
     }
 
-    private func publishSessionListChangeIfNeeded() async {
-        let sessions = await listSessions()
-        guard sessions != lastPublishedSessions else {
-            return
-        }
-        lastPublishedSessions = sessions
-        onSessionSnapshotChanged()
-    }
-
-    private func forgetSession(packageID: String, sessionID: SessionID) {
+    private func forgetSession(packageID: String, sessionID: SessionID, reason: String = "ended") {
         if sessionsByPackage[packageID] == sessionID {
             sessionsByPackage[packageID] = nil
         }
+        frameRateSamples[sessionID] = nil
+        firstFrameMarked.remove(sessionID)
+        lastSessionEndAt[packageID] = .now
+        sessionEndedObserver?(sessionID, reason)
+        noteActivity(packageID, .ended)
+    }
+
+    /// GU4: the package's last session end, tracked here because
+    /// `AppSessionSnapshot` carries no timestamps.
+    private var lastSessionEndAt: [String: ContinuousClock.Instant] = [:]
+
+    func lastSessionEnd(packageID: RuntimePackageID) async -> ContinuousClock.Instant? {
+        lastSessionEndAt[packageID.rawValue]
+    }
+
+    /// §7.3 Update Now: close the live session with the updating reason;
+    /// the Android process may keep running — only the session ends.
+    func endSessionForUpdate(packageID: RuntimePackageID) async {
+        guard let current = await registry.session(packageID: packageID.rawValue) else { return }
+        if current.state != .closing, !Self.isEnded(current.state) {
+            _ = try? await registry.transition(current.id, to: .closing)
+        }
+        await stopDrainingFrames(for: current.id)
+        _ = try? await registry.transition(current.id, to: .ended(.updating))
+        forgetSession(packageID: packageID.rawValue, sessionID: current.id, reason: "updating")
+    }
+
+    /// §7.3 Update Now: relaunch the package after the install.
+    func reopenPackageSession(packageID: RuntimePackageID) async throws {
+        _ = try await launch(RuntimeLaunchRequest(packageID: packageID))
+    }
+
+    /// GU3: packages with a keepRunning task (update-system.md §7.1). Filled
+    /// by `markBackgroundTask`; empty until `window.closeBehavior =
+    /// keepRunning` lands.
+    private var backgroundTasks: Set<String> = []
+
+    /// §7.2 trigger observers, retained for the service's life.
+    private var sessionActivityObservers: [@Sendable (RuntimePackageID, PackageSessionActivity) -> Void] = []
+
+    /// Marks a keepRunning task for `packageID` active or ended (#43 calls
+    /// this when `window.closeBehavior = keepRunning` keeps a task alive).
+    /// Ending a task is a §7.2 gate trigger.
+    func markBackgroundTask(_ packageID: String, active: Bool) {
+        if active {
+            backgroundTasks.insert(packageID)
+        } else if backgroundTasks.remove(packageID) != nil {
+            noteActivity(packageID, .taskEnded)
+        }
+    }
+
+    func hasBackgroundActivity(packageID: RuntimePackageID) async -> Bool {
+        backgroundTasks.contains(packageID.rawValue)
+    }
+
+    func observeSessionActivity(
+        _ observer: @escaping @Sendable (RuntimePackageID, PackageSessionActivity) -> Void
+    ) {
+        sessionActivityObservers.append(observer)
+    }
+
+    private func noteActivity(_ packageID: String, _ activity: PackageSessionActivity) {
+        guard let wireID = RuntimePackageID(rawValue: packageID) else { return }
+        for observer in sessionActivityObservers {
+            observer(wireID, activity)
+        }
+    }
+
+    /// The package of a live app session, for session-channel routing
+    /// (desktop-integration.md §3.3).
+    public func packageID(forSession sessionID: UUID) -> String? {
+        sessionsByPackage.first { $0.value == .app(sessionID) }?.key
+    }
+
+    /// Whether the package has a live session, for `integrationStatus`.
+    public func hasLiveSession(packageID: String) -> Bool {
+        sessionsByPackage[packageID] != nil
+    }
+
+    /// Installs the daemon's perf hooks once (idempotent; diagnostics.md §4.3).
+    public func setPerfObservers(
+        firstFrame: @escaping @Sendable (SessionID) -> Void,
+        sessionEnded: @escaping @Sendable (SessionID, String) -> Void
+    ) {
+        guard firstFrameObserver == nil else {
+            return
+        }
+        firstFrameObserver = firstFrame
+        sessionEndedObserver = sessionEnded
+    }
+
+    /// The `session` attribute of `FIRST_FRAME_DISPLAYED`, comparable with a
+    /// launch record's `sessionID` (diagnostics.md §4.2).
+    private static func sessionAttribute(_ session: SessionID) -> String {
+        switch session {
+        case .app(let id):
+            return id.uuidString
+        case .system(let use):
+            return "system:\(use)"
+        }
+    }
+
+    /// Marks `FIRST_FRAME_DISPLAYED` once for a session and notifies the observer
+    /// (diagnostics.md §4.2, §4.3).
+    private func noteFirstFrame(of session: SessionID) {
+        guard !firstFrameMarked.contains(session) else {
+            return
+        }
+        firstFrameMarked.insert(session)
+        Perf.mark(
+            .firstFrameDisplayed,
+            ["session": .string(Self.sessionAttribute(session))]
+        )
+        firstFrameObserver?(session)
+        // §7.2: the first frame of a session that waited on a committing
+        // update is that update's H4.
+        if let package = sessionsByPackage.first(where: { $0.value == session })?.key,
+            postUpdateLaunchPackages.remove(package) != nil,
+            let wireID = RuntimePackageID(rawValue: package),
+            let postUpdateFirstFrameObserver
+        {
+            Task { await postUpdateFirstFrameObserver(wireID) }
+        }
+    }
+
+    /// Called by the host's §7.2 waiter when a launching session waited on
+    /// a committing update install; the next first frame is the update's
+    /// H4. `packageID` is the Android package identifier (raw).
+    func markPostUpdateLaunch(_ packageID: String) {
+        postUpdateLaunchPackages.insert(packageID)
+    }
+
+    /// The graphics statistics of every live session, for `frameStatistics` and
+    /// `perfStatistics` (diagnostics.md §9.3, runtime-api.md §13.1).
+    public func sessionGraphicsStatistics() async
+        -> [(sessionID: UUID, statistics: SessionGraphicsStatistics)]
+    {
+        let counters = await displayPool.graphicsCounters()
+        let now = ContinuousClock.now
+        var rows: [(sessionID: UUID, statistics: SessionGraphicsStatistics)] = []
+        for snapshot in await registry.snapshot() where !Self.isEnded(snapshot.state) {
+            guard
+                let lease = await registry.displayLease(snapshot.id),
+                let wirePackageID = RuntimePackageID(rawValue: snapshot.packageID)
+            else {
+                continue
+            }
+            let present = await displayPool.presentStatistics(lease.scanout)
+            let durations = (present?.durationsUs ?? []).sorted()
+            let p50 = durations.isEmpty ? 0 : Int64(durations[durations.count / 2])
+            let p95 =
+                durations.isEmpty
+                ? 0
+                : Int64(durations[min(durations.count - 1, (durations.count * 95 + 99) / 100 - 1)])
+            let frames = present?.statistics.framesPresented ?? 0
+            var samples = frameRateSamples[snapshot.id] ?? []
+            samples.append((time: now, frames: frames))
+            samples = samples.filter { (now - $0.time) <= .seconds(10) }
+            frameRateSamples[snapshot.id] = samples
+            var fps = 0.0
+            if let first = samples.first, let last = samples.last, last.time > first.time {
+                let elapsed = (last.time - first.time).components
+                let seconds =
+                    Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+                if seconds > 0 {
+                    fps = Double(last.frames - first.frames) / seconds
+                }
+            }
+            guard case .app(let sessionUUID) = snapshot.id else {
+                continue
+            }
+            rows.append(
+                (
+                    sessionID: sessionUUID,
+                    statistics: SessionGraphicsStatistics(
+                        packageID: wirePackageID,
+                        displayID: lease.androidDisplayID,
+                        fps: fps,
+                        droppedFrames: present?.statistics.droppedFrames ?? 0,
+                        hostReadbacks: counters.hostReadbacks,
+                        cpuPixelCopies: counters.cpuPixelCopies,
+                        presentGPUTimeP50Us: p50,
+                        presentGPUTimeP95Us: p95
+                    )
+                ))
+        }
+        return rows
     }
 
     private func releaseOperation() {
@@ -807,18 +1035,16 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         else {
             throw .runtime("internal", message: "APKRun could not identify the app session.")
         }
-        return RuntimeLaunchResult(sessionID: sessionID, packageID: packageID, state: phase(for: session.state))
-    }
-
-    private static func phase(for state: AppSessionState) -> RuntimeSessionPhase {
-        switch state {
-        case .running, .backgrounded: .running
-        case .launching: .launching
-        case .requested: .starting
-        case .waitingForRuntime: .booting
-        case .acquiringDisplay: .waitingForPackage
-        case .closing, .ended: .ended
+        let phase: RuntimeSessionPhase
+        switch session.state {
+        case .running, .backgrounded: phase = .running
+        case .launching: phase = .launching
+        case .requested: phase = .starting
+        case .waitingForRuntime: phase = .booting
+        case .acquiringDisplay: phase = .waitingForPackage
+        case .closing, .ended: phase = .ended
         }
+        return RuntimeLaunchResult(sessionID: sessionID, packageID: packageID, state: phase)
     }
 
     private static func isEnded(_ state: AppSessionState) -> Bool {
@@ -845,6 +1071,16 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             backingScale: 1
         )
     )
+
+    /// Snapshots of all sessions that have not ended (host-ui.md §5.2).
+    func sessionSnapshots() async -> [AppSessionSnapshot] {
+        await registry.snapshot().filter { !$0.state.isEnded }
+    }
+
+    /// Registers the callback invoked for every committed session change.
+    func setSessionChangeObserver(_ handler: (@Sendable (AppSessionSnapshot) -> Void)?) async {
+        await registry.setOnChange(handler)
+    }
 
     private static func wireError(for failure: SessionRegistryFailure) -> RuntimeWireError {
         switch failure {

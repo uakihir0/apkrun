@@ -57,9 +57,8 @@ func eventHubDeliversSequencedOperationEventsToSubscribedConnections() async thr
                 ))),
         operationID: operationID
     )
-    try await Task.sleep(for: .milliseconds(60))
 
-    let delivered = try sink.envelopes()
+    let delivered = try await waitForEnvelopes(sink, count: 2)
     #expect(delivered.map(\.seq) == [1, 2])
     #expect(delivered.allSatisfy { $0.topic == .operations })
     #expect(delivered.map(\.operationID) == [operationID, operationID])
@@ -78,31 +77,6 @@ func eventHubDeliversSequencedOperationEventsToSubscribedConnections() async thr
     hub.publishOperationEvent(.started(snapshot), operationID: operationID)
     try await Task.sleep(for: .milliseconds(40))
     #expect(try sink.envelopes().count == 2)
-    hub.remove(connectionID: connectionID)
-}
-
-@Test(.timeLimit(.minutes(1)))
-func eventHubDeliversSessionSnapshotChangeToSessionSubscribers() async throws {
-    let hub = RuntimeEventHub()
-    let sink = RecordingRuntimeEventSink()
-    let connectionID = ObjectIdentifier(sink)
-    _ = try hub.subscribe(
-        connectionID: connectionID,
-        clientKind: .menuBar,
-        topics: [.sessions],
-        sink: RuntimeEventSinkReference(value: sink),
-        outputQueue: DispatchQueue(label: "RuntimeEventHubTests.sessions"),
-        isConnectionOpen: { true }
-    )
-
-    hub.publishSessionListChange(.snapshotChanged)
-    await sink.waitForEnvelopeCount(1)
-
-    let envelopes = try sink.envelopes()
-    #expect(envelopes.count == 1)
-    #expect(envelopes[0].topic == .sessions)
-    #expect(envelopes[0].seq == 1)
-    #expect(envelopes[0].payload == .sessions(.snapshotChanged))
     hub.remove(connectionID: connectionID)
 }
 
@@ -130,11 +104,11 @@ func eventHubCoalescesRuntimeProgressButPreservesStateTransitions() async throws
     )
     hub.publishRuntimeChange(.stateChanged(.ready))
     hub.endSnapshotBarrier(connectionID: connectionID, outputQueue: outputQueue) {}
-    try await Task.sleep(for: .milliseconds(60))
 
-    let envelopes = try sink.envelopes()
+    let envelopes = try await waitForEnvelopes(sink, count: 3)
     #expect(envelopes.map(\.seq) == [1, 2, 3])
     #expect(envelopes.map(\.topic) == [.runtime, .runtime, .runtime])
+    guard envelopes.count >= 3 else { return }
     guard case .runtime(.stateChanged(.booting(.kernel))) = envelopes[0].payload else {
         Issue.record("Expected the booting state transition to be preserved.")
         return
@@ -178,12 +152,12 @@ func eventHubDeliversPackageChangesWithOperationContext() async throws {
     hub.publishPackageChange(.installed(summary), operationID: operationID)
     hub.publishPackageChange(.updated(summary, from: 7))
     hub.publishPackageChange(.removed(packageID, keptData: true), operationID: operationID)
-    try await Task.sleep(for: .milliseconds(60))
 
-    let envelopes = try sink.envelopes()
+    let envelopes = try await waitForEnvelopes(sink, count: 3)
     #expect(envelopes.map(\.seq) == [1, 2, 3])
     #expect(envelopes.map(\.topic) == [.packages, .packages, .packages])
     #expect(envelopes.map(\.operationID) == [operationID, nil, operationID])
+    guard envelopes.count >= 3 else { return }
     #expect(envelopes[0].payload == .packages(.installed(summary)))
     #expect(envelopes[1].payload == .packages(.updated(summary, from: 7)))
     #expect(envelopes[2].payload == .packages(.removed(packageID, keptData: true)))
@@ -207,9 +181,8 @@ func runtimeHostStateBridgeKeepsSnapshotAndEventStateConsistent() async throws {
 
     await host.consumeSupervisorState(RuntimeStateSnapshot(revision: 1, state: .stopping(.reset)))
     #expect(await host.status().runtimeState == "stopping")
-    try await Task.sleep(for: .milliseconds(40))
 
-    let envelopes = try sink.envelopes()
+    let envelopes = try await waitForEnvelopes(sink, count: 1)
     #expect(envelopes.count == 1)
     guard case .runtime(.stateChanged(.stopping(.reset))) = envelopes.first?.payload else {
         Issue.record("Expected the reset stop reason in the runtime topic.")
@@ -238,9 +211,8 @@ func runtimeHostPreservesDelayedStateEventsAfterNewerStatusSnapshot() async thro
     )
     await host.consumeSupervisorState(RuntimeStateSnapshot(revision: 2, state: .ready))
     #expect(await host.status().runtimeState == "ready")
-    try await Task.sleep(for: .milliseconds(40))
 
-    let envelopes = try sink.envelopes()
+    let envelopes = try await waitForEnvelopes(sink, count: 2)
     #expect(envelopes.count == 2)
     guard case .runtime(.stateChanged(.booting(.kernel))) = envelopes.first?.payload else {
         Issue.record("A delayed booting transition must still be delivered.")
@@ -346,6 +318,55 @@ func eventHubDropsQueuedTopicEventsWhenUnsubscribed() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func eventHubKeepsSubscribedConnectionWhenAnotherTopicPublishes() async throws {
+    let hub = RuntimeEventHub()
+    let sink = RecordingRuntimeEventSink()
+    let connectionID = ObjectIdentifier(sink)
+    let outputQueue = DispatchQueue(label: "RuntimeEventHubTests.otherTopic")
+    let operationID = OperationID()
+    let packageID = try #require(
+        RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext")
+    )
+    let snapshot = OperationSnapshot(
+        operationID: operationID,
+        kind: .wrapperCreate,
+        packageID: packageID,
+        clientKind: .cli,
+        startedAt: Date()
+    )
+    _ = try hub.subscribe(
+        connectionID: connectionID,
+        clientKind: .cli,
+        topics: [.operations],
+        sink: RuntimeEventSinkReference(value: sink),
+        outputQueue: outputQueue,
+        isConnectionOpen: { true }
+    )
+    // A topic the connection did not subscribe to must not drop the subscription.
+    hub.publishWrapperChange(
+        .created(
+            WrapperSummary(
+                packageID: packageID,
+                bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+                displayName: "HelloText",
+                kind: .local,
+                bundleURL: URL(fileURLWithPath: "/Applications/HelloText.app"),
+                status: WrapperStatus(state: .valid, refreshReasons: []),
+                approval: .generated,
+                launcherVersion: "0.1.0",
+                createdAt: Date()
+            )),
+        operationID: operationID
+    )
+    hub.publishOperationEvent(.started(snapshot), operationID: operationID)
+
+    let delivered = try await waitForEnvelopes(sink, count: 1)
+    #expect(delivered.count == 1)
+    #expect(delivered.first?.topic == .operations)
+    hub.remove(connectionID: connectionID)
+}
+
+@Test(.timeLimit(.minutes(1)))
 func eventHubPreservesEventsAcrossAcknowledgementBackpressure() async throws {
     let hub = RuntimeEventHub()
     let sink = RecordingRuntimeEventSink(acknowledgesImmediately: false)
@@ -371,12 +392,10 @@ func eventHubPreservesEventsAcrossAcknowledgementBackpressure() async throws {
     }
 
     hub.flush(connectionID: connectionID)
-    try await Task.sleep(for: .milliseconds(40))
-    #expect(try sink.envelopes().count == 256)
+    #expect(try await waitForEnvelopes(sink, count: 256).count == 256)
 
     sink.acknowledgeAll()
-    try await Task.sleep(for: .milliseconds(40))
-    let delivered = try sink.envelopes()
+    let delivered = try await waitForEnvelopes(sink, count: 300)
     #expect(delivered.count == 300)
     #expect(delivered.map(\.seq) == Array(1...300).map(UInt64.init))
     #expect(delivered.allSatisfy { $0.payload != .resyncRequired(.operations) })
@@ -409,19 +428,17 @@ func eventHubKeepsSnapshotReplyAheadOfResyncForBackpressuredEvents() async throw
         hub.publishOperationEvent(.started(snapshot), operationID: operationID)
     }
     hub.flush(connectionID: connectionID)
-    try await Task.sleep(for: .milliseconds(40))
-    #expect(try sink.envelopes().count == 256)
+    #expect(try await waitForEnvelopes(sink, count: 256).count == 256)
 
     hub.beginSnapshotBarrier(connectionID: connectionID)
     hub.endSnapshotBarrier(connectionID: connectionID, outputQueue: outputQueue) {
         replyRecorder.record(envelopeCount: (try? sink.envelopes().count) ?? -1)
     }
-    try await Task.sleep(for: .milliseconds(40))
+    try await waitForValue { replyRecorder.envelopeCount != nil }
     #expect(replyRecorder.envelopeCount == 256)
 
     sink.acknowledgeAll()
-    try await Task.sleep(for: .milliseconds(40))
-    let delivered = try sink.envelopes()
+    let delivered = try await waitForEnvelopes(sink, count: 257)
     #expect(delivered.count == 257)
     #expect(delivered.last?.payload == .resyncRequired(.operations))
     hub.remove(connectionID: connectionID)
@@ -462,7 +479,7 @@ func eventHubPlacesSnapshotReplyBetweenOlderAndNewerEvents() async throws {
     ) {
         recorder.append("reply")
     }
-    try await Task.sleep(for: .milliseconds(60))
+    try await waitForValue { recorder.values().count == 3 }
 
     #expect(recorder.values() == ["event-1", "reply", "event-2"])
     hub.remove(connectionID: connectionID)
@@ -535,8 +552,6 @@ private final class RecordingRuntimeEventSink: NSObject, RuntimeEventSink, @unch
     private let lock = NSLock()
     private var batches: [Data] = []
     private var acknowledgementHandlers: [() -> Void] = []
-    private var envelopeCountWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
-    private var deliveredEnvelopeCount = 0
     private let acknowledgesImmediately: Bool
 
     init(acknowledgesImmediately: Bool = true) {
@@ -548,36 +563,14 @@ private final class RecordingRuntimeEventSink: NSObject, RuntimeEventSink, @unch
     }
 
     func deliver(_ batch: Data, reply: @escaping () -> Void) {
-        let envelopeCount =
-            (try? JSONDecoder().decode([EventEnvelope].self, from: batch).count)
-            ?? 0
         lock.lock()
         batches.append(batch)
-        deliveredEnvelopeCount += envelopeCount
-        let readyWaiters = envelopeCountWaiters.filter { deliveredEnvelopeCount >= $0.count }
-        envelopeCountWaiters.removeAll { deliveredEnvelopeCount >= $0.count }
         if !acknowledgesImmediately {
             acknowledgementHandlers.append(reply)
         }
         lock.unlock()
-        for waiter in readyWaiters {
-            waiter.continuation.resume()
-        }
         if acknowledgesImmediately {
             reply()
-        }
-    }
-
-    func waitForEnvelopeCount(_ count: Int) async {
-        await withCheckedContinuation { continuation in
-            lock.lock()
-            guard deliveredEnvelopeCount < count else {
-                lock.unlock()
-                continuation.resume()
-                return
-            }
-            envelopeCountWaiters.append((count: count, continuation: continuation))
-            lock.unlock()
         }
     }
 
@@ -598,5 +591,28 @@ private final class RecordingRuntimeEventSink: NSObject, RuntimeEventSink, @unch
         return
             try captured
             .flatMap { try JSONDecoder().decode([EventEnvelope].self, from: $0) }
+    }
+}
+
+/// Polls until the sink holds at least `count` envelopes (up to ~5 s). Event
+/// delivery goes through the hub's deferred batch queue, so a fixed sleep is
+/// not enough on a loaded runner.
+private func waitForEnvelopes(
+    _ sink: RecordingRuntimeEventSink,
+    count: Int
+) async throws -> [EventEnvelope] {
+    for _ in 0..<500 {
+        let envelopes = try sink.envelopes()
+        if envelopes.count >= count { return envelopes }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    return try sink.envelopes()
+}
+
+/// Polls a condition for ~5 s, e.g. a recorder filled by an asynchronous
+/// snapshot reply.
+private func waitForValue(_ condition: @escaping () -> Bool) async throws {
+    for _ in 0..<500 where !condition() {
+        try await Task.sleep(for: .milliseconds(10))
     }
 }

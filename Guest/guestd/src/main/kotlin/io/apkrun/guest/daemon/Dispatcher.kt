@@ -1,6 +1,7 @@
 package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.GuestCapability
+import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.Empty
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.Pong
@@ -33,6 +34,9 @@ class Dispatcher(
     private val displayLocks = ConcurrentHashMap<Int, Mutex>()
     private val displayExecutors = ConcurrentHashMap<Int, CoroutineDispatcher>()
     private val active = ConcurrentHashMap<Long, Deferred<Response?>>()
+    // `CollectDiagnostics` owns the single bulk-channel writer for the whole
+    // collect, so two collects can never run together.
+    private val diagnosticsMutex = Mutex()
     private val cancelled = ConcurrentHashMap.newKeySet<Long>()
 
     /**
@@ -41,7 +45,7 @@ class Dispatcher(
      * did not enable, is answered with UNSUPPORTED (guest-protocol.md §5.2, §5.3).
      */
     suspend fun dispatch(id: Long, request: Request, enabled: Set<GuestCapability>): Response {
-        val capability = requiredCapability(request.opCase)
+        val capability = requiredCapability(request)
         if (capability == null) {
             return failure(
                 GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
@@ -165,10 +169,72 @@ class Dispatcher(
                 Response.newBuilder()
                     .setListPackages(operations.listPackages(request.listPackages))
                     .build()
+            Request.OpCase.SET_LOCALE -> {
+                operations.setLocale(request.setLocale)
+                Response.newBuilder().setSetLocale(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.SET_TIME_ZONE -> {
+                operations.setTimeZone(request.setTimeZone)
+                Response.newBuilder().setSetTimeZone(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.SET_CLOCK_FORMAT -> {
+                operations.setClockFormat(request.setClockFormat)
+                Response.newBuilder().setSetClockFormat(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.SYNC_TIME -> {
+                operations.syncTime(request.syncTime)
+                Response.newBuilder().setSyncTime(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.COLLECT_DIAGNOSTICS ->
+                diagnosticsMutex.withLock {
+                    Response.newBuilder()
+                        .setCollectDiagnostics(
+                            operations.collectDiagnostics(request.collectDiagnostics)
+                        )
+                        .build()
+                }
             Request.OpCase.FOCUS_DISPLAY -> {
                 val displayId = request.focusDisplay.displayId
                 withDisplayLock(displayId) { operations.focusDisplay(displayId) }
                 Response.newBuilder().setFocusDisplay(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.SET_CLIPBOARD -> {
+                operations.setClipboard(request.setClipboard)
+                Response.newBuilder().setSetClipboard(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.ACTIVATE_NOTIFICATION -> {
+                operations.activateNotification(request.activateNotification)
+                Response.newBuilder().setActivateNotification(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.DISMISS_NOTIFICATION -> {
+                operations.dismissNotification(request.dismissNotification)
+                Response.newBuilder().setDismissNotification(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.SET_NOTIFICATION_FORWARDING -> {
+                operations.setNotificationForwarding(request.setNotificationForwarding)
+                Response.newBuilder()
+                    .setSetNotificationForwarding(Empty.getDefaultInstance())
+                    .build()
+            }
+            Request.OpCase.SET_URL_REDIRECT -> {
+                operations.setUrlRedirect(request.setUrlRedirect)
+                Response.newBuilder().setSetUrlRedirect(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.RESOLVE_URL -> {
+                operations.resolveUrl(request.resolveUrl)
+                Response.newBuilder().setResolveUrl(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.IMPORT_FILES ->
+                Response.newBuilder()
+                    .setImportFiles(operations.importFiles(request.importFiles))
+                    .build()
+            Request.OpCase.RESOLVE_EXPORT ->
+                Response.newBuilder()
+                    .setResolveExport(operations.resolveExport(request.resolveExport))
+                    .build()
+            Request.OpCase.SET_SHARED_FOLDER_ACCESS -> {
+                operations.setSharedFolderAccess(request.setSharedFolderAccess)
+                Response.newBuilder().setSetSharedFolderAccess(Empty.getDefaultInstance()).build()
             }
             else ->
                 failure(
@@ -202,8 +268,8 @@ class Dispatcher(
          * operation that this build does not implement has no capability here, so it is answered
          * with UNSUPPORTED.
          */
-        fun requiredCapability(operation: Request.OpCase): GuestCapability? =
-            when (operation) {
+        fun requiredCapability(request: Request): GuestCapability? =
+            when (request.opCase) {
                 Request.OpCase.PING,
                 Request.OpCase.GET_SNAPSHOT -> GuestCapability.CORE
                 Request.OpCase.SET_DISPLAY_POLICY,
@@ -213,6 +279,27 @@ class Dispatcher(
                 Request.OpCase.FOCUS_DISPLAY -> GuestCapability.INPUT
                 Request.OpCase.QUERY_PACKAGE,
                 Request.OpCase.LIST_PACKAGES -> GuestCapability.PACKAGES
+                Request.OpCase.SET_LOCALE,
+                Request.OpCase.SET_TIME_ZONE,
+                Request.OpCase.SET_CLOCK_FORMAT,
+                Request.OpCase.SYNC_TIME -> GuestCapability.LOCALE
+                Request.OpCase.COLLECT_DIAGNOSTICS -> GuestCapability.DIAGNOSTICS
+                // An image clip needs clipboard.image.v1; text and HTML move on
+                // clipboard.text.v1 alone (issue #81).
+                Request.OpCase.SET_CLIPBOARD ->
+                    if (request.setClipboard.hasImage()) {
+                        GuestCapability.CLIPBOARD_IMAGE
+                    } else {
+                        GuestCapability.CLIPBOARD_TEXT
+                    }
+                Request.OpCase.ACTIVATE_NOTIFICATION,
+                Request.OpCase.DISMISS_NOTIFICATION,
+                Request.OpCase.SET_NOTIFICATION_FORWARDING -> GuestCapability.NOTIFICATIONS
+                Request.OpCase.SET_URL_REDIRECT,
+                Request.OpCase.RESOLVE_URL -> GuestCapability.URL
+                Request.OpCase.IMPORT_FILES,
+                Request.OpCase.RESOLVE_EXPORT -> GuestCapability.FILES
+                Request.OpCase.SET_SHARED_FOLDER_ACCESS -> GuestCapability.FILES_SHARED
                 else -> null
             }
 

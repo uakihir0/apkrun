@@ -1,3 +1,5 @@
+import DiagnosticsCore
+
 /// Translates key samples into the key events of the guest in key mode (input.md §5.1, §5.2, §6; #26).
 ///
 /// Key mode is the only path before the IME (#72). The translator keeps the keys that are down, so that every release is
@@ -68,6 +70,15 @@ public struct KeyTranslator: Sendable {
 
     /// Translates one key sample, in order.
     public mutating func translate(_ sample: KeySample) -> [InputEvent] {
+        let started = ContinuousClock.now
+        defer {
+            let components = (ContinuousClock.now - started).components
+            InputLatencyRecorder.shared.record(
+                segment: "input.translate",
+                microseconds: components.seconds * 1_000_000
+                    + components.attoseconds / 1_000_000_000_000
+            )
+        }
         switch sample.kind {
         case .down:
             return keyDown(sample)

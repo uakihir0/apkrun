@@ -8,9 +8,9 @@ This guide holds the engineering rules for licenses: what APKRun may use, ship, 
 
 ### 1.1 Status
 
-- The project license is open question OQ-40 ([open-questions.md](../04-plan/open-questions.md)). It is decided in an ADR before the launcher binary is given to other people (#90), and before the v0.4 public demo at the latest ([roadmap.md](../04-plan/roadmap.md) §3.4).
-- Until the ADR is accepted, source files carry no license header, and nothing from outside the project is added except under §3 and §4.
-- The notices of §6 and §7 name the chosen license.
+- The project license is Apache-2.0, decided by [ADR-0019](../01-architecture/decisions/0019-project-license-apache2.md) (OQ-40).
+- Source files carry one line, `SPDX-License-Identifier: Apache-2.0`, in the file's comment style, applied as files are touched and in one mechanical pass. Derived files keep their own header (§3.1).
+- The notices of §6 and §7 name Apache-2.0.
 
 ### 1.2 Requirements for the choice
 

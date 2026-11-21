@@ -48,6 +48,10 @@ targets:
     platform: macOS
     sources:
       - path: Apps/APKRun
+        excludes:
+          - Tests
+      - path: Apps/APKRun/Resources/Localizable.xcstrings
+        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: APKRun
@@ -150,7 +154,59 @@ targets:
         outputFiles:
           - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LoginItems/APKRunMenuBar.app"
     scheme:
-      testTargets: []
+      testTargets:
+        - APKRunTests
+        - APKRunSettingsTests
+
+  APKRunSettingsTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Apps/APKRun/Settings/LocaleTimeSettingsStore.swift
+      - path: Apps/APKRun/Tests
+    dependencies:
+      - target: BuildStamp
+        embed: false
+        link: false
+      - package: APKRun
+        product: RuntimeClient
+      - package: APKRun
+        product: RuntimeAPI
+    settings:
+      base:
+        PRODUCT_NAME: APKRunSettingsTests
+        PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.settings-tests
+        ENABLE_HARDENED_RUNTIME: NO
+        GENERATE_INFOPLIST_FILE: YES
+    scheme: {}
+
+  APKRunTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Apps/APKRun/Tests
+      - path: Apps/APKRun/Models/RuntimeService.swift
+      - path: Apps/APKRun/Models/TopicPollingModel.swift
+      - path: Apps/APKRun/Models/HomeModels.swift
+      - path: Apps/APKRun/Models/AppRouter.swift
+      - path: Apps/APKRun/Models/RuntimeStatusModel.swift
+      - path: Apps/APKRun/Features/Home/HomeRowStatus.swift
+      - path: Apps/APKRun/Features/AddFlow/AddFlowModel.swift
+      - path: Apps/APKRun/Features/AppPage/PackageDetailModel.swift
+      - path: Apps/APKRun/Features/Settings/SettingsModel.swift
+    settings:
+      base:
+        PRODUCT_NAME: APKRunTests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: BuildStamp
+        embed: false
+        link: false
+      - package: APKRun
+        product: RuntimeClient
+      - package: APKRun
+        product: RuntimeAPI
+    scheme: {}
 
   APKRunMenuBar:
     type: application
@@ -255,6 +311,8 @@ targets:
         link: false
       - package: APKRun
         product: RuntimeHost
+      - package: APKRun
+        product: DiagnosticsCore
 
   APKRunTestHost:
     type: application
@@ -282,12 +340,14 @@ targets:
       - path: Tests/IntegrationTests/LinuxGuestTests
       - path: Tests/IntegrationTests/AndroidADBTests
       - path: Tests/IntegrationTests/AndroidPackageTests
+      - path: Tests/IntegrationTests/StoreTests
       - path: Tests/IntegrationTests/AndroidSupport
       - path: Tests/IntegrationTests/AndroidBootTests
       - path: Tests/IntegrationTests/AndroidGraphicsTests
       - path: Tests/IntegrationTests/G3GraphicsTests
       - path: Tests/IntegrationTests/GuestAgentTests
       - path: Tests/IntegrationTests/AndroidInputTests
+      - path: Tests/IntegrationTests/WrapperDesktopTests
       - path: Tests/IntegrationTests/Support
       - path: Tests/IntegrationTests/RunResources
         excludes:
@@ -324,6 +384,10 @@ targets:
         product: WindowingCore
       - package: APKRun
         product: RuntimeAPI
+      - package: APKRun
+        product: APKStoreCore
+      - package: APKRun
+        product: UpdateCore
     scheme:
       testTargets:
         - IntegrationTests
@@ -362,6 +426,8 @@ targets:
         product: RuntimeCore
       - package: APKRun
         product: RuntimeHost
+      - package: APKRun
+        product: WrapperCore
     scheme:
       testTargets:
         - AcceptanceTests

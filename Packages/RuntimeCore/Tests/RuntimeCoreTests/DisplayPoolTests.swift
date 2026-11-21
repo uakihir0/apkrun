@@ -552,10 +552,9 @@ final class FakeScanoutController: ScanoutController, @unchecked Sendable {
             guest.emit(.changed(followup))
         }
         if removeBeforeAttachTimeout {
-            Task {
-                try? await Task.sleep(for: .milliseconds(5))
-                guest.emit(.removed(displayID: result.0))
-            }
+            // Emit synchronously: a delayed removal races the pool's attach
+            // decision and intermittently lets the productless display attach.
+            guest.emit(.removed(displayID: result.0))
         }
     }
 
@@ -585,6 +584,16 @@ final class FakeScanoutController: ScanoutController, @unchecked Sendable {
         height: Int
     ) throws(GraphicsFailure) -> ScanoutPoolHandle {
         makePool(scanout)
+    }
+
+    func presentStatistics(
+        for scanout: ScanoutID
+    ) -> (statistics: PresentStatistics, durationsUs: [UInt64])? {
+        nil
+    }
+
+    func graphicsCounters() -> GraphicsCounters {
+        GraphicsCounters()
     }
 
     func detachPool(_ scanout: ScanoutID, generation: UInt64?) {

@@ -154,18 +154,20 @@ WrapperCore              → RuntimeAPI, DiagnosticsCore
 IntegrationCore          → GuestProtocol, RuntimeAPI, DiagnosticsCore
 RuntimeClient            → RuntimeAPI, DiagnosticsCore
 RuntimeHost              → RuntimeCore, APKStoreCore, UpdateCore, WrapperCore,
-                           IntegrationCore, ImageCore, InputCore, RuntimeAPI, DiagnosticsCore
+                           IntegrationCore, ImageCore, InputCore, RuntimeAPI, DiagnosticsCore,
+                           GuestProtocol
 ```
 
 Executables:
 
 ```text
-apkrund          → RuntimeHost
+apkrund          → RuntimeHost, DiagnosticsCore
 APKRunLauncher   → RuntimeClient, RuntimeAPI, WindowingCore, InputCore, DiagnosticsCore
 APKRun.app       → RuntimeClient, RuntimeAPI, DiagnosticsCore, Sparkle (third party; APKRun updates, ADR-0016)
 APKRunMenuBar    → RuntimeClient, RuntimeAPI, DiagnosticsCore
 apkrun (CLI)     → RuntimeClient, RuntimeAPI, DiagnosticsCore, ArgumentParser (third party, swift-argument-parser)
                    + RuntimeHost, WindowingCore, InputCore only when built with APKRUN_EMBEDDED_RUNTIME (SwiftPM trait EmbeddedRuntime)
+apkrun-perf      → RuntimeClient, RuntimeAPI, DiagnosticsCore, ArgumentParser (third party, swift-argument-parser); the §9.2 harness ([diagnostics.md](../02-design/diagnostics.md))
 ```
 
 Notes:

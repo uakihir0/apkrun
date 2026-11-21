@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Rebuilds the HelloUpdate fixtures into a scratch directory and fails when any
 # committed byte differs (test-strategy.md §4.5, "a CI check fails when a copy
-# is older than its sources"). Covers the local update repo and the derived
-# set of Tests/Fixtures/apks/ (#42).
+# is older than its sources"). Covers the local update repo, the derived
+# set of Tests/Fixtures/apks/ (#42), and Tests/Fixtures/containers/HelloSplit.apks (#43).
 #
 #   scripts/check-fixtures.sh
 #
@@ -35,13 +35,18 @@ compare_tree() {
             continue
         fi
         if ! compare_file "$file" "$actual/$relative"; then
-            printf 'check-fixtures: %s: %s differs from the rebuilt bytes\n' "$label" "$relative" >&2
+            printf 'check-fixtures: %s: %s differs from the rebuild\n' "$label" "$relative" >&2
             status=1
         fi
     done < <(find "$expected" -type f -print0)
     return "$status"
 }
 
+# ZIP containers (APKs, .apks) are compared entry-by-entry on (name, CRC,
+# size), skipping META-INF/: AGP emits metadata there (app-metadata,
+# version-control-info) that is not byte-stable across build environments,
+# and the stripped signing stamp already proved the signer is the pinned test
+# key. Other files stay byte-exact.
 compare_file() {
     local committed="$1"
     local rebuilt="$2"
@@ -71,6 +76,16 @@ PY
 status=0
 compare_tree "$committed_repo" "$work/repo" "update repo" || status=1
 compare_tree "$committed_derived" "$work/apks" "derived APKs" || status=1
+
+# HelloSplit.apks builds through bundletool, not the derived-apks step, so it
+# gets its own rebuild (#43 step 1).
+"$script_dir/build-fixtures.sh" --app HelloSplit >/dev/null
+if ! compare_file \
+    "$repo_root/Tests/Fixtures/containers/HelloSplit.apks" \
+    "$repo_root/Tests/Fixtures/AndroidApps/out/HelloSplit.apks"; then
+    printf 'check-fixtures: HelloSplit.apks differs from the rebuilt entries\n' >&2
+    status=1
+fi
 if ((status == 0)); then
     printf 'check-fixtures: committed fixtures match the rebuilt bytes\n'
 fi

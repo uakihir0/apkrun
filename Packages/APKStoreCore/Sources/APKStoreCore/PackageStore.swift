@@ -3945,7 +3945,7 @@ public actor PackageStore {
     }
 
     private static func artifactURLs(in incoming: URL, set: ArtifactSet) -> [URL] {
-        set.files.map { incoming.appendingPathComponent($0.name) }
+        set.installSpecs.map { incoming.appendingPathComponent($0.name) }
     }
 
     private static func validateSplitFacts(_ facts: [APKFacts]) throws -> APKFacts {

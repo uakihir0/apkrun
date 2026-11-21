@@ -80,6 +80,47 @@ verify_signer() {
         printf 'build-fixtures: %s is not signed by the test fixture key (signer %s)\n' "$apk" "$signers" >&2
         exit 1
     fi
+    strip_signing_stamp "$apk"
+}
+
+# AGP signs Gradle outputs with an extra signing-block pair (ID 0x504b4453,
+# the "stamp") that embeds the signing time, so committed fixtures would never
+# byte-match a rebuild (test-strategy.md §4.5). The pair is not part of the
+# v2/v3 signature — dropping it leaves verification intact.
+strip_signing_stamp() {
+    python3 - "$1" <<'PY'
+import struct
+import sys
+
+path = sys.argv[1]
+data = bytearray(open(path, "rb").read())
+eocd = data.rfind(b"PK\x05\x06")
+cd_offset = struct.unpack_from("<I", data, eocd + 16)[0]
+magic = data.find(b"APK Sig Block 42")
+if magic == -1:
+    sys.exit(0)
+block_start = cd_offset - 8 - struct.unpack_from("<Q", data, magic - 8)[0]
+pos = block_start + 8
+pairs = bytearray()
+removed = False
+while pos < magic - 8:
+    pair_length = struct.unpack_from("<Q", data, pos)[0]
+    if struct.unpack_from("<I", data, pos + 8)[0] == 0x504B4453:
+        removed = True
+    else:
+        pairs += data[pos : pos + 8 + pair_length]
+    pos += 8 + pair_length
+if not removed:
+    sys.exit(0)
+size = len(pairs) + 24
+block = (
+    struct.pack("<Q", size) + bytes(pairs) + struct.pack("<Q", size) + b"APK Sig Block 42"
+)
+data = data[:block_start] + block + data[cd_offset:]
+eocd = data.rfind(b"PK\x05\x06")
+struct.pack_into("<I", data, eocd + 16, block_start + len(block))
+open(path, "wb").write(data)
+PY
 }
 
 ensure_bundletool() {

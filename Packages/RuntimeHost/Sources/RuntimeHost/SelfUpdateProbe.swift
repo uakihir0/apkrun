@@ -33,6 +33,20 @@ public struct SelfUpdateProbeState: Codable, Equatable, Sendable {
         latestCandidate = nil
         candidateIsCritical = false
     }
+
+    /// Fields added after the first shipped schema decode as absent instead
+    /// of failing the whole `state.json` read (runtime-maintenance.md §9).
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        lastCheckedAt = try container.decodeIfPresent(Date.self, forKey: .lastCheckedAt)
+        etag = try container.decodeIfPresent(String.self, forKey: .etag)
+        lastModified = try container.decodeIfPresent(String.self, forKey: .lastModified)
+        notifiedBuilds = try container.decodeIfPresent([Int].self, forKey: .notifiedBuilds) ?? []
+        criticalNotifiedAt = try container.decodeIfPresent(Date.self, forKey: .criticalNotifiedAt)
+        latestCandidate = try container.decodeIfPresent(AvailableRelease.self, forKey: .latestCandidate)
+        candidateIsCritical =
+            try container.decodeIfPresent(Bool.self, forKey: .candidateIsCritical) ?? false
+    }
 }
 
 /// One `<item>` of a Sparkle appcast (runtime-maintenance.md §3.3).

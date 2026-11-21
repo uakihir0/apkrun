@@ -46,6 +46,14 @@ public enum DevelopmentGuestTaskEvent: Equatable, Sendable {
     case vanished(packageID: String, taskID: Int32)
 }
 
+/// The result of applying a host time-zone identifier to Android.
+public enum GuestAgentTimeZoneUpdate: Equatable, Sendable {
+    /// The Guest Agent applied the requested identifier.
+    case applied
+    /// The Android image does not know the requested identifier.
+    case notFound
+}
+
 /// A notification lifecycle event relayed from the Guest Agent (desktop-integration.md §5.3).
 public enum DevelopmentNotificationEvent: Equatable, Sendable {
     /// The Guest Agent reported a forwarded notification.
@@ -497,6 +505,60 @@ public actor DevelopmentGuestAgent {
         try requireAvailable()
         do {
             _ = try await supervisor.send(GuestFocusDisplay(displayID: displayID))
+        } catch {
+            throw .operation(error)
+        }
+    }
+
+    /// Applies the host's ordered language preferences to Android.
+    public func applyLocale(_ languageTags: [String]) async throws(GuestAgentFailure) {
+        try requireAvailable()
+        do {
+            _ = try await supervisor.send(GuestSetLocale(languageTags: languageTags))
+        } catch {
+            throw .operation(error)
+        }
+    }
+
+    /// Applies an Android-known IANA identifier, returning `notFound` for an unknown zone.
+    public func applyTimeZone(_ identifier: String) async throws(GuestAgentFailure) -> GuestAgentTimeZoneUpdate {
+        try requireAvailable()
+        do throws(GuestProtocolFailure) {
+            _ = try await supervisor.send(GuestSetTimeZone(identifier: identifier))
+            return .applied
+        } catch {
+            if case .remote(code: .notFound, message: _, operation: _) = error {
+                return .notFound
+            }
+            throw .operation(error)
+        }
+    }
+
+    /// Applies Android's 12/24-hour clock preference.
+    public func applyClockFormat(isTwentyFourHour: Bool) async throws(GuestAgentFailure) {
+        try requireAvailable()
+        do {
+            _ = try await supervisor.send(
+                GuestSetClockFormat(format: isTwentyFourHour ? .twentyFour : .twelve)
+            )
+        } catch {
+            throw .operation(error)
+        }
+    }
+
+    /// Applies the Mac wall clock with the last measured successful ping round-trip time.
+    public func synchronizeWallClock(
+        unixTimeMilliseconds: Int64,
+        roundTripMilliseconds: UInt32
+    ) async throws(GuestAgentFailure) {
+        try requireAvailable()
+        do {
+            _ = try await supervisor.send(
+                GuestSyncTime(
+                    unixTimeMilliseconds: unixTimeMilliseconds,
+                    roundTripMilliseconds: roundTripMilliseconds
+                )
+            )
         } catch {
             throw .operation(error)
         }

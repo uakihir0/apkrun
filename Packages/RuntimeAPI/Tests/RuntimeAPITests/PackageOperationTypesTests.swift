@@ -202,6 +202,7 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     #expect(try roundTrip(RuntimeImportPackageControlReply(error: failure)).error == failure)
     #expect(try roundTrip(RuntimeInstallImportedControlReply(error: failure)).error == failure)
     #expect(importRequest.header.apiVersion == .current)
+    #expect(importRequest.header.apiVersion == .current)
 }
 
 private struct TestRuntimeService: RuntimeService {

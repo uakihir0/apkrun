@@ -22,12 +22,16 @@ import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
 import io.apkrun.guest.protocol.v1.ResolveExport
 import io.apkrun.guest.protocol.v1.ResolveUrl
+import io.apkrun.guest.protocol.v1.SetClockFormat
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
+import io.apkrun.guest.protocol.v1.SetLocale
 import io.apkrun.guest.protocol.v1.SetNotificationForwarding
 import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
+import io.apkrun.guest.protocol.v1.SetTimeZone
 import io.apkrun.guest.protocol.v1.SetUrlRedirect
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
+import io.apkrun.guest.protocol.v1.SyncTime
 import io.apkrun.guest.protocol.v1.SystemState
 import io.apkrun.guest.runtime.HiddenApi
 import io.apkrun.guest.runtime.SystemContext
@@ -47,6 +51,7 @@ internal class DeviceOperations(
     private val notifications: NotificationBridge,
     private val urlRedirect: UrlRedirect,
     private val files: FilesBridge,
+    private val localeTime: LocaleTimeService = LocaleTimeService(),
 ) : AgentOperations {
     override fun snapshot(): Snapshot =
         Snapshot.newBuilder()
@@ -82,6 +87,14 @@ internal class DeviceOperations(
     override fun queryPackage(request: QueryPackage): PackageInfo = packages.query(request)
 
     override fun listPackages(request: ListPackages): PackageList = packages.list(request)
+
+    override fun setLocale(request: SetLocale) = localeTime.setLocale(request)
+
+    override fun setTimeZone(request: SetTimeZone) = localeTime.setTimeZone(request)
+
+    override fun setClockFormat(request: SetClockFormat) = localeTime.setClockFormat(request)
+
+    override fun syncTime(request: SyncTime) = localeTime.syncTime(request)
 
     override fun setClipboard(request: ClipData) = clipboard.setClipboard(request)
 

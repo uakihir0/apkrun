@@ -33,6 +33,7 @@ import Testing
                 "internal", "devLinuxTimedOut",
                 "devLinuxInvalidOptions", "devLinuxArtifactDirectoryMustBeAbsolute",
                 "devLinuxCheckFailed", "devLinuxDidNotFinish",
+                "operationNotFound", "timeSyncFailed",
                 "adbExecutableMissing", "adbLaunchFailed", "adbConnectionUnavailable",
                 "adbCommandFailed", "adbCommandTimedOut", "adbInvalidArgument", "adbUnexpectedOutput",
                 "adbPackageRejected",
@@ -73,9 +74,9 @@ import Testing
             ].map { "wrapper.\($0)" }
             + [
                 "disabled", "notSupportedOnImage", "guestUnavailable", "clipboardTooLarge",
-                "fileTooLarge", "tooManyFiles", "transferFailed", "readOnly",
-                "folderRefused", "folderUnavailable", "pathRejected",
-                "linkRejected", "promptTimedOut", "notificationAccessMissing",
+                "fileTooLarge", "folderRefused", "folderUnavailable", "linkRejected",
+                "notificationAccessMissing", "pathRejected", "promptTimedOut",
+                "readOnly", "tooManyFiles", "transferFailed",
             ].map { "integration.\($0)" }
             + [
                 "unsupportedContainer", "unreadableArchive", "archiveLimitExceeded", "notAnAPK",

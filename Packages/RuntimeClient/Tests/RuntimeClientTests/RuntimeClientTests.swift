@@ -73,6 +73,73 @@ import Testing
     }
 }
 
+@Test func controlClientReadsAndUpdatesGlobalConfiguration() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .app,
+        claimedIdentity: "io.apkrun.APKRun",
+        buildIdentity: .development
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let before = ConfigurationSnapshot(entries: [
+        ConfigurationEntry(
+            key: "system.syncLocale",
+            value: .bool(true),
+            defaultValue: .bool(true),
+            isSet: false,
+            applies: .live
+        )
+    ])
+    let after = ConfigurationSnapshot(entries: [
+        ConfigurationEntry(
+            key: "system.syncLocale",
+            value: .bool(false),
+            defaultValue: .bool(true),
+            isSet: true,
+            applies: .live
+        )
+    ])
+    let transport = try MockRuntimeTransport(
+        hello: hello,
+        status: nil,
+        configurationReply: RuntimeConfigurationControlReply(result: before),
+        updateConfigurationReply: RuntimeUpdateConfigurationControlReply(result: after)
+    )
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+    let patch = ConfigurationPatch(
+        patch: .object([
+            "system": .object([
+                "syncLocale": .bool(false),
+                "syncTimeZone": .null,
+            ])
+        ])
+    )
+
+    #expect(try await client.configuration() == before)
+    #expect(try await client.updateConfiguration(patch) == after)
+
+    let snapshot = transport.snapshot()
+    #expect(snapshot.configurationRequests.count == 1)
+    #expect(snapshot.updateConfigurationRequests.count == 1)
+    let readRequest = try JSONDecoder().decode(
+        RuntimeConfigurationControlRequest.self,
+        from: snapshot.configurationRequests[0]
+    )
+    #expect(readRequest.header.apiVersion == .current)
+    #expect(readRequest.header.clientKind == .app)
+    let updateRequest = try JSONDecoder().decode(
+        RuntimeUpdateConfigurationControlRequest.self,
+        from: snapshot.updateConfigurationRequests[0]
+    )
+    #expect(updateRequest.header.apiVersion == .current)
+    #expect(updateRequest.header.clientKind == .app)
+    #expect(updateRequest.patch == patch)
+}
+
 @Test func controlClientSubscribesToOperationEventsAndDeliversEnvelopes() async throws {
     let configuration = try RuntimeControlClientConfiguration(
         clientKind: .cli,
@@ -1347,6 +1414,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private let endpointBusyData: Data
     private let endpoint: RuntimeXPCListenerEndpoint?
     private let statusData: Data
+    private let configurationData: Data
+    private let updateConfigurationData: Data
     private let packageListData: Data
     private let packageInfoData: Data
     private let importPackageData: Data
@@ -1365,6 +1434,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var helloRequestsValue: [Data] = []
     private var endpointRequestsValue: [Data] = []
     private var statusRequestsValue: [Data] = []
+    private var configurationRequestsValue: [Data] = []
+    private var updateConfigurationRequestsValue: [Data] = []
     private var startRequestsValue: [Data] = []
     private var stopRequestsValue: [Data] = []
     private var restartRequestsValue: [Data] = []
@@ -1419,7 +1490,9 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         cancelOperationReply: RuntimeCancelOperationControlReply? = nil,
         beginInstallImportedReplyData: Data? = nil,
         launchReply: RuntimeLaunchControlReply? = nil,
-        terminateReply: RuntimeTerminateControlReply? = nil
+        terminateReply: RuntimeTerminateControlReply? = nil,
+        configurationReply: RuntimeConfigurationControlReply? = nil,
+        updateConfigurationReply: RuntimeUpdateConfigurationControlReply? = nil
     ) throws {
         if let helloFailure {
             helloData = try JSONEncoder().encode(BrokerErrorEnvelope(error: helloFailure))
@@ -1442,6 +1515,21 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 RuntimeControlReply(error: RuntimeControlError(code: "runtime.test", message: "test failure"))
             )
         }
+        let defaultConfiguration = ConfigurationSnapshot(entries: [
+            ConfigurationEntry(
+                key: "system.syncLocale",
+                value: .bool(true),
+                defaultValue: .bool(true),
+                isSet: false,
+                applies: .live
+            )
+        ])
+        configurationData = try JSONEncoder().encode(
+            configurationReply ?? RuntimeConfigurationControlReply(result: defaultConfiguration)
+        )
+        updateConfigurationData = try JSONEncoder().encode(
+            updateConfigurationReply ?? RuntimeUpdateConfigurationControlReply(result: defaultConfiguration)
+        )
         let packageID = RuntimePackageID(rawValue: "com.example.app")!
         let defaultSummary = RuntimePackageSummary(
             packageID: packageID,
@@ -1573,6 +1661,16 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
             throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
         }
         return statusData
+    }
+
+    func configuration(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { configurationRequestsValue.append(request) }
+        return configurationData
+    }
+
+    func updateConfiguration(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { updateConfigurationRequestsValue.append(request) }
+        return updateConfigurationData
     }
 
     func startRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data {
@@ -2126,6 +2224,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 helloRequests: helloRequestsValue,
                 endpointRequests: endpointRequestsValue,
                 statusRequests: statusRequestsValue,
+                configurationRequests: configurationRequestsValue,
+                updateConfigurationRequests: updateConfigurationRequestsValue,
                 startRequests: startRequestsValue,
                 stopRequests: stopRequestsValue,
                 restartRequests: restartRequestsValue,
@@ -2209,6 +2309,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let helloRequests: [Data]
         let endpointRequests: [Data]
         let statusRequests: [Data]
+        let configurationRequests: [Data]
+        let updateConfigurationRequests: [Data]
         let startRequests: [Data]
         let stopRequests: [Data]
         let restartRequests: [Data]

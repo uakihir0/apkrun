@@ -18,12 +18,16 @@ import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
 import io.apkrun.guest.protocol.v1.ResolveExport
 import io.apkrun.guest.protocol.v1.ResolveUrl
+import io.apkrun.guest.protocol.v1.SetClockFormat
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
+import io.apkrun.guest.protocol.v1.SetLocale
 import io.apkrun.guest.protocol.v1.SetNotificationForwarding
 import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
+import io.apkrun.guest.protocol.v1.SetTimeZone
 import io.apkrun.guest.protocol.v1.SetUrlRedirect
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
+import io.apkrun.guest.protocol.v1.SyncTime
 
 /**
  * The operations of the development agent that the [Dispatcher] calls (guest-protocol.md §7.1). The
@@ -54,6 +58,18 @@ interface AgentOperations {
 
     /** Lists packages from Android's PackageManager (packages.v1). */
     fun listPackages(request: ListPackages): PackageList
+
+    /** Applies the host's language preferences (locale.v1). */
+    fun setLocale(request: SetLocale)
+
+    /** Applies the host's IANA time zone (locale.v1). */
+    fun setTimeZone(request: SetTimeZone)
+
+    /** Applies the host's 12/24-hour clock preference (locale.v1). */
+    fun setClockFormat(request: SetClockFormat)
+
+    /** Synchronizes the wall clock when the agent has the privileged time-setting permission. */
+    fun syncTime(request: SyncTime)
 
     /** Applies a host clip to the Android clipboard (clipboard.*, desktop-integration.md §4.2). */
     fun setClipboard(request: ClipData)

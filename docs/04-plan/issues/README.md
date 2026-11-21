@@ -170,7 +170,7 @@ The tasks in working order ([../roadmap.md](../roadmap.md) §1.3). A task can st
 | #81 | Image and HTML clipboard | M9 | #54 |  |
 | #82 | Links | M9 | #35, #36, #48 |  |
 | #83 | Files | M9 | #35, #36 |  |
-| #86 | Locale, time zone, clock format, and time | M9 | #35, #36, #70 |  |
+| #86 | Locale, time zone, clock format, and time | M9 | #35, #36, #70, #77 |  |
 | #87 | Menu bar | M9 | #33 |  |
 | #58 | APKRun runtime updater | M10 | #32, #50 |  |
 | #59 | Guest image versioning and migration | M10 | #36, #58 |  |

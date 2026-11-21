@@ -50,6 +50,8 @@ targets:
       - path: Apps/APKRun
         excludes:
           - Tests
+      - path: Apps/APKRun/Resources/Localizable.xcstrings
+        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: APKRun
@@ -154,6 +156,29 @@ targets:
     scheme:
       testTargets:
         - APKRunTests
+        - APKRunSettingsTests
+
+  APKRunSettingsTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Apps/APKRun/Settings/LocaleTimeSettingsStore.swift
+      - path: Apps/APKRun/Tests
+    dependencies:
+      - target: BuildStamp
+        embed: false
+        link: false
+      - package: APKRun
+        product: RuntimeClient
+      - package: APKRun
+        product: RuntimeAPI
+    settings:
+      base:
+        PRODUCT_NAME: APKRunSettingsTests
+        PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.settings-tests
+        ENABLE_HARDENED_RUNTIME: NO
+        GENERATE_INFOPLIST_FILE: YES
+    scheme: {}
 
   APKRunTests:
     type: bundle.unit-test

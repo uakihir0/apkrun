@@ -464,6 +464,16 @@ public actor WrapperRegistry {
         try save()
     }
 
+    /// Updates the recorded `CFBundleDisplayName` after the package's label
+    /// changes (e.g. a locale sync), so the next validation flags the wrapper
+    /// for refresh (wrapper.md §8.4).
+    public func setDisplayName(bundleID: String, displayName: String) throws {
+        guard var entry = entry(bundleID: bundleID) else { return }
+        entry.displayName = displayName
+        upsert(entry)
+        try save()
+    }
+
     /// Records the SHA-256 hex digest of the 1024 px icon master written at
     /// generation; `nil` clears it (custom icons carry no digest — §8.5).
     public func setIconDigest(bundleID: String, digest: String?) throws {

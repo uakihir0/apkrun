@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// The Settings window's content (host-ui.md §9), in §9's tab order. The
-/// Language & Region pane lands with its own task.
+/// The Settings window's content (host-ui.md §9), in §9's tab order.
 struct SettingsContentView: View {
     @State private var model = SettingsModel.shared
 
@@ -17,6 +16,8 @@ struct SettingsContentView: View {
                 .tabItem { Label("Privacy", systemImage: "hand.raised") }
             FilesPane()
                 .tabItem { Label("Files", systemImage: "folder") }
+            LanguageRegionSettingsView()
+                .tabItem { Label("Language & Region", systemImage: "globe") }
             StoragePane()
                 .tabItem { Label("Storage", systemImage: "internaldrive") }
             TroubleshootingPane()

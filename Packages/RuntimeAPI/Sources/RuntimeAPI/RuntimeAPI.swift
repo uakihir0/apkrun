@@ -28,7 +28,10 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.27 adds the notification relays and host notifications
     /// (runtime-api.md §11.3); 1.28 adds `linkPrompt` and
     /// `resolveLinkPrompt` (runtime-api.md §11.2).
-    public static let current = APIVersion(major: 1, minor: 29)
+    /// 1.29 adds the shared-folder and file operations of §11; 1.30 adds
+    /// `SettingApplies` on `updateGlobalConfiguration` (desktop-integration.md
+    /// §9).
+    public static let current = APIVersion(major: 1, minor: 30)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -708,6 +711,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func restartRuntime(_ request: Data, reply: @escaping (Data) -> Void)
     /// Clears a runtime failure and boot-loop guard without deleting Android data.
     func resetRuntime(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns the effective global configuration.
+    func configuration(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Validates and applies a global configuration merge patch.
+    func updateConfiguration(_ request: Data, reply: @escaping (Data) -> Void)
     /// Starts or resumes first-run provisioning and returns its operation handle.
     func setup(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
     /// Resets Android data: backup, delete, re-provision, reinstall managed packages.

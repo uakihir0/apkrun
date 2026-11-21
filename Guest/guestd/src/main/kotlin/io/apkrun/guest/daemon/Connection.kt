@@ -288,6 +288,7 @@ class Connection(
                 GuestCapability.INPUT,
                 GuestCapability.INPUT_ACK_TRACE,
                 GuestCapability.PACKAGES,
+                GuestCapability.LOCALE,
                 GuestCapability.DIAGNOSTICS,
                 GuestCapability.CLIPBOARD_TEXT,
                 GuestCapability.CLIPBOARD_IMAGE,

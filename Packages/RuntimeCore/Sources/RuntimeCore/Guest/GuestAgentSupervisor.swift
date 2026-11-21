@@ -156,6 +156,8 @@ public actor GuestAgentSupervisor {
 
     /// The current state.
     public private(set) var state: State = .stopped
+    /// The most recent successful Guest Agent ping round-trip time in milliseconds.
+    public private(set) var lastPingRoundTripMilliseconds: UInt32 = 0
     /// The session of the current connection, or nil while there is none.
     public private(set) var session: GuestSessionInfo?
     /// The most recently accepted or refused protocol version, while one is known.
@@ -248,6 +250,7 @@ public actor GuestAgentSupervisor {
             return
         }
         hasConnected = false
+        lastPingRoundTripMilliseconds = 0
         updateState(.connecting)
         protocolVersion = nil
         let started = generation
@@ -311,6 +314,7 @@ public actor GuestAgentSupervisor {
         consumer = nil
         let closing = connection
         connection = nil
+        lastPingRoundTripMilliseconds = 0
         session = nil
         protocolVersion = nil
         awaitingSnapshot = false
@@ -343,17 +347,19 @@ public actor GuestAgentSupervisor {
     }
 
     /// Registers a host-state reconciler that runs after each complete snapshot and before the connection becomes
-    /// ready. When already ready, the current snapshot is delivered once before this method returns.
+    /// ready. When ``deliveringCurrentSnapshot`` is true and the connection is already ready, the current snapshot is
+    /// delivered once before this method returns.
     ///
     /// Handlers should reconcile host-owned state only. Guest operations needed by a handler must be scheduled to run
     /// after it returns, because ordinary sends wait for this barrier to complete.
     @discardableResult
     public func addResynchronizationHandler(
+        deliveringCurrentSnapshot: Bool = true,
         _ handler: @escaping @Sendable (GuestSnapshotState) async -> Void
     ) async -> UUID {
         let id = UUID()
         resynchronizationHandlers[id] = handler
-        guard state == .ready, let current = connection, await current.isUsable,
+        guard deliveringCurrentSnapshot, state == .ready, let current = connection, await current.isUsable,
             state == .ready, connection === current
         else {
             return id
@@ -667,7 +673,9 @@ public actor GuestAgentSupervisor {
                 pingNonce += 1
                 do {
                     // The ping has no grace period, so a missed answer counts at the ping's own timeout.
+                    let pingStartedAt = ContinuousClock.now
                     _ = try await current.send(GuestPing(nonce: pingNonce), timeout: pingTimeout, grace: .zero)
+                    lastPingRoundTripMilliseconds = Self.milliseconds(ContinuousClock.now - pingStartedAt)
                     misses = 0
                     if state == .unresponsive {
                         updateState(.ready)
@@ -692,6 +700,15 @@ public actor GuestAgentSupervisor {
                 try? await Task.sleep(for: keepaliveInterval - elapsed)
             }
         }
+    }
+
+    private static func milliseconds(_ duration: Duration) -> UInt32 {
+        let components = duration.components
+        let value = max(
+            0,
+            components.seconds * 1_000 + components.attoseconds / 1_000_000_000_000_000
+        )
+        return UInt32(min(value, Int64(UInt32.max)))
     }
 
     /// Restarts the agent when the owner allows it, then reconnects with the backoff. A loss is handled once: a

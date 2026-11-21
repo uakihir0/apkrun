@@ -603,6 +603,8 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func launch(_ request: Data, reply: @escaping (Data) -> Void)
     /// Terminates an installed package session.
     func terminate(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Checks a wrapper bundle against the registry and the store.
+    func verifyWrapper(_ request: Data, reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.

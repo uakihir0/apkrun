@@ -26,6 +26,12 @@ protocol RuntimeService: Sendable {
     ) async throws -> (operation: OperationHandle, results: [UpdateCheckResult])
     func adoptPackage(_ request: RuntimeAdoptPackageRequest) async throws -> RuntimePackageSummary
     func refreshWrapper(packageID: RuntimePackageID) async throws -> OperationHandle
+    /// **Update Mac App** with the pending name/icon change (host-ui.md §7.1).
+    func refreshWrapper(
+        packageID: RuntimePackageID,
+        change: WrapperRefreshWire,
+        iconFile: FileHandle?
+    ) async throws -> OperationHandle
     /// Regenerates a missing or modified wrapper (§5.3 row 6).
     func createWrapper(packageID: RuntimePackageID) async throws -> OperationHandle
     func repairPackage(packageID: RuntimePackageID) async throws -> OperationHandle
@@ -105,6 +111,19 @@ extension RuntimeControlClient: RuntimeService {
             packageID: packageID,
             change: WrapperRefreshWire(),
             icon: nil,
+            operationID: OperationID()
+        )
+    }
+
+    func refreshWrapper(
+        packageID: RuntimePackageID,
+        change: WrapperRefreshWire,
+        iconFile: FileHandle?
+    ) async throws -> OperationHandle {
+        try await refreshWrapper(
+            packageID: packageID,
+            change: change,
+            icon: iconFile,
             operationID: OperationID()
         )
     }

@@ -260,12 +260,32 @@ final class PackageDetailModel {
         }
     }
 
-    /// **Update Mac App** = `refreshWrapper`; **Create Mac App** =
-    /// `createWrapper`; **Remove Mac App…** = `removeWrapper` (§7.6).
+    /// Pending §7.1 edits applied by the next **Update Mac App**.
+    var pendingDisplayName: String?
+    /// A picked custom icon file for the next **Update Mac App**.
+    var pendingIconFile: FileHandle?
+    /// **Android Icon** drops a custom icon on the next **Update Mac App**.
+    var pendingAndroidIcon = false
+    /// **Rename…** opens the name dialog (GeneralSection).
+    var showsRename = false
+    /// The dialog's edit buffer.
+    var renameText = ""
+
+    /// **Update Mac App** = `refreshWrapper` (§7.6), carrying the pending
+    /// §7.1 name/icon edit when one is staged.
     func refreshWrapper() {
+        let change = WrapperRefreshWire(
+            displayName: pendingDisplayName,
+            icon: pendingIconFile != nil,
+            androidIcon: pendingAndroidIcon)
+        let iconFile = pendingIconFile
         Task {
             do {
-                _ = try await service().refreshWrapper(packageID: packageID)
+                _ = try await service().refreshWrapper(
+                    packageID: packageID, change: change, iconFile: iconFile)
+                pendingDisplayName = nil
+                pendingIconFile = nil
+                pendingAndroidIcon = false
                 wrapper = try await service().listWrappers().first {
                     $0.summary.packageID == packageID
                 }

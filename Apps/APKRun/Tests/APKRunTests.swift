@@ -117,6 +117,20 @@ final class FakeRuntimeService: RuntimeService, @unchecked Sendable {
         return OperationHandle(operationID: OperationID(), kind: .wrapperRefresh)
     }
 
+    var refreshChange: WrapperRefreshWire?
+    var refreshIcon: FileHandle?
+    func refreshWrapper(
+        packageID: RuntimePackageID,
+        change: WrapperRefreshWire,
+        iconFile: FileHandle?
+    ) async throws -> OperationHandle {
+        record {
+            refreshChange = change
+            refreshIcon = iconFile
+        }
+        return try await refreshWrapper(packageID: packageID)
+    }
+
     func repairPackage(packageID: RuntimePackageID) async throws -> OperationHandle {
         count("repairPackage")
         return OperationHandle(operationID: OperationID(), kind: .repair)

@@ -14,17 +14,37 @@ struct GeneralSection: View {
                 HStack {
                     Text(model.wrapper?.summary.displayName ?? model.displayName)
                     if model.wrapper != nil {
-                        Button("Rename…") { model.section = .macApp }
+                        Button("Rename…") {
+                            model.renameText =
+                                model.wrapper?.summary.displayName ?? model.displayName
+                            model.showsRename = true
+                        }
                     }
                 }
             }
             LabeledContent("Icon") {
                 HStack {
-                    Button("Choose…") { iconImporter = true }
                     if model.wrapper != nil {
+                        Button("Android Icon") {
+                            model.pendingIconFile = nil
+                            model.pendingAndroidIcon = true
+                        }
+                    }
+                    Button("Choose…") { iconImporter = true }
+                    if model.wrapper != nil,
+                        model.pendingDisplayName != nil || model.pendingIconFile != nil
+                            || model.pendingAndroidIcon
+                    {
                         Button("Update Mac App") { model.section = .macApp }
                     }
                 }
+            }
+            if model.pendingDisplayName != nil || model.pendingIconFile != nil
+                || model.pendingAndroidIcon
+            {
+                Text("Applies when you choose Update Mac App.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             if let summary = model.details?.summary {
                 LabeledContent("Package", value: summary.packageID.rawValue)
@@ -43,10 +63,30 @@ struct GeneralSection: View {
         .fileImporter(
             isPresented: $iconImporter,
             allowedContentTypes: [.png, .jpeg, .icns]
-        ) { _ in
+        ) { result in
             // A custom icon only changes the Mac app when the user clicks
-            // **Update Mac App** (ADR-0009): send them to that section.
-            model.section = .macApp
+            // **Update Mac App** (ADR-0009).
+            if case .success(let url) = result {
+                model.pendingIconFile = try? FileHandle(forReadingFrom: url)
+                if model.pendingIconFile != nil {
+                    model.pendingAndroidIcon = false
+                }
+            }
+        }
+        .alert(
+            "Rename ‹\(model.displayName)›",
+            isPresented: $model.showsRename
+        ) {
+            TextField("Name", text: $model.renameText)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") {
+                let trimmed = model.renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    model.pendingDisplayName = trimmed
+                }
+            }
+        } message: {
+            Text("Applies when you choose Update Mac App.")
         }
     }
 

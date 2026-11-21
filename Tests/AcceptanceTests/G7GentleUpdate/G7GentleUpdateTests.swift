@@ -76,7 +76,8 @@ final class G7GentleUpdateTests: XCTestCase {
                 "update", "policy", Self.package, "--mode", "automatic",
                 "--provider", "local:\(inputs.updateRepo.path)",
             ])
-        XCTAssertEqual(try await installedVersion(inputs: inputs), 1)
+        let v1 = try await installedVersion(inputs: inputs)
+        XCTAssertEqual(v1, 1)
 
         // V1 running: a user-initiated `apkrun update` stages V2 and reports
         // that it waits for the app to quit (update-system.md §7.3).
@@ -90,9 +91,8 @@ final class G7GentleUpdateTests: XCTestCase {
         // window to catch an install racing the staging.
         let dwellDeadline = Date().addingTimeInterval(90)
         while Date() < dwellDeadline {
-            XCTAssertEqual(
-                try await installedVersion(inputs: inputs), 1,
-                "the update installed while the app was open")
+            let version = try await installedVersion(inputs: inputs)
+            XCTAssertEqual(version, 1, "the update installed while the app was open")
             try await Task.sleep(for: .seconds(5))
         }
 

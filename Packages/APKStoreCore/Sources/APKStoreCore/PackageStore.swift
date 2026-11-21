@@ -1,5 +1,6 @@
 import CryptoKit
 import Darwin
+import DiagnosticsCore
 import Foundation
 
 /// A preview produced from private copies of one APK or a split APK set.
@@ -126,6 +127,9 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case unreadablePackageRecord
     /// `authority == .apkrun` requires a configured update provider.
     case providerNotConfigured
+    /// The record's update authority installs nothing through APKRun
+    /// (`googlePlay`, `external`; update-system.md §2.1).
+    case authorityDoesNotAllowUpdates
     /// The package has an open runtime session; an update cannot start.
     case packageInUse(PackageID)
     /// The package has no staged update to install.
@@ -181,6 +185,17 @@ private final class GuestUninstallBoundaryState: @unchecked Sendable {
 /// isolated and lets RuntimeHost use `APKRunPaths` without making APKStoreCore depend on
 /// DiagnosticsCore.
 public actor PackageStore {
+    /// The Android package that owns update installation for APKRun-managed apps.
+    ///
+    /// The Store Agent on custom images signs as this package (package-store.md §6.3,
+    /// guest-components.md §8.1).
+    public static let updateOwnerPackage: PackageID = {
+        guard let package = PackageID(rawValue: "io.apkrun.store") else {
+            preconditionFailure("The Store Agent package name is a valid package ID.")
+        }
+        return package
+    }()
+
     /// Async host-side APK metadata reader, injected to keep package import testable.
     public typealias Inspector = @Sendable (URL) async throws -> APKFacts
 
@@ -1307,7 +1322,12 @@ public actor PackageStore {
         if let detail = unreadableRecords[packageID] {
             throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
         }
-        guard records[packageID] != nil else { throw PackageStoreFailure.packageNotFound }
+        guard let record = records[packageID] else { throw PackageStoreFailure.packageNotFound }
+        // A download racing an authority change stops here: `googlePlay` and `external`
+        // never install through APKRun (update-system.md §2.1).
+        if record.updateAuthority == .googlePlay || record.updateAuthority == .external {
+            throw PackageStoreFailure.authorityDoesNotAllowUpdates
+        }
 
         let directory = directories[packageID] ?? directoryName(for: packageID)
         let incoming = incomingDirectory(packageID: packageID, directory: directory, ticket: ticket)
@@ -1435,6 +1455,11 @@ public actor PackageStore {
         }
         guard let existing = records[packageID] else { throw PackageStoreFailure.packageNotFound }
         guard existing.state == .installed else { throw PackageStoreFailure.packageNotFound }
+        // Re-checked here, under the lock, so a staged set staged before an authority
+        // change to `googlePlay` or `external` can never reach Android (§2.1).
+        if existing.updateAuthority == .googlePlay || existing.updateAuthority == .external {
+            throw PackageStoreFailure.authorityDoesNotAllowUpdates
+        }
 
         let directory = directories[packageID] ?? directoryName(for: packageID)
         let packageDirectory = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
@@ -1498,7 +1523,9 @@ public actor PackageStore {
                         allowDowngrade: false,
                         mode: .update,
                         signerDigests: stagedSet.signerDigests,
-                        enableRollback: enableRollback && channel.capabilities.contains(.rollback)
+                        enableRollback: enableRollback && channel.capabilities.contains(.rollback),
+                        requestUpdateOwnership: existing.updateAuthority.claimsUpdateOwnership
+                            && channel.capabilities.contains(.updateOwnership)
                     ),
                     files: Self.artifactURLs(in: staged, set: stagedSet)
                 )
@@ -1560,8 +1587,40 @@ public actor PackageStore {
         try injectFault(kind: "update", step: "metadataWritten")
         try appendTerminal(transaction, op: "commit")
         records[packageID] = record
+        warnOnMissingUpdateOwner(record)
         try purgeTrash()
         return record
+    }
+
+    /// The managed packages whose Android update owner is not `io.apkrun.store`
+    /// even though their authority claims ownership (package-store.md §6.3).
+    ///
+    /// Health reports these as `store.ownership` warnings (`store.updateOwnerMissing`):
+    /// expected on stock images and when the image's enforcement flag is off.
+    public func updateOwnerMissingPackages() async throws -> [PackageID] {
+        try requireOpen()
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        return records.values
+            .filter { record in
+                record.state == .installed && record.updateAuthority.claimsUpdateOwnership
+                    && record.android.updateOwner != Self.updateOwnerPackage
+            }
+            .map(\.packageId)
+            .sorted { $0.rawValue < $1.rawValue }
+    }
+
+    /// Logs the `store.ownership` health warning for a record whose update owner
+    /// Android did not report as the Store Agent (package-store.md §6.3, §13).
+    private func warnOnMissingUpdateOwner(_ record: PackageRecord) {
+        guard record.updateAuthority.claimsUpdateOwnership,
+            record.android.updateOwner != Self.updateOwnerPackage
+        else { return }
+        APKLogger(category: StoreLogCategory.reconcile).warning(
+            "\(record.packageId.rawValue, .public) is not update-owned by io.apkrun.store",
+            errorCode: "store.updateOwnerMissing"
+        )
     }
 
     /// Sets the package's update policy — authority and/or provider — as
@@ -1643,6 +1702,89 @@ public actor PackageStore {
         try writeJSON(settings, to: url)
     }
 
+    /// Moves a package to a different update authority (package-store.md §6.3).
+    ///
+    /// Leaving an authority that claims ownership (`apkrun`, `manual`) for one that
+    /// does not (`googlePlay`, `external`) asks Android to relinquish update
+    /// ownership before the record write. When the runtime is not `ready` — or the
+    /// guest call cannot be made — the journaled `relinquishOwnership` transaction
+    /// stays pending as a post-boot task; an authority change never starts Android.
+    /// `FAILED_PRECONDITION` (APKRun is not the owner) is not an error.
+    public func setUpdateAuthority(
+        id packageID: PackageID,
+        authority: UpdateAuthority,
+        provider: UpdateProviderRef? = nil
+    ) async throws {
+        try requireWritable()
+        guard operationsInProgress.insert(packageID).inserted else {
+            throw PackageStoreFailure.operationInProgress
+        }
+        defer { operationsInProgress.remove(packageID) }
+
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        if let detail = unreadableRecords[packageID] {
+            throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
+        }
+        guard var record = records[packageID] else { throw PackageStoreFailure.packageNotFound }
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+
+        if record.updateAuthority.claimsUpdateOwnership, !authority.claimsUpdateOwnership {
+            // The transaction is journaled before the guest call so a crash between
+            // the relinquish and the record write leaves a pending post-boot task —
+            // the old authority has no owner until recovery replays the call (§5.5).
+            let transaction = Self.makeTransactionID(at: clock())
+            try append(
+                JournalEntry(
+                    v: 1,
+                    seq: 0,
+                    txn: transaction,
+                    at: clock(),
+                    op: "begin",
+                    kind: "relinquishOwnership",
+                    package: packageID.rawValue,
+                    dir: directory,
+                    from: nil,
+                    to: nil,
+                    setDigest: nil,
+                    ticket: nil,
+                    keepData: nil,
+                    step: nil,
+                    reason: nil
+                )
+            )
+            try appendStep(transaction, kind: "relinquishOwnership", step: "guestRelinquishRequested")
+            try injectFault(kind: "relinquishOwnership", step: "guestRelinquishRequested")
+            if let runtimeAccess {
+                do {
+                    try await runtimeAccess.withStoreAgent(UUID()) { channel in
+                        if channel.capabilities.contains(.updateOwnership) {
+                            try await channel.relinquishUpdateOwnership(packageID)
+                        }
+                    }
+                    try appendTerminal(transaction, op: "commit")
+                } catch StoreChannelFailure.updateOwnershipNotHeld(_) {
+                    try appendTerminal(transaction, op: "commit")
+                } catch {
+                    // Android could not answer: leave the transaction pending as the
+                    // post-boot task of §5.5; the record change still lands now.
+                }
+            }
+            // The new authority does not hold the owner either way — a pending post-boot
+            // task finishes the relinquish, so the record must not keep the stale owner.
+            record.android.updateOwner = nil
+        }
+
+        record.updateAuthority = authority
+        if let provider {
+            record.updateProvider = provider
+        }
+        record.updatedAt = clock()
+        try writeRecord(record, directory: directory)
+        records[packageID] = record
+    }
+
     /// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
     ///
     /// The record gets `installer: external`, `updateAuthority: external`, no artifact, and
@@ -1679,6 +1821,7 @@ public actor PackageStore {
             state: .installed,
             artifacts: ArtifactSlots(currentMatchesAndroid: false),
             android: AndroidPackageFacts(
+                updateOwner: info.updateOwner,
                 installerOfRecord: info.installerPackage,
                 firstInstallTime: info.firstInstallTime,
                 lastUpdateTime: info.lastUpdateTime,
@@ -1821,6 +1964,29 @@ public actor PackageStore {
                     directory: directory,
                     keepData: transaction.begin.keepData ?? false
                 )
+
+            case ("relinquishOwnership", _):
+                // Post-boot task (§5.5, §6.3): replay the relinquish only while the record
+                // still names a non-owning authority — a switch back to `apkrun` or `manual`
+                // while the runtime was down cancels the pending relinquish, and a missing
+                // record makes it moot. A failure re-queues the task for the next boot and
+                // FAILED_PRECONDITION commits it.
+                if let record = records[packageID], !record.updateAuthority.claimsUpdateOwnership {
+                    do {
+                        try await runtimeAccess.withStoreAgent(UUID()) { channel in
+                            if channel.capabilities.contains(.updateOwnership) {
+                                try await channel.relinquishUpdateOwnership(packageID)
+                            }
+                        }
+                        try appendTerminal(transactionID, op: "commit")
+                    } catch StoreChannelFailure.updateOwnershipNotHeld(_) {
+                        try appendTerminal(transactionID, op: "commit")
+                    } catch {
+                        continue
+                    }
+                } else {
+                    try appendTerminal(transactionID, op: "commit")
+                }
 
             case ("firstInstall", "metadataWritten"), ("reinstall", "metadataWritten"):
                 try appendTerminal(transactionID, op: "commit")
@@ -2141,7 +2307,12 @@ public actor PackageStore {
                         versionCode: preview.versionCode,
                         allowDowngrade: false,
                         mode: kind == "reinstall" ? .reinstall : .new,
-                        signerDigests: preview.artifactSet.signerDigests
+                        signerDigests: preview.artifactSet.signerDigests,
+                        // package-store.md §6.3: the authority the record will carry decides
+                        // whether the install asks Android for update ownership.
+                        requestUpdateOwnership: (previousRecord?.updateAuthority ?? .manual)
+                            .claimsUpdateOwnership
+                            && channel.capabilities.contains(.updateOwnership)
                     ),
                     files: Self.artifactURLs(in: incoming, set: preview.artifactSet)
                 )
@@ -2220,6 +2391,7 @@ public actor PackageStore {
         directories[packageID] = directory
         tickets[preview.ticket] = nil
         activeTickets.remove(preview.ticket)
+        warnOnMissingUpdateOwner(record)
         try injectFault(kind: kind, step: "commit")
         // Cleanup follows the durable commit and cannot change whether the install succeeded.
         var cleanupDeferred = false
@@ -2312,6 +2484,7 @@ public actor PackageStore {
                 try appendTerminal(transaction, op: "commit")
                 records[packageID] = recovered
                 directories[packageID] = directory
+                warnOnMissingUpdateOwner(recovered)
                 try? fileManager.removeItem(at: current.appendingPathComponent("ticket.json"))
             } else if kind == "firstInstall" {
                 try appendAbort(transaction, reason: "incomingArtifactsMissing")
@@ -2356,6 +2529,7 @@ public actor PackageStore {
         )
         records[packageID] = recovered
         directories[packageID] = directory
+        warnOnMissingUpdateOwner(recovered)
         tickets[ticketID] = nil
         try? fileManager.removeItem(at: current.appendingPathComponent("ticket.json"))
         try purgeTrash()
@@ -2444,6 +2618,7 @@ public actor PackageStore {
             fileCount: set.files.count
         )
         let android = AndroidPackageFacts(
+            updateOwner: info.updateOwner,
             installerOfRecord: info.installerPackage,
             firstInstallTime: info.firstInstallTime,
             lastUpdateTime: info.lastUpdateTime,
@@ -2508,6 +2683,7 @@ public actor PackageStore {
         record.state = .installed
         record.artifacts = ArtifactSlots(current: setSummary, currentMatchesAndroid: setSummary != nil)
         record.android = AndroidPackageFacts(
+            updateOwner: info.updateOwner,
             installerOfRecord: info.installerPackage,
             firstInstallTime: info.firstInstallTime,
             lastUpdateTime: info.lastUpdateTime,
@@ -3355,6 +3531,7 @@ public actor PackageStore {
         try appendStep(transaction, kind: "update", step: "metadataWritten")
         try appendTerminal(transaction, op: "commit")
         records[packageID] = record
+        warnOnMissingUpdateOwner(record)
         try purgeTrash()
     }
 
@@ -3490,6 +3667,7 @@ public actor PackageStore {
             currentMatchesAndroid: true
         )
         record.android = AndroidPackageFacts(
+            updateOwner: info.updateOwner,
             installerOfRecord: info.installerPackage,
             firstInstallTime: info.firstInstallTime,
             lastUpdateTime: info.lastUpdateTime,
@@ -4027,7 +4205,8 @@ public actor PackageStore {
             ("reinstall", "guestInstalled"), ("reinstall", "filesPromoted"),
             ("update", "guestCommitRequested"), ("update", "guestInstalled"),
             ("update", "filesPromoted"),
-            ("uninstall", "guestUninstallRequested"), ("uninstall", "guestUninstalled"):
+            ("uninstall", "guestUninstallRequested"), ("uninstall", "guestUninstalled"),
+            ("relinquishOwnership", _):
             return true
         default:
             return false

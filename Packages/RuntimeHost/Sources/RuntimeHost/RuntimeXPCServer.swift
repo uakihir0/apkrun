@@ -1151,6 +1151,7 @@ extension RuntimeCheckForUpdatesControlRequest: VersionedControlRequest {}
 extension RuntimeListUpdatesControlRequest: VersionedControlRequest {}
 extension RuntimeUpdateHistoryControlRequest: VersionedControlRequest {}
 extension RuntimeSetUpdatePolicyControlRequest: VersionedControlRequest {}
+extension RuntimeSetUpdateAuthorityControlRequest: VersionedControlRequest {}
 extension RuntimeUpdatePackageControlRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
@@ -1192,6 +1193,7 @@ enum RuntimeControlOperation {
     case listUpdates
     case updateHistory
     case setUpdatePolicy
+    case setUpdateAuthority
     case updatePackage
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
@@ -1283,7 +1285,8 @@ enum RuntimeControlOperation {
             case .launcher, .wrapper:
                 false
             }
-        case .checkForUpdates, .listUpdates, .updateHistory, .setUpdatePolicy, .updatePackage:
+        case .checkForUpdates, .listUpdates, .updateHistory, .setUpdatePolicy,
+            .setUpdateAuthority, .updatePackage:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -2990,6 +2993,52 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeSetUpdatePolicyControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func setUpdateAuthority(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeSetUpdateAuthorityControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .setUpdateAuthority,
+                as: RuntimeSetUpdateAuthorityControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeSetUpdateAuthorityControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeSetUpdateAuthorityControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeSetUpdateAuthorityControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let status = try await host.setUpdateAuthority(
+                    packageID: decoded.packageID, authority: decoded.authority)
+                response.send(Self.encode(RuntimeSetUpdateAuthorityControlReply(status: status)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeSetUpdateAuthorityControlReply(error: wireError)))
             }
         }
     }

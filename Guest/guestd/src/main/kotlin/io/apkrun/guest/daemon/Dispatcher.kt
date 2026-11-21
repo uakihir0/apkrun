@@ -1,6 +1,7 @@
 package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.GuestCapability
+import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.Empty
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.Pong

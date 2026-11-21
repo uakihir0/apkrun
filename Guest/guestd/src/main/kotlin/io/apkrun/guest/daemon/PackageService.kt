@@ -7,6 +7,7 @@ import android.content.pm.Signature
 import com.google.protobuf.ByteString
 import com.google.protobuf.CodedOutputStream
 import io.apkrun.guest.protocol.FrameCodec
+import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.ListPackages
 import io.apkrun.guest.protocol.v1.PackageFilter

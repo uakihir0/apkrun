@@ -2,6 +2,7 @@ package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.ControlSessions
 import io.apkrun.guest.protocol.HandshakeFailureReason
+import io.apkrun.guest.protocol.SessionManager
 import java.io.Closeable
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

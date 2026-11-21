@@ -43,7 +43,7 @@ public actor EmbeddedPackageService: RuntimeService {
     private let inspector: PackageStore.Inspector
     private let runtimeAccess: AttachedStoreRuntimeAccess
     /// Shared with `EmbeddedUpdateService` so a single store owns ticket cleanup.
-    let store: PackageStore
+    public let store: PackageStore
     private var sessionService: any RuntimeSessionService
     private let hostFreeSpace: @Sendable (URL) -> Int64
 
@@ -1099,6 +1099,12 @@ public actor EmbeddedPackageService: RuntimeService {
                     code: "update.providerNotConfigured",
                     message: "Automatic updates need a configured update provider.",
                     remediation: "Set a provider with `apkrun update policy <package> --provider <spec>`.")
+            case .authorityDoesNotAllowUpdates:
+                return RuntimeWireError(
+                    domain: "update",
+                    code: "update.authorityDoesNotAllowUpdates",
+                    message: "This package's update authority does not allow APKRun updates.",
+                    remediation: "Set the authority with `apkrun update authority <package> apkrun`.")
             case .importTicketNotFound, .importTicketExpired, .importTicketChanged:
                 return .store(
                     "importTicketExpired", message: "The APK preview is no longer valid.",

@@ -746,3 +746,34 @@ public struct RuntimeSetUpdatePolicyControlReply: Codable, Sendable {
         self.error = error
     }
 }
+
+/// A `setUpdateAuthority` control request.
+public struct RuntimeSetUpdateAuthorityControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The package to change.
+    public var packageID: RuntimePackageID
+    /// The new authority.
+    public var authority: AuthorityChoice
+
+    /// Creates a control request.
+    public init(header: APIRequestHeader, packageID: RuntimePackageID, authority: AuthorityChoice) {
+        self.header = header
+        self.packageID = packageID
+        self.authority = authority
+    }
+}
+
+/// The `setUpdateAuthority` reply: the package's update status after the write.
+public struct RuntimeSetUpdateAuthorityControlReply: Codable, Sendable {
+    /// The updated status on success.
+    public var status: PackageUpdateStatus?
+    /// The failure on error, for example `update.authorityDoesNotAllowUpdates`.
+    public var error: RuntimeWireError?
+
+    /// Creates a control reply.
+    public init(status: PackageUpdateStatus? = nil, error: RuntimeWireError? = nil) {
+        self.status = status
+        self.error = error
+    }
+}

@@ -16,6 +16,10 @@ public struct StorePackageInfo: Sendable, Equatable {
     public var launchableComponent: String?
     /// The package that installed this package, if reported.
     public var installerPackage: PackageID?
+    /// The package that owns update installation, if reported (API 34 `InstallSourceInfo`).
+    ///
+    /// Only channels with the `updateOwnership` capability can read it; others leave it `nil`.
+    public var updateOwner: PackageID?
     /// The time Android first installed this package, if reported.
     public var firstInstallTime: Date?
     /// The time Android last updated this package, if reported.
@@ -36,6 +40,7 @@ public struct StorePackageInfo: Sendable, Equatable {
         enabled: Bool,
         launchableComponent: String? = nil,
         installerPackage: PackageID? = nil,
+        updateOwner: PackageID? = nil,
         firstInstallTime: Date? = nil,
         lastUpdateTime: Date? = nil,
         targetSDK: Int,
@@ -49,6 +54,7 @@ public struct StorePackageInfo: Sendable, Equatable {
         self.enabled = enabled
         self.launchableComponent = launchableComponent
         self.installerPackage = installerPackage
+        self.updateOwner = updateOwner
         self.firstInstallTime = firstInstallTime
         self.lastUpdateTime = lastUpdateTime
         self.targetSDK = targetSDK
@@ -182,6 +188,14 @@ public struct StoreInstallRequest: Sendable, Equatable {
     }
 }
 
+/// Failures a store channel reports under its operation contract.
+public enum StoreChannelFailure: Error, Equatable, Sendable {
+    /// `PackageManager.relinquishUpdateOwnership` answered `FAILED_PRECONDITION`:
+    /// Android does not list APKRun as this package's update owner. Callers treat
+    /// it as a successful relinquish (package-store.md §6.3).
+    case updateOwnershipNotHeld(PackageID)
+}
+
 /// The Android package operations exposed to APKStoreCore.
 ///
 /// APKStoreCore owns the policy and persistent records. RuntimeHost supplies the channel
@@ -198,6 +212,17 @@ public protocol StoreAgentChannel: Sendable {
     func packageInfo(_ package: PackageID) async throws -> StorePackageInfo?
     /// Lists installed packages selected by `filter`.
     func listPackages(_ filter: StorePackageFilter) async throws -> [StorePackageSummary]
+    /// Asks Android to drop APKRun as the package's update owner (Store Agent op 109).
+    ///
+    /// Only channels advertising `updateOwnership` are asked. Throws
+    /// `StoreChannelFailure.updateOwnershipNotHeld` when Android reports
+    /// `FAILED_PRECONDITION`.
+    func relinquishUpdateOwnership(_ package: PackageID) async throws
+}
+
+extension StoreAgentChannel {
+    /// Channels that cannot grant update ownership have nothing to relinquish.
+    public func relinquishUpdateOwnership(_ package: PackageID) async throws {}
 }
 
 /// The runtime gate injected by RuntimeHost.

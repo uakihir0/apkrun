@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Store Agent, io.apkrun.store (guest-components.md §8.1). A persistent, privileged,
+     platform-signed app on the custom image; it never shows UI. The privileged permissions are
+     granted by the product's privapp-permissions-apkrun.xml (android-image.md §11.1). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.DELETE_PACKAGES" />
+    <uses-permission android:name="android.permission.ENFORCE_UPDATE_OWNERSHIP" />
+    <uses-permission android:name="android.permission.MANAGE_ROLLBACKS" />
+    <uses-permission android:name="android.permission.TEST_MANAGE_ROLLBACKS" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application
+        android:name=".StoreAgentApplication"
+        android:label="APKRun Store Agent"
+        android:hasCode="true"
+        android:persistent="true"
+        android:directBootAware="true" />
+</manifest>

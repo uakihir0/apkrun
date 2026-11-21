@@ -22,3 +22,5 @@ include(":protocol")
 include(":agentruntime")
 
 include(":guestd")
+
+include(":APKRunStore")

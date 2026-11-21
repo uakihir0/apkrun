@@ -1,5 +1,7 @@
 package io.apkrun.guest.daemon
 
+import io.apkrun.guest.protocol.FrameReader
+import io.apkrun.guest.protocol.FrameWriter
 import io.apkrun.guest.protocol.v1.ClipData as WireClipData
 import io.apkrun.guest.protocol.v1.ClipOrigin
 import io.apkrun.guest.protocol.v1.Event

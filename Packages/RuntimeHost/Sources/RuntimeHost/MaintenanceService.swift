@@ -27,6 +27,7 @@ actor MaintenanceService {
     private let backgroundTasksProvider: @Sendable () async -> [RuntimePackageID]
     private let activitiesProvider: @Sendable () async -> [ActivityKind]
     private let imageMigratingProvider: @Sendable () async -> Bool
+    private let endSessions: @Sendable () async -> Void
     private let idleAndExit: @Sendable () -> Void
 
     init(
@@ -38,6 +39,7 @@ actor MaintenanceService {
         backgroundTasksProvider: @escaping @Sendable () async -> [RuntimePackageID],
         activitiesProvider: @escaping @Sendable () async -> [ActivityKind],
         imageMigratingProvider: @escaping @Sendable () async -> Bool,
+        endSessions: @escaping @Sendable () async -> Void,
         idleAndExit: @escaping @Sendable () -> Void
     ) {
         markerURL = markerFile
@@ -51,8 +53,22 @@ actor MaintenanceService {
         self.backgroundTasksProvider = backgroundTasksProvider
         self.activitiesProvider = activitiesProvider
         self.imageMigratingProvider = imageMigratingProvider
+        self.endSessions = endSessions
         self.idleAndExit = idleAndExit
+        // A marker left on disk means a host update was in flight when the
+        // daemon last exited (§3.5). Resume `updating` so the gate keeps
+        // refusing work; a stale marker older than a day is dropped instead.
+        if let marker = Self.readMarker(at: markerURL) {
+            if Date().timeIntervalSince(marker.createdAt) < Self.markerMaxAge {
+                hostState = .updating(targetBuild: marker.targetBuild)
+            } else {
+                try? FileManager.default.removeItem(at: markerURL)
+            }
+        }
     }
+
+    /// A marker older than this is treated as abandoned and removed at startup.
+    private static let markerMaxAge: TimeInterval = 24 * 60 * 60
 
     /// The current host state.
     var state: HostState { hostState }
@@ -86,10 +102,16 @@ actor MaintenanceService {
                 "selfUpdateNotNewer",
                 message: "The update is not newer than the running build.")
         }
-        if !request.closeSessions, await !sessionsProvider().isEmpty {
-            throw .maintenance(
-                "hostUpdateSessionsOpen",
-                message: "Android apps are still open; close them or allow APKRun to close them.")
+        if await !sessionsProvider().isEmpty {
+            if !request.closeSessions {
+                throw .maintenance(
+                    "hostUpdateSessionsOpen",
+                    message: "Android apps are still open; close them or allow APKRun to close them.")
+            }
+            // `closeSessions` ends every open session before the marker goes
+            // on disk; without it Sparkle would replace the runtime bundle
+            // while Android still runs (§3.5 step 3).
+            await endSessions()
         }
         let marker = HostUpdateMarker(
             fromVersion: version,
@@ -120,7 +142,10 @@ actor MaintenanceService {
     }
 
     /// Finishes a coordinated update once the new build confirms it (§3.6).
+    /// A call with no marker on disk is not the new build confirming: it
+    /// must not cancel `restartPending`.
     func completeHostUpdate() {
+        guard readMarker() != nil else { return }
         removeMarker()
         guard hostState != .normal else { return }
         hostState = .normal
@@ -132,10 +157,13 @@ actor MaintenanceService {
         guard case .restartPending = hostState else {
             throw .maintenance("hostUpdateNotPending", message: "No host restart is pending.")
         }
-        if !request.closeSessions, await !sessionsProvider().isEmpty {
-            throw .maintenance(
-                "hostUpdateSessionsOpen",
-                message: "Android apps are still open; close them or allow APKRun to close them.")
+        if await !sessionsProvider().isEmpty {
+            if !request.closeSessions {
+                throw .maintenance(
+                    "hostUpdateSessionsOpen",
+                    message: "Android apps are still open; close them or allow APKRun to close them.")
+            }
+            await endSessions()
         }
         idleAndExit()
     }
@@ -150,7 +178,11 @@ actor MaintenanceService {
     // MARK: - Marker file
 
     private func readMarker() -> HostUpdateMarker? {
-        guard let data = try? Data(contentsOf: markerURL) else { return nil }
+        Self.readMarker(at: markerURL)
+    }
+
+    private static func readMarker(at url: URL) -> HostUpdateMarker? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(HostUpdateMarker.self, from: data)
     }
 

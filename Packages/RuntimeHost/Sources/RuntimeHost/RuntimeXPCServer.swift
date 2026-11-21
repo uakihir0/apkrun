@@ -969,11 +969,16 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
 
     /// Grants the frozen maintenance endpoint (runtime-api.md §12.1): the
     /// same code-signing requirement as control, but no version negotiation
-    /// and available in every host state.
+    /// and available in every host state. Only `.app` and `.cli` clients may
+    /// drive an update; launchers, wrappers, and the menu bar are refused.
     private func requestMaintenanceEndpoint(
         _ endpointRequest: RuntimeEndpointRequest,
         reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void
     ) {
+        guard endpointRequest.clientKind == .app || endpointRequest.clientKind == .cli else {
+            reply(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+            return
+        }
         guard
             let identifier = Self.expectedIdentifier(
                 for: endpointRequest.clientKind,

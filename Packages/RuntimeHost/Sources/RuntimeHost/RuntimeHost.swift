@@ -518,9 +518,15 @@ public actor RuntimeHost {
 
     /// Boots Android on demand. An explicit start is allowed after the crash-loop guard activates.
     public func startRuntime(reason: StartReason = .user) async throws(RuntimeHostError) {
-        // §3.7: restarting to finish an update refuses Android-starting ops.
-        if case .restartPending = maintenanceHostState {
+        // §3.7: a host update in flight or a restart to finish one refuses
+        // Android-starting ops (maintenance gate §3.7 for `updating`).
+        switch maintenanceHostState {
+        case .restartPending:
             throw .hostUpdating("APKRun is restarting to finish an update.")
+        case .updating:
+            throw .hostUpdating("APKRun is updating itself.")
+        case .normal, .unknown:
+            break
         }
         guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
             throw .invalidTransition
@@ -2241,6 +2247,7 @@ public actor RuntimeHost {
         operationID requestedID: WireOperationID,
         clientKind: RuntimeClientKind
     ) throws(RuntimeWireError) -> OperationHandle {
+        try assertMaintenanceGateAllowsWork()
         guard request.importTicket == nil || request.portable else {
             throw .runtime(
                 "malformedRequest",

@@ -71,6 +71,12 @@ extension RuntimeHost {
             imageMigratingProvider: { [weak self] in
                 await self?.imageMigrating ?? false
             },
+            endSessions: { [weak self] in
+                guard let service = await self?.sessionServiceForIntegrations() else { return }
+                for packageID in await service.maintenanceSessionPackageIDs() {
+                    await service.endSessionForUpdate(packageID: packageID)
+                }
+            },
             idleAndExit: { [weak self] in
                 Task { await self?.requestRestartExit() }
             }
@@ -95,11 +101,15 @@ extension RuntimeHost {
     /// The appcast feed URL: `SUFeedURL` of the containing bundle, or the
     /// test override for development builds without a bundle.
     private var selfUpdateFeedURL: URL? {
-        if let override = ProcessInfo.processInfo.environment["APKRUN_TEST_SELF_UPDATE_FEED_URL"],
-            let url = URL(string: override)
-        {
-            return url
-        }
+        // Test overrides exist in development builds only; a Release build
+        // must always read the feed URL and trust key from the bundle (§3.4).
+        #if DEBUG
+            if let override = ProcessInfo.processInfo.environment["APKRUN_TEST_SELF_UPDATE_FEED_URL"],
+                let url = URL(string: override)
+            {
+                return url
+            }
+        #endif
         guard let bundle = Self.apkRunAppBundleURL(),
             let raw = Bundle(url: bundle)?.object(forInfoDictionaryKey: "SUFeedURL") as? String
         else { return nil }
@@ -112,13 +122,15 @@ extension RuntimeHost {
         guard let bundle = Self.apkRunAppBundleURL() else { return [:] }
         let info = Bundle(url: bundle)?.infoDictionary ?? [:]
         var out: [String: Any] = [:]
-        if let flag = ProcessInfo.processInfo.environment["APKRUN_TEST_SELF_UPDATE_PUBLIC_KEY"] {
-            out["SUPublicEDKey"] = flag
-            out["SURequireSignedFeed"] = true
-        } else {
-            out["SURequireSignedFeed"] = info["SURequireSignedFeed"]
-            out["SUPublicEDKey"] = info["SUPublicEDKey"]
-        }
+        #if DEBUG
+            if let flag = ProcessInfo.processInfo.environment["APKRUN_TEST_SELF_UPDATE_PUBLIC_KEY"] {
+                out["SUPublicEDKey"] = flag
+                out["SURequireSignedFeed"] = true
+                return out
+            }
+        #endif
+        out["SURequireSignedFeed"] = info["SURequireSignedFeed"]
+        out["SUPublicEDKey"] = info["SUPublicEDKey"]
         return out
     }
 

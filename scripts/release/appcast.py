@@ -66,9 +66,9 @@ def main() -> int:
         root = tree.getroot()
         channel_el = root.find("channel")
     else:
+        # Namespaces are registered above so ElementTree emits them on the
+        # root at write time; setting them by hand duplicates the decls.
         root = ET.Element("rss", version="2.0")
-        root.set("xmlns:sparkle", SPARKLE_NS)
-        root.set("xmlns:dc", DC_NS)
         channel_el = ET.SubElement(root, "channel")
         ET.SubElement(channel_el, "title").text = "APKRun updates"
         ET.SubElement(channel_el, "link").text = args.feed_base_url

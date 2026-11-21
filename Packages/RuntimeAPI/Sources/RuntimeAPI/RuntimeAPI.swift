@@ -14,8 +14,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.15 adds the gentle-update session rules and `update` package changes;
     /// 1.16 adds update ownership and rollback surfaces;
     /// 1.17 adds the `iconChanged` package change (package-store.md §10.2);
-    /// 1.18 adds `placeStagedWrapper` for TCC-protected destinations (wrapper.md §6.3).
-    public static let current = APIVersion(major: 1, minor: 18)
+    /// 1.18 adds `placeStagedWrapper` for TCC-protected destinations (wrapper.md §6.3);
+    /// 1.19 adds `wrapperInfo` (runtime-api.md §10.2).
+    public static let current = APIVersion(major: 1, minor: 19)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -708,6 +709,8 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
 
     /// Completes a staged wrapper placement (wrapper.md §6.3).
     func placeStagedWrapper(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns the registry row of one package's wrapper (runtime-api.md §10.2).
+    func wrapperInfo(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the approval prompts waiting for APKRun.app.
     func pendingApprovals(_ request: Data, reply: @escaping (Data) -> Void)
     /// Answers an approval prompt (APKRun.app only).

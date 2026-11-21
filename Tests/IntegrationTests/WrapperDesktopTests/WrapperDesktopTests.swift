@@ -274,4 +274,32 @@ final class WrapperDesktopTests: XCTestCase {
                 "/usr/bin/codesign",
                 ["--verify", "--deep", "--strict", "--all-architectures", app.path]))
     }
+
+    // MARK: - #76: wrapper verify / wrapper info (wrapper.md §12.2)
+
+    /// `wrapper info` and `wrapper verify --deep` report the wrapped app.
+    func testWrapperInfoAndVerify() throws {
+        let cli = try XCTUnwrap(cli())
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("apkrun-wrap-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        _ = try run(
+            cli.path,
+            [
+                "wrap", "io.apkrun.fixture.hellotext", "--output", dir.path,
+                "--replace",
+            ],
+            timeout: 600)
+        let app = dir.appendingPathComponent(Self.appName)
+
+        let info = try run(cli.path, ["wrapper", "info", "io.apkrun.fixture.hellotext"])
+        XCTAssertTrue(
+            info.contains(app.path), "wrapper info misses the bundle path:\n\(info)")
+        XCTAssertTrue(info.contains("io.apkrun.fixture.hellotext"))
+
+        let verify = try run(cli.path, ["wrapper", "verify", app.path, "--deep"])
+        XCTAssertTrue(verify.contains("Valid"), "verify reported problems:\n\(verify)")
+    }
 }

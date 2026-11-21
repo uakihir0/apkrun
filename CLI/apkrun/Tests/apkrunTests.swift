@@ -1259,3 +1259,109 @@ private let releaseBuildInfo = BuildInfo(
         "APKRunEmbeddedRuntime": false,
     ]
 )
+
+// MARK: - wrap import/install table (wrapper.md §12.2)
+
+#if !APKRUN_EMBEDDED_RUNTIME
+    @Test func wrapFilePlanCoversTheImportTable() throws {
+        // §12.2 rows: installable relations ask or honor --install; the
+        // installed package is wrapped without reinstalling the file.
+        #expect(
+            WrapCommandSupport.filePlan(relation: .newPackage, install: false) == .confirmInstall)
+        #expect(
+            WrapCommandSupport.filePlan(relation: .newPackage, install: true) == .installAndWrap)
+        #expect(
+            WrapCommandSupport.filePlan(relation: .unknown, install: false) == .confirmInstall)
+        #expect(
+            WrapCommandSupport.filePlan(relation: .sameAsInstalled, install: false)
+                == .wrapInstalled(.sameVersion))
+        #expect(
+            WrapCommandSupport.filePlan(relation: .sameAsInstalled, install: true)
+                == .wrapInstalled(.sameVersion))
+        #expect(
+            WrapCommandSupport.filePlan(relation: .update(from: 1), install: false)
+                == .wrapInstalled(.newerFile))
+        #expect(
+            WrapCommandSupport.filePlan(relation: .update(from: 1), install: true)
+                == .installAndWrap)
+        #expect(
+            WrapCommandSupport.filePlan(relation: .downgrade(from: 2), install: false)
+                == .wrapInstalled(.olderFile))
+        #expect(
+            WrapCommandSupport.filePlan(relation: .downgrade(from: 2), install: true)
+                == .installAndWrap)
+        #expect(
+            WrapCommandSupport.filePlan(relation: .otherSigner, install: false)
+                == .wrapInstalled(.otherSigner))
+        #expect(
+            WrapCommandSupport.filePlan(relation: .otherSigner, install: true)
+                == .installAndWrap)
+    }
+
+    @Test func wrapParsesAliasAndWindowFlags() async throws {
+        let command =
+            try await APKRunCommand.asyncParseAsRoot(
+                [
+                    "wrap", "com.example.app",
+                    "--update", "auto", "--window-size", "800x600", "--resizable",
+                ]) as? WrapCommand
+        let parsed = try #require(command)
+        #expect(parsed.update == "auto")
+        #expect(parsed.windowSize == "800x600")
+        #expect(parsed.resizable)
+    }
+
+    @Test func wrapUpdateAliasMapsToAutomatic() throws {
+        // update-system.md §2.4: without a provider the authority stays
+        // manual and the automatic mode sits unused.
+        let options = try InstallUpdateOptions.options(
+            provider: nil, updates: nil, update: "auto",
+            updateProvider: nil, updateURL: nil)
+        #expect(options.authority == .manual)
+        #expect(options.updateMode == .automatic)
+    }
+
+    @Test func wrapperSubcommandsParse() async throws {
+        let verify = try await APKRunCommand.asyncParseAsRoot(
+            ["wrapper", "verify", "/Applications/App.app", "--deep", "--json"])
+        #expect(verify is WrapperVerifyCommand)
+        let info = try await APKRunCommand.asyncParseAsRoot(
+            ["wrapper", "info", "com.example.app", "--json"])
+        #expect(info is WrapperInfoCommand)
+    }
+
+    @Test func installParsesWrapFlags() async throws {
+        let command =
+            try await APKRunCommand.asyncParseAsRoot(
+                ["install", "app.apk", "--wrap", "--output", "/tmp/apps"]) as? InstallCommand
+        let parsed = try #require(command)
+        #expect(parsed.wrap)
+        #expect(parsed.output == "/tmp/apps")
+    }
+
+    @Test func wrapGoldenVerificationAndInfoTexts() throws {
+        let verification = WrapperVerification(
+            bundleURL: URL(fileURLWithPath: "/Applications/HelloText.app"),
+            bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+            packageID: "io.apkrun.fixture.hellotext",
+            kind: .local,
+            registered: true,
+            cdhash: "0123456789abcdef0123456789abcdef01234567"
+        )
+        #expect(
+            WrapCommandSupport.verificationText(verification)
+                == golden("wrap-verify-valid.txt"))
+        #expect(
+            WrapCommandSupport.infoText(helloWrapperInfo()) == golden("wrap-info.txt"))
+        let broken = WrapperVerification(
+            bundleURL: URL(fileURLWithPath: "/Applications/HelloText.app"),
+            bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+            packageID: "io.apkrun.fixture.hellotext",
+            registered: true,
+            problems: [.signatureInvalid, .bundleIDMismatch]
+        )
+        #expect(
+            WrapCommandSupport.verificationText(broken)
+                == golden("wrap-verify-problems.txt"))
+    }
+#endif

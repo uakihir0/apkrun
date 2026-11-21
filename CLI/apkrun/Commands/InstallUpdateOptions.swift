@@ -77,6 +77,9 @@ enum InstallUpdateOptions {
             options.provider = try providerSpec(specString)
             options.authority = choice == .manual ? .manual : .apkrun
         }
+        // update-system.md §2.4: without a provider the authority stays
+        // `manual` and an automatic mode sits unused until one is
+        // attached; the store refuses `apkrun` without a provider.
         if choice == .manual {
             options.authority = .manual
         }

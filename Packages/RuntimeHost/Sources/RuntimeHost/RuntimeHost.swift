@@ -1404,6 +1404,15 @@ public actor RuntimeHost {
         do {
             let verification = try await validator.verify(
                 url: request.bundleURL, deep: request.deep)
+            // The §9.1 hash list travels only with `deep`; it is the wrapper
+            // the update must leave unchanged (#50).
+            let fileHashes: [WrapperFileHashWire]? =
+                if request.deep {
+                    try? WrapperFileHashes.compute(bundleURL: request.bundleURL)
+                        .map { WrapperFileHashWire(path: $0.path, sha256: $0.sha256) }
+                } else {
+                    nil
+                }
             return WrapperVerification(
                 bundleURL: verification.bundleURL,
                 bundleID: verification.bundleID,
@@ -1418,7 +1427,8 @@ public actor RuntimeHost {
                 cdhash: verification.cdhash,
                 launcherVersion: verification.launcherVersion,
                 launcherAPI: verification.launcherAPI.flatMap(Self.launcherAPIVersion(_:)),
-                bundledVersion: nil
+                bundledVersion: nil,
+                fileHashes: fileHashes
             )
         } catch {
             throw Self.wrapperWireError(for: error)
@@ -1686,21 +1696,7 @@ public actor RuntimeHost {
         }
         let summary = Self.wrapperSummary(for: entry, packageID: request.packageID)
         eventHub.publishWrapperChange(.created(summary), operationID: operationID)
-        return WrapperInfo(
-            summary: summary,
-            fileName: entry.fileName,
-            customization: WrapperCustomizationWire(
-                displayName: entry.customization.displayName,
-                customIcon: entry.customization.iconFile != nil
-            ),
-            signer: .adHoc,
-            cdhash: generated.cdhash,
-            launcherAPI: Self.launcherAPIVersion(entry.launcherAPI) ?? APIVersion(major: 1, minor: 0),
-            formatVersion: entry.formatVersion,
-            iconDigest: entry.iconDigest.flatMap { RuntimeSHA256Digest(rawValue: "sha256:\($0)") },
-            lastValidatedAt: entry.lastValidatedAt,
-            warnings: []
-        )
+        return Self.wrapperInfo(for: entry, packageID: request.packageID)
     }
 
     /// Completes a deferred placement (wrapper.md §6.3): the client, which
@@ -1777,26 +1773,11 @@ public actor RuntimeHost {
         guard let entry = await registry.entry(bundleID: pending.bundleId) else {
             throw .runtime("internal", message: "APKRun couldn't register the Mac app.")
         }
-        let summary = Self.wrapperSummary(for: entry, packageID: packageID)
         var warnings: [RuntimeWireError] = []
         if let warning {
             warnings.append(Self.wrapperWireError(for: warning))
         }
-        return WrapperInfo(
-            summary: summary,
-            fileName: entry.fileName,
-            customization: WrapperCustomizationWire(
-                displayName: entry.customization.displayName,
-                customIcon: entry.customization.iconFile != nil
-            ),
-            signer: .adHoc,
-            cdhash: pending.cdhash,
-            launcherAPI: Self.launcherAPIVersion(entry.launcherAPI) ?? APIVersion(major: 1, minor: 0),
-            formatVersion: entry.formatVersion,
-            iconDigest: entry.iconDigest.flatMap { RuntimeSHA256Digest(rawValue: "sha256:\($0)") },
-            lastValidatedAt: entry.lastValidatedAt,
-            warnings: warnings
-        )
+        return Self.wrapperInfo(for: entry, packageID: packageID, warnings: warnings)
     }
 
     /// Composes the wrapper icon from store-rendered layers: the `.icns`
@@ -1827,6 +1808,41 @@ public actor RuntimeHost {
         else { return nil }
         let digest = SHA256.hash(data: masterPNG).map { String(format: "%02x", $0) }.joined()
         return (icns, digest)
+    }
+
+    /// Returns the registry row of one package's wrapper (runtime-api.md §10.2).
+    public func wrapperInfo(
+        _ request: RuntimePackageRequest
+    ) async throws(RuntimeWireError) -> WrapperInfo {
+        let registry = await wrapperRegistryInstance()
+        guard let entry = await registry.entry(packageID: request.packageID) else {
+            throw Self.wrapperWireError(for: .wrapperNotFound(request.packageID))
+        }
+        return Self.wrapperInfo(for: entry, packageID: request.packageID)
+    }
+
+    /// Builds the wire record from a registry entry; `warnings` carries
+    /// non-fatal outcomes such as a registration failure.
+    private static func wrapperInfo(
+        for entry: WrapperRegistryEntry,
+        packageID: RuntimePackageID,
+        warnings: [RuntimeWireError] = []
+    ) -> WrapperInfo {
+        WrapperInfo(
+            summary: wrapperSummary(for: entry, packageID: packageID),
+            fileName: entry.fileName,
+            customization: WrapperCustomizationWire(
+                displayName: entry.customization.displayName,
+                customIcon: entry.customization.iconFile != nil
+            ),
+            signer: .adHoc,
+            cdhash: entry.cdhash,
+            launcherAPI: launcherAPIVersion(entry.launcherAPI) ?? APIVersion(major: 1, minor: 0),
+            formatVersion: entry.formatVersion,
+            iconDigest: entry.iconDigest.flatMap { RuntimeSHA256Digest(rawValue: "sha256:\($0)") },
+            lastValidatedAt: entry.lastValidatedAt,
+            warnings: warnings
+        )
     }
 
     /// Maps a registry entry to its wire summary.

@@ -79,6 +79,20 @@ public struct VerifyWrapperRequest: Codable, Equatable, Sendable {
     }
 }
 
+/// One file of a wrapper bundle's hash list (wrapper.md §9.1).
+public struct WrapperFileHashWire: Codable, Equatable, Sendable {
+    /// The path relative to the bundle root.
+    public let path: String
+    /// The lowercase hex SHA-256 of the file's contents.
+    public let sha256: String
+
+    /// Creates a file hash entry.
+    public init(path: String, sha256: String) {
+        self.path = path
+        self.sha256 = sha256
+    }
+}
+
 /// The `verifyWrapper` reply (runtime-api.md §10.4).
 public struct WrapperVerification: Codable, Equatable, Sendable {
     /// The bundle that was checked.
@@ -105,6 +119,9 @@ public struct WrapperVerification: Codable, Equatable, Sendable {
     public let launcherAPI: APIVersion?
     /// The Android version inside a portable wrapper; `nil` otherwise.
     public let bundledVersion: String?
+    /// The sorted per-file SHA-256 list of the bundle (wrapper.md §9.1);
+    /// present only for a `deep` request.
+    public let fileHashes: [WrapperFileHashWire]?
 
     /// Creates a verification result.
     public init(
@@ -119,7 +136,8 @@ public struct WrapperVerification: Codable, Equatable, Sendable {
         cdhash: String? = nil,
         launcherVersion: String? = nil,
         launcherAPI: APIVersion? = nil,
-        bundledVersion: String? = nil
+        bundledVersion: String? = nil,
+        fileHashes: [WrapperFileHashWire]? = nil
     ) {
         self.bundleURL = bundleURL
         self.bundleID = bundleID
@@ -133,6 +151,7 @@ public struct WrapperVerification: Codable, Equatable, Sendable {
         self.launcherVersion = launcherVersion
         self.launcherAPI = launcherAPI
         self.bundledVersion = bundledVersion
+        self.fileHashes = fileHashes
     }
 }
 
@@ -199,6 +218,42 @@ public struct RuntimePlaceStagedWrapperControlRequest: Codable, Equatable, Senda
 /// The result or typed error returned by a control place-staged-wrapper request.
 public struct RuntimePlaceStagedWrapperControlReply: Codable, Equatable, Sendable {
     /// The registered wrapper, present on success.
+    public let result: WrapperInfo?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: WrapperInfo) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+// MARK: - wrapperInfo (runtime-api.md §10.2)
+
+/// Asks the daemon for the registry row of one package's wrapper.
+public struct RuntimeWrapperInfoControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The installed package whose wrapper to describe.
+    public let packageID: RuntimePackageID
+
+    /// Creates a wrapper-info control request.
+    public init(header: APIRequestHeader, packageID: RuntimePackageID) {
+        self.header = header
+        self.packageID = packageID
+    }
+}
+
+/// The result or typed error returned by a control wrapper-info request.
+public struct RuntimeWrapperInfoControlReply: Codable, Equatable, Sendable {
+    /// The wrapper record, present on success.
     public let result: WrapperInfo?
     /// The structured failure, present on failure.
     public let error: RuntimeWireError?

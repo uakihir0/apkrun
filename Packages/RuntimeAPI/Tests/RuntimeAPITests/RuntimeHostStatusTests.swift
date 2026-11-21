@@ -4,7 +4,7 @@ import Testing
 @testable import RuntimeAPI
 
 @Test func runtimeTrackedUninstallAdvancesAPIMinorVersion() {
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 18))
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 19))
 }
 
 @Test func runtimeRestartRequestRoundTripsVersionedHeader() throws {

@@ -38,7 +38,20 @@
         @Option(name: .long, help: "Provider URL used with --update-provider.")
         var updateURL: String?
 
+        @Flag(name: .long, help: "Create the Mac app after the install, as `apkrun wrap` would.")
+        var wrap = false
+
+        @Option(name: .long, help: "Directory the Mac app is placed in with --wrap (default: ~/Applications).")
+        var output: String?
+
         mutating func run() async throws {
+            // --detach hands the wait to `apkrun operations wait`; a
+            // wrapper would never be created, so the combination is
+            // refused (cli.md §4.2).
+            guard !(wrap && detach) else {
+                throw CLIFailure.invalidArgument(
+                    argument: "wrap", reason: "--wrap and --detach cannot be combined")
+            }
             let installOptions = try InstallUpdateOptions.options(
                 provider: provider, updates: updates, update: update,
                 updateProvider: updateProvider, updateURL: updateURL)
@@ -129,16 +142,64 @@
                 expectedPackageID: preview.packageID
             )
 
-            if json {
-                try DaemonInstallSupport.writeJSON(result)
-            } else {
+            if !json {
                 Output.write(
                     "Installed \(DaemonInstallSupport.safeTerminalText(result.displayName)) "
                         + "(\(result.packageID.rawValue)), version "
                         + "\(result.versionCode.map(String.init) ?? "unknown")."
                 )
             }
+
+            // cli.md §3.3: the install already succeeded, so a wrapper
+            // failure is reported and the command exits 2 (partial).
+            var wrapperInfo: WrapperInfo?
+            if wrap {
+                do {
+                    wrapperInfo = try await WrapCommandSupport.createAndPlace(
+                        packageID: result.packageID,
+                        destination: try WrapCommandSupport.destination(for: output),
+                        fileName: nil,
+                        displayName: nil,
+                        icon: nil,
+                        iconHandle: nil,
+                        replace: .never,
+                        windowDefaults: nil,
+                        client: client
+                    )
+                    if !json, let wrapperInfo {
+                        Output.write(WrapCommandSupport.resultText(wrapperInfo))
+                    }
+                } catch {
+                    // The install succeeded, so a JSON caller still gets
+                    // the package result (partial success, cli.md §3.3).
+                    if json {
+                        try DaemonInstallSupport.writeJSON(
+                            InstallWrapResult(package: result, wrapper: nil))
+                    }
+                    Output.writeLogLine(
+                        ErrorOutput.render(error, json: json), toStandardError: true)
+                    throw ExitCode(2)
+                }
+            }
+            // --json prints one document: the plain install summary without
+            // --wrap (backward compatible), or the wrap document with it.
+            if json {
+                if wrap {
+                    try DaemonInstallSupport.writeJSON(
+                        InstallWrapResult(package: result, wrapper: wrapperInfo))
+                } else {
+                    try DaemonInstallSupport.writeJSON(result)
+                }
+            }
         }
+    }
+
+    /// The `install [--wrap] --json` document: one JSON object (cli.md §3.1).
+    private struct InstallWrapResult: Codable {
+        /// The installed package.
+        var package: RuntimePackageSummary
+        /// The created Mac app, when `--wrap` ran.
+        var wrapper: WrapperInfo?
     }
 
     struct UninstallCommand: AsyncParsableCommand {

@@ -299,6 +299,13 @@ extension RuntimeHost {
         }
         clipboardRelayTask = Task.detached { [weak self] in
             guard let agent = await supervisor.developmentGuestAgent else { return }
+            // A guest→host image rides the bulk connection; open it before
+            // the guest can announce a transfer — it otherwise opens lazily
+            // on the first host upload (desktop-integration.md §4.4).
+            await self?.refreshIntegrationCapabilities()
+            if let self, await self.integrationSettings.supports("clipboard.image.v1") {
+                _ = try? await self.clipboardBulkChannel().open()
+            }
             for await clip in agent.clipboardEvents {
                 guard !Task.isCancelled else { return }
                 await self?.clipboardFromGuest(clip)

@@ -260,6 +260,85 @@ public actor EmbeddedPackageService: RuntimeService {
         return try await store.packageSettings(for: id)
     }
 
+    /// The stored `settings.json` of a package on the wire (host-ui.md §7).
+    public func packageSettings(
+        for packageID: RuntimePackageID
+    ) async throws(RuntimeWireError) -> PackageSettingsWire? {
+        do {
+            try await ensureOpen()
+            guard let id = PackageID(rawValue: packageID.rawValue) else {
+                throw PackageStoreFailure.packageNotFound
+            }
+            let settings = try await store.packageSettings(for: id) ?? PackageSettings()
+            return wireSettings(settings)
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    /// Resolves every §3.1 key for the wire (configuration.md §3.2):
+    /// global switches of `settings.json` win, then the stored value,
+    /// then a compatibility recommendation (#91), then the default.
+    private func wireSettings(_ settings: PackageSettings) -> PackageSettingsWire {
+        let global = GlobalSettings.load(from: paths.settingsFile)
+        let resolver = PackageSettingsResolver(
+            globalIntegrationsEnabled: global.integrationsEnabled)
+        let entries = PackageSettingsSchema.keys.map { key -> PackageSettingWire in
+            let stored = settings.value(key.name)
+            let recommended = resolver.isRecommended(key.name, in: settings)
+            let forcedOff =
+                key.name.hasPrefix("integrations.")
+                && global.integrationsEnabled[String(key.name.dropFirst("integrations.".count))]
+                    == false
+            let source =
+                forcedOff
+                ? "globalSwitch"
+                : stored != nil
+                    ? "user"
+                    : recommended
+                        ? "recommended" : "default"
+            var allowed: [String]?
+            switch key.kind {
+            case .word(let words): allowed = words
+            case .flag: allowed = ["true", "false"]
+            default: break
+            }
+            return PackageSettingWire(
+                key: key.name,
+                value: resolver.effectiveValue(for: key.name, in: settings),
+                source: source,
+                appliesLive: key.appliesLive,
+                stored: stored,
+                allowed: allowed)
+        }
+        return PackageSettingsWire(
+            groups: settings.groups, recommended: resolver.recommendations, entries: entries)
+    }
+
+    /// Applies a `settings.json` patch and returns the stored settings
+    /// (host-ui.md §7, `updatePackageSettings`).
+    public func updatePackageSettings(
+        _ request: RuntimeUpdatePackageSettingsRequest
+    ) async throws(RuntimeWireError) -> PackageSettingsWire {
+        do {
+            try await ensureOpen()
+            guard let id = PackageID(rawValue: request.packageID.rawValue) else {
+                throw PackageStoreFailure.packageNotFound
+            }
+            var patch: [String: String?] = [:]
+            for (key, value) in request.patch.set {
+                patch[key] = value
+            }
+            for key in request.patch.clear {
+                patch[key] = nil
+            }
+            let settings = try await store.updatePackageSettings(id, patch: patch)
+            return wireSettings(settings)
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
     /// The `current/` artifact directory of a managed package (collision-aware; §9.5).
     public func artifactCurrentDirectory(
         for packageID: RuntimePackageID
@@ -1335,6 +1414,19 @@ public actor EmbeddedPackageService: RuntimeService {
                     message: "The update rollback failed: \(detail).",
                     remediation:
                         "Repair the app with `apkrun repair <package>` or uninstall and install it again.")
+            case .unknownSettingKey(let key):
+                return RuntimeWireError(
+                    domain: "store", code: "store.unknownSetting",
+                    message: "There is no app setting named \(key).",
+                    remediation:
+                        "List the app's settings with: apkrun settings <package> list",
+                    parameters: ["key": key])
+            case .invalidSettingValue(let key, let allowed):
+                return RuntimeWireError(
+                    domain: "store", code: "store.invalidSettingValue",
+                    message: "\(key) can't be set to that value.",
+                    remediation: "Allowed values: \(allowed).",
+                    parameters: ["key": key, "allowed": allowed])
             case .io:
                 return .store(
                     "storageIO", message: "APKRun could not read or write package data.",

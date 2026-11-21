@@ -765,6 +765,25 @@ public struct RuntimeLaunchRequest: Codable, Sendable, Equatable {
     }
 }
 
+/// The window preferences a session applies (package-metadata-json.md §3.1
+/// `window.*`; runtime-api.md `SessionDescriptor.windowPrefs`). A launcher
+/// reads them at launch and on `windowPrefsChanged` (§10.2).
+public struct WindowPrefs: Codable, Sendable, Equatable {
+    /// `window.resizable`.
+    public var resizable: Bool
+    /// `window.alwaysOnTop`: the window floats while it is not full screen.
+    public var alwaysOnTop: Bool
+    /// `window.zoom`.
+    public var zoom: Double
+
+    /// Creates a preferences value.
+    public init(resizable: Bool, alwaysOnTop: Bool, zoom: Double) {
+        self.resizable = resizable
+        self.alwaysOnTop = alwaysOnTop
+        self.zoom = zoom
+    }
+}
+
 /// The lifecycle state of a launched app session.
 public enum RuntimeSessionPhase: String, Codable, Sendable, Equatable {
     case starting
@@ -824,12 +843,19 @@ public struct RuntimeLaunchResult: Codable, Sendable, Equatable {
     public var packageID: RuntimePackageID
     /// The session state when this reply was produced.
     public var state: RuntimeSessionPhase
+    /// The resolved `window.*` settings the session window applies
+    /// (runtime-api.md `SessionDescriptor.windowPrefs`).
+    public var windowPrefs: WindowPrefs?
 
     /// Creates a launch result.
-    public init(sessionID: UUID, packageID: RuntimePackageID, state: RuntimeSessionPhase) {
+    public init(
+        sessionID: UUID, packageID: RuntimePackageID, state: RuntimeSessionPhase,
+        windowPrefs: WindowPrefs? = nil
+    ) {
         self.sessionID = sessionID
         self.packageID = packageID
         self.state = state
+        self.windowPrefs = windowPrefs
     }
 }
 
@@ -892,5 +918,175 @@ public struct RuntimeWireError: Error, Codable, Sendable, Equatable {
     /// Creates a package-store-domain error.
     public static func store(_ code: String, message: String, remediation: String? = nil) -> Self {
         Self(domain: "store", code: "store.\(code)", message: message, remediation: remediation)
+    }
+}
+
+/// A `settings.json` patch of dotted keys (host-ui.md §7): `set` writes a
+/// value, `clear` removes the stored value (the UI's **Reset**).
+public struct RuntimePackageSettingsPatch: Codable, Sendable, Equatable {
+    /// Keys to write.
+    public var set: [String: String]
+    /// Keys to remove.
+    public var clear: [String]
+
+    /// Creates a patch.
+    public init(set: [String: String] = [:], clear: [String] = []) {
+        self.set = set
+        self.clear = clear
+    }
+}
+
+/// The `packageSettings` request (host-ui.md §7).
+public struct RuntimePackageSettingsRequest: Codable, Sendable, Equatable {
+    /// The package whose `settings.json` to read.
+    public var packageID: RuntimePackageID
+
+    /// Creates a request.
+    public init(packageID: RuntimePackageID) {
+        self.packageID = packageID
+    }
+}
+
+/// The `updatePackageSettings` request (host-ui.md §7).
+public struct RuntimeUpdatePackageSettingsRequest: Codable, Sendable, Equatable {
+    /// The package to patch.
+    public var packageID: RuntimePackageID
+    /// The patch to apply.
+    public var patch: RuntimePackageSettingsPatch
+
+    /// Creates a request.
+    public init(packageID: RuntimePackageID, patch: RuntimePackageSettingsPatch) {
+        self.packageID = packageID
+        self.patch = patch
+    }
+}
+
+/// A package's stored settings groups on the wire (package-metadata-json.md
+/// §3): each group maps a leaf key to its string form.
+/// One resolved `settings.json` key on the wire: the effective value and
+/// where it came from (configuration.md §3.2, cli.md §4.2 `settings list`).
+public struct PackageSettingWire: Codable, Sendable, Equatable {
+    /// The dotted key (`window.zoom`).
+    public var key: String
+    /// The effective value after resolution.
+    public var value: String
+    /// `user`, `recommended`, `default`, or `globalSwitch`.
+    public var source: String
+    /// Whether the value applies without a new session (§3.1 Applies column).
+    public var appliesLive: Bool
+    /// The stored value, nil when the key uses a fallback.
+    public var stored: String?
+    /// The accepted values for a `word` key, nil otherwise.
+    public var allowed: [String]?
+
+    /// Creates a resolved key row.
+    public init(
+        key: String, value: String, source: String, appliesLive: Bool,
+        stored: String? = nil, allowed: [String]? = nil
+    ) {
+        self.key = key
+        self.value = value
+        self.source = source
+        self.appliesLive = appliesLive
+        self.stored = stored
+        self.allowed = allowed
+    }
+}
+
+/// Resolved per-app settings payload: stored groups, recommendation map,
+/// and the entry list the UI/CLI render (host-ui.md §7, cli.md §4.2).
+public struct PackageSettingsWire: Codable, Sendable, Equatable {
+    /// Stored values per top-level group.
+    public var groups: [String: [String: String]]
+    /// Compatibility-database recommendations by dotted key, for the
+    /// "Recommended for this app" marker (host-ui.md §7). Empty until #91.
+    public var recommended: [String: String]
+    /// Every §3.1 key resolved for this package.
+    public var entries: [PackageSettingWire]
+
+    /// Creates a wire settings value.
+    public init(
+        groups: [String: [String: String]] = [:], recommended: [String: String] = [:],
+        entries: [PackageSettingWire] = []
+    ) {
+        self.groups = groups
+        self.recommended = recommended
+        self.entries = entries
+    }
+
+    /// The stored value of a dotted key, nil when absent.
+    public func value(_ key: String) -> String? {
+        let parts = key.split(separator: ".", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return nil }
+        return groups[parts[0]]?[parts[1]]
+    }
+}
+
+/// A `packageSettings` control request.
+public struct RuntimePackageSettingsControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The request.
+    public let request: RuntimePackageSettingsRequest
+
+    /// Creates a request.
+    public init(header: APIRequestHeader, request: RuntimePackageSettingsRequest) {
+        self.header = header
+        self.request = request
+    }
+}
+
+/// The stored settings or typed error of `packageSettings`. A managed
+/// package with no `settings.json` returns `result == nil`.
+public struct RuntimePackageSettingsControlReply: Codable, Equatable, Sendable {
+    /// The stored settings, nil when none are stored.
+    public let result: PackageSettingsWire?
+    /// The structured failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: PackageSettingsWire?) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// An `updatePackageSettings` control request.
+public struct RuntimeUpdatePackageSettingsControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The request.
+    public let request: RuntimeUpdatePackageSettingsRequest
+
+    /// Creates a request.
+    public init(header: APIRequestHeader, request: RuntimeUpdatePackageSettingsRequest) {
+        self.header = header
+        self.request = request
+    }
+}
+
+/// The resulting settings or typed error of `updatePackageSettings`.
+public struct RuntimeUpdatePackageSettingsControlReply: Codable, Equatable, Sendable {
+    /// The stored settings after the patch.
+    public let result: PackageSettingsWire?
+    /// The structured failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: PackageSettingsWire) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
     }
 }

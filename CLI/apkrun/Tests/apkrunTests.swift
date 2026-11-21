@@ -1417,3 +1417,52 @@ private let releaseBuildInfo = BuildInfo(
                 == golden("wrap-verify-problems.txt"))
     }
 #endif
+
+// MARK: - #80 `apkrun settings`
+
+struct SettingsCommandTests {
+    private func entries() -> [PackageSettingWire] {
+        [
+            PackageSettingWire(
+                key: "window.defaultWidth", value: "1080", source: "default",
+                appliesLive: false, stored: nil, allowed: nil),
+            PackageSettingWire(
+                key: "window.resizable", value: "true", source: "recommended",
+                appliesLive: true, stored: nil, allowed: ["true", "false"]),
+            PackageSettingWire(
+                key: "window.zoom", value: "1.00", source: "user",
+                appliesLive: true, stored: "1.00", allowed: nil),
+        ]
+    }
+
+    /// cli.md §4.2: `settings list` shows the effective value and source.
+    @Test func settingsListGolden() {
+        #expect(
+            SettingsCommand.SettingsCommandSupport.listText(entries())
+                == golden("settings-list.txt"))
+    }
+
+    /// cli.md §4.2: an unknown key exits 4 (`store.unknownSetting`).
+    @Test func settingsUnknownKeyExitCode() {
+        let failure = SettingsCommand.unknownSetting("window.bogus")
+        #expect(failure.code == "store.unknownSetting")
+        #expect(ExitCodes.code(for: failure) == 4)
+    }
+
+    /// cli.md §4.2: an invalid value exits 64 (`store.invalidSettingValue`).
+    @Test func settingsInvalidValueExitCode() {
+        let failure = RuntimeWireError(
+            domain: "store", code: "store.invalidSettingValue",
+            message: "window.zoom must be one of 0.75–2.0",
+            parameters: ["key": "window.zoom", "allowed": "0.75–2.0"])
+        #expect(ExitCodes.code(for: failure) == 64)
+    }
+
+    /// cli.md §4.2: an unmanaged package exits 4 (`store.packageNotFound`).
+    @Test func settingsPackageNotFoundExitCode() {
+        let failure = RuntimeWireError(
+            domain: "store", code: "store.packageNotFound",
+            message: "APKRun doesn't manage an app named com.nope.")
+        #expect(ExitCodes.code(for: failure) == 4)
+    }
+}

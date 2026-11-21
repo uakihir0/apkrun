@@ -59,13 +59,13 @@ final class AddFlowModel {
     private(set) var suggestedProvider: ProviderSpec?
 
     /// Whether a Mac app already exists for the inspected package. A
-    /// reinstall or update never regenerates one (AGENTS.md §4.13); the row
+    /// reinstall or update never regenerates one (AGENTS.md §4 invariant 13); the row
     /// is offered again only when the previous one is gone.
     private(set) var hasMacApp = false
 
     /// Whether the sheet offers **Create Mac app** (host-ui.md §6.1). Only a
     /// fresh or uninspected package may create one; an existing Mac app is
-    /// never regenerated or moved by an update (AGENTS.md §4.13).
+    /// never regenerated or moved by an update (AGENTS.md §4 invariant 13).
     var showsMacAppRow: Bool {
         guard let preview else { return false }
         switch preview.relation {
@@ -134,7 +134,7 @@ final class AddFlowModel {
             self.preview = preview
             // A list failure stays conservative: only a fresh or uninspected
             // package offers Create Mac app without a confirmed empty list
-            // (wrapper.md §9.1, AGENTS.md §4.13).
+            // (wrapper.md §9.1, AGENTS.md §4 invariant 13).
             if let wrappers = try? await serviceFactory().listWrappers() {
                 hasMacApp = wrappers.contains { $0.summary.packageID == preview.packageID }
             } else {

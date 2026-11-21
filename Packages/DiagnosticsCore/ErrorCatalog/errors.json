@@ -2009,6 +2009,27 @@
    }
   },
   {
+   "code": "runtime.invalidConfigValue",
+   "parameters": [
+    "key",
+    "value"
+   ],
+   "message": {
+    "en": "{value} is not a valid value for {key}."
+   },
+   "remediation": {
+    "en": "Check the accepted values for the setting in the configuration reference."
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "case": "invalidConfigValue(key, value)",
+    "when": "`apkrun config set` gets a value outside the key's allowed set",
+    "raisedBy": "apkrund",
+    "ref": "[../03-reference/configuration.md](../03-reference/configuration.md) §2.7"
+   }
+  },
+  {
    "code": "runtime.kernelPanic",
    "parameters": [],
    "message": {
@@ -2186,6 +2207,46 @@
     "when": "RuntimeClient cannot reach the broker or a protected endpoint",
     "raisedBy": "RuntimeClient",
     "ref": "[runtime-api.md](runtime-api.md) §3.6"
+   }
+  },
+  {
+   "code": "runtime.unknownConfigKey",
+   "parameters": [
+    "key"
+   ],
+   "message": {
+    "en": "Unknown setting {key}."
+   },
+   "remediation": {
+    "en": "Run `apkrun config get` to list the settings keys."
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "case": "unknownConfigKey(key)",
+    "when": "`apkrun config get|set` names a key that is not a known setting",
+    "raisedBy": "apkrund",
+    "ref": "[../03-reference/configuration.md](../03-reference/configuration.md) §2.7"
+   }
+  },
+  {
+   "code": "runtime.unknownResult",
+   "parameters": [
+    "operationID"
+   ],
+   "message": {
+    "en": "The operation ended without a result."
+   },
+   "remediation": {
+    "en": "Try again. Report the operation ID if it keeps happening."
+   },
+   "action": "retry",
+   "cliExit": 1,
+   "doc": {
+    "case": "unknownResult(operationID)",
+    "when": "a tracked operation ends without reporting its result",
+    "raisedBy": "apkrund",
+    "ref": "[runtime-api.md](runtime-api.md)"
    }
   },
   {
@@ -2501,6 +2562,30 @@
    }
   },
   {
+   "code": "store.invalidSettingValue",
+   "parameters": [
+    "key",
+    "allowed"
+   ],
+   "message": {
+    "en": "{key} can't be set to that value.",
+    "ja": "{key} にはその値を設定できません。"
+   },
+   "action": "none",
+   "cliExit": 64,
+   "doc": {
+    "table": "storeSettings",
+    "case": "invalidSettingValue(String, String)",
+    "when": "a settings patch value fails §3.1 validation",
+    "raisedBy": "PackageStore",
+    "ref": "package-metadata-json.md §3.1"
+   },
+   "remediation": {
+    "en": "Allowed values: {allowed}.",
+    "ja": "設定できる値: {allowed}"
+   }
+  },
+  {
    "code": "store.invalidSignature",
    "parameters": [
     "file",
@@ -2702,6 +2787,27 @@
    }
   },
   {
+   "code": "store.packageNotFound",
+   "parameters": [],
+   "message": {
+    "en": "The package is not managed by APKRun.",
+    "ja": "このパッケージは APKRun の管理下にありません。"
+   },
+   "action": "none",
+   "cliExit": 4,
+   "doc": {
+    "table": "storeSettings",
+    "case": "packageNotFound",
+    "when": "any operation on a package with no record",
+    "raisedBy": "PackageStore",
+    "ref": "package-metadata-json.md §6.3"
+   },
+   "remediation": {
+    "en": "Use `apkrun list` to see managed packages.",
+    "ja": "`apkrun list` で管理対象を確認できます。"
+   }
+  },
+  {
    "code": "store.reservedPackage",
    "parameters": [
     "package"
@@ -2748,6 +2854,27 @@
    }
   },
   {
+   "code": "store.rollbackUnavailable",
+   "parameters": [],
+   "message": {
+    "en": "The previous version cannot be restored automatically.",
+    "ja": "前のバージョンを自動で復元できません。"
+   },
+   "action": "none",
+   "cliExit": 1,
+   "doc": {
+    "table": "storeUpdate",
+    "case": "rollbackUnavailable(reason:)",
+    "when": "a rollback is requested but no mechanism applies, or no previous set is retained",
+    "raisedBy": "PackageStore",
+    "ref": "package-store.md §7.3"
+   },
+   "remediation": {
+    "en": "Rollback is possible only after an update. On images without rollback support, retry with `apkrun rollback <package> --allow-data-loss` (the app's data is deleted).",
+    "ja": "ロールバックは更新後にのみ可能です。ロールバック非対応のイメージでは `apkrun rollback <package> --allow-data-loss` で再試行してください（アプリデータは削除されます）。"
+   }
+  },
+  {
    "code": "store.signerMismatch",
    "parameters": [
     "app"
@@ -2789,27 +2916,6 @@
    "remediation": {
     "en": "Run `apkrun update check` to download and stage an update first.",
     "ja": "先に `apkrun update check` で更新をダウンロードしてステージしてください。"
-   }
-  },
-  {
-   "code": "store.rollbackUnavailable",
-   "parameters": [],
-   "message": {
-    "en": "The previous version cannot be restored automatically.",
-    "ja": "前のバージョンを自動で復元できません。"
-   },
-   "action": "none",
-   "cliExit": 1,
-   "doc": {
-    "table": "storeUpdate",
-    "case": "rollbackUnavailable(reason:)",
-    "when": "a rollback is requested but no mechanism applies, or no previous set is retained",
-    "raisedBy": "PackageStore",
-    "ref": "package-store.md §7.3"
-   },
-   "remediation": {
-    "en": "Rollback is possible only after an update. On images without rollback support, retry with `apkrun rollback <package> --allow-data-loss` (the app's data is deleted).",
-    "ja": "ロールバックは更新後にのみ可能です。ロールバック非対応のイメージでは `apkrun rollback <package> --allow-data-loss` で再試行してください（アプリデータは削除されます）。"
    }
   },
   {
@@ -2858,6 +2964,29 @@
    "remediation": {
     "en": "Get a smaller build of the app, for example one for fewer device types.",
     "ja": "より小さいビルド（例: 対象デバイスが少ないもの）を入手してください。"
+   }
+  },
+  {
+   "code": "store.unknownSetting",
+   "parameters": [
+    "key"
+   ],
+   "message": {
+    "en": "There is no app setting named {key}.",
+    "ja": "{key} という設定はありません。"
+   },
+   "action": "none",
+   "cliExit": 4,
+   "doc": {
+    "table": "storeSettings",
+    "case": "unknownSettingKey(String)",
+    "when": "a settings patch names an unknown key",
+    "raisedBy": "PackageStore",
+    "ref": "package-metadata-json.md §3.1"
+   },
+   "remediation": {
+    "en": "List the app's settings with: apkrun settings <package> list",
+    "ja": "`apkrun settings <package> list` で設定名を確認できます。"
    }
   },
   {
@@ -4290,6 +4419,25 @@
    }
   },
   {
+   "code": "wrapper.launchServicesMissing",
+   "parameters": [],
+   "message": {
+    "en": "LaunchServices no longer knows one or more APKRun Mac apps."
+   },
+   "remediation": {
+    "en": "Open each Mac app once from its folder so macOS registers it again."
+   },
+   "action": "retry",
+   "cliExit": 0,
+   "doc": {
+    "table": "wrapperFailure",
+    "case": "(health)",
+    "when": "the wrappers.registration health check finds a registered wrapper LaunchServices forgot",
+    "raisedBy": "WrapperHealthChecks",
+    "ref": "wrapper.md §14"
+   }
+  },
+  {
    "code": "wrapper.launcherTemplateInvalid",
    "parameters": [],
    "message": {
@@ -4351,6 +4499,28 @@
    }
   },
   {
+   "code": "wrapper.refreshBlocked",
+   "parameters": [
+    "path",
+    "stagingToken"
+   ],
+   "message": {
+    "en": "macOS didn't allow APKRun to update the Mac app."
+   },
+   "remediation": {
+    "en": "Allow APKRun in System Settings > Privacy & Security > App Management, then try again."
+   },
+   "action": "retry",
+   "cliExit": 1,
+   "doc": {
+    "table": "wrapperFailure",
+    "case": "refreshBlocked(String, stagingToken: String?)",
+    "when": "the Contents swap of a refresh is denied by macOS App Management",
+    "raisedBy": "RuntimeHost",
+    "ref": "wrapper.md §9.3"
+   }
+  },
+  {
    "code": "wrapper.registrationFailed",
    "parameters": [],
    "message": {
@@ -4408,63 +4578,6 @@
     "when": "codesign returns a non-zero status during ad-hoc signing",
     "raisedBy": "WrapperSigner",
     "ref": "wrapper.md §7.1"
-   }
-  },
-  {
-   "code": "wrapper.wrapperRunning",
-   "parameters": ["packageID"],
-   "message": {
-    "en": "{packageID} is open, so its Mac app cannot be replaced."
-   },
-   "remediation": {
-    "en": "Quit the Mac app, then try again."
-   },
-   "action": "retry",
-   "cliExit": 75,
-   "doc": {
-    "table": "wrapperFailure",
-    "case": "wrapperRunning(String)",
-    "when": "refreshWrapper while the wrapper's app is running and closeRunningApp was not allowed",
-    "raisedBy": "RuntimeHost",
-    "ref": "wrapper.md §9.3"
-   }
-  },
-  {
-   "code": "wrapper.refreshBlocked",
-   "parameters": ["path", "stagingToken"],
-   "message": {
-    "en": "macOS didn't allow APKRun to update the Mac app."
-   },
-   "remediation": {
-    "en": "Allow APKRun in System Settings > Privacy & Security > App Management, then try again."
-   },
-   "action": "retry",
-   "cliExit": 1,
-   "doc": {
-    "table": "wrapperFailure",
-    "case": "refreshBlocked(String, stagingToken: String?)",
-    "when": "the Contents swap of a refresh is denied by macOS App Management",
-    "raisedBy": "RuntimeHost",
-    "ref": "wrapper.md §9.3"
-   }
-  },
-  {
-   "code": "wrapper.launchServicesMissing",
-   "parameters": [],
-   "message": {
-    "en": "LaunchServices no longer knows one or more APKRun Mac apps."
-   },
-   "remediation": {
-    "en": "Open each Mac app once from its folder so macOS registers it again."
-   },
-   "action": "retry",
-   "cliExit": 0,
-   "doc": {
-    "table": "wrapperFailure",
-    "case": "(health)",
-    "when": "the wrappers.registration health check finds a registered wrapper LaunchServices forgot",
-    "raisedBy": "WrapperHealthChecks",
-    "ref": "wrapper.md §14"
    }
   },
   {
@@ -4550,64 +4663,24 @@
    }
   },
   {
-   "code": "runtime.unknownConfigKey",
+   "code": "wrapper.wrapperRunning",
    "parameters": [
-    "key"
+    "packageID"
    ],
    "message": {
-    "en": "Unknown setting {key}."
+    "en": "{packageID} is open, so its Mac app cannot be replaced."
    },
    "remediation": {
-    "en": "Run `apkrun config get` to list the settings keys."
-   },
-   "action": "none",
-   "cliExit": 1,
-   "doc": {
-    "case": "unknownConfigKey(key)",
-    "when": "`apkrun config get|set` names a key that is not a known setting",
-    "raisedBy": "apkrund",
-    "ref": "[../03-reference/configuration.md](../03-reference/configuration.md) §2.7"
-   }
-  },
-  {
-   "code": "runtime.unknownResult",
-   "parameters": [
-    "operationID"
-   ],
-   "message": {
-    "en": "The operation ended without a result."
-   },
-   "remediation": {
-    "en": "Try again. Report the operation ID if it keeps happening."
+    "en": "Quit the Mac app, then try again."
    },
    "action": "retry",
-   "cliExit": 1,
+   "cliExit": 75,
    "doc": {
-    "case": "unknownResult(operationID)",
-    "when": "a tracked operation ends without reporting its result",
-    "raisedBy": "apkrund",
-    "ref": "[../02-design/runtime-api.md](../02-design/runtime-api.md)"
-   }
-  },
-  {
-   "code": "runtime.invalidConfigValue",
-   "parameters": [
-    "key",
-    "value"
-   ],
-   "message": {
-    "en": "{value} is not a valid value for {key}."
-   },
-   "remediation": {
-    "en": "Check the accepted values for the setting in the configuration reference."
-   },
-   "action": "none",
-   "cliExit": 1,
-   "doc": {
-    "case": "invalidConfigValue(key, value)",
-    "when": "`apkrun config set` gets a value outside the key's allowed set",
-    "raisedBy": "apkrund",
-    "ref": "[../03-reference/configuration.md](../03-reference/configuration.md) §2.7"
+    "table": "wrapperFailure",
+    "case": "wrapperRunning(String)",
+    "when": "refreshWrapper while the wrapper's app is running and closeRunningApp was not allowed",
+    "raisedBy": "RuntimeHost",
+    "ref": "wrapper.md §9.3"
    }
   }
  ]

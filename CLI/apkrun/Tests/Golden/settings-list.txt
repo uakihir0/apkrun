@@ -1,0 +1,3 @@
+window.defaultWidth=1080 (default)
+window.resizable=true (recommended)
+window.zoom=1.00 (user)

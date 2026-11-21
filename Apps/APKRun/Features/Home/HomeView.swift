@@ -86,13 +86,37 @@ struct HomeView: View {
 
     @ViewBuilder
     private var detailContent: some View {
-        switch model.selection {
-        case .apps:
-            AppsListView(search: search, sort: sort)
-        case .updates:
-            UpdatesListView()
-        case .other:
-            OtherAppsListView()
+        // The app page (§7) replaces the list when a package is selected.
+        if let packageID = model.selectedPackage {
+            VStack(spacing: 0) {
+                HStack {
+                    Button("‹ Apps") {
+                        model.selectedPackage = nil
+                        model.selectedPackageSection = nil
+                    }
+                    .buttonStyle(.link)
+                    .padding(8)
+                    Spacer()
+                }
+                Divider()
+                AppPageView(
+                    model: PackageDetailModel(
+                        packageID: packageID,
+                        section: PackageDetailModel.PageSection(
+                            rawValue: model.selectedPackageSection ?? "general"
+                        ) ?? .general)
+                )
+                .id(packageID)
+            }
+        } else {
+            switch model.selection {
+            case .apps:
+                AppsListView(search: search, sort: sort)
+            case .updates:
+                UpdatesListView()
+            case .other:
+                OtherAppsListView()
+            }
         }
     }
 
@@ -316,7 +340,8 @@ private struct AppRowView: View {
                 Task { await model.updates.checkForUpdates(packageID: package.packageID) }
             }
             Button("Settings…") {
-                model.requestedSettingsPane = "general"
+                model.selectedPackage = package.packageID
+                model.selectedPackageSection = "general"
             }
             Divider()
             Button("Uninstall…") {}
@@ -348,7 +373,10 @@ private struct AppRowView: View {
                     Task { _ = try? await model.packages.requireService().repairPackage(packageID: package.packageID) }
                 }
             case .details:
-                Button("Details") {}
+                Button("Details") {
+                    model.selectedPackage = package.packageID
+                    model.selectedPackageSection = "general"
+                }
             case .updateNow:
                 Button("Update Now") {
                     Task { await model.updates.updateNow(packageID: package.packageID) }
@@ -372,7 +400,8 @@ private struct AppRowView: View {
                     Task { await model.packages.open(packageID: package.packageID) }
                 }
                 Button("Settings…") {
-                    model.requestedSettingsPane = "general"
+                    model.selectedPackage = package.packageID
+                    model.selectedPackageSection = "general"
                 }
             }
         }

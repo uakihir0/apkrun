@@ -46,6 +46,33 @@ protocol RuntimeService: Sendable {
     ) async throws -> WrapperInfo
     func discardImport(_ request: RuntimeDiscardImportRequest) async throws
     func subscribe(to topic: EventTopic) async throws -> AsyncStream<EventEnvelope>
+    func packageInfo(packageID: RuntimePackageID) async throws -> RuntimePackageDetails
+    func packageSettings(_ packageID: RuntimePackageID) async throws -> PackageSettingsWire?
+    func updatePackageSettings(
+        _ packageID: RuntimePackageID, patch: RuntimePackageSettingsPatch
+    ) async throws -> PackageSettingsWire
+    /// Global `settings.json` keys (configuration.md §2).
+    func getConfig(keys: [String]?) async throws -> [String: String]
+    func setConfig(key: String, value: String) async throws -> [String: String]
+    func integrationStatus(packageID: RuntimePackageID) async throws -> IntegrationStatus
+    func setUpdatePolicy(
+        packageID: RuntimePackageID, policy: UpdatePolicy
+    ) async throws -> PackageUpdateStatus
+    func setUpdateAuthority(
+        packageID: RuntimePackageID, authority: AuthorityChoice
+    ) async throws -> PackageUpdateStatus
+    func rollbackPackage(
+        packageID: RuntimePackageID, allowDataLoss: Bool
+    ) async throws -> RuntimeRollbackPackageControlReply
+    func updateSkipped(
+        packageID: RuntimePackageID, versionCode: RuntimeVersionCode, skipped: Bool
+    ) async throws
+    func beginUninstallPackage(
+        _ request: RuntimeUninstallPackageRequest, operationID: OperationID
+    ) async throws -> OperationHandle
+    func removeWrapper(packageID: RuntimePackageID, trash: Bool) async throws -> Bool
+    func deniedWrappers() async throws -> [DeniedWrapper]
+    func clearWrapperDenial(bundleID: String, cdhash: String) async throws
 }
 
 extension RuntimeControlClient: RuntimeService {

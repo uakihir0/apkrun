@@ -143,11 +143,18 @@ public enum PackageChange: Codable, Equatable, Sendable {
     /// The store rendered a different icon for the package (package-store.md §10.2, API 1.17).
     /// Wrappers refresh their icon when their own icon is not custom ([wrapper.md](../../docs/02-design/wrapper.md) §8.5).
     case iconChanged(RuntimePackageID)
+    /// A `settings.json` patch changed the package's stored settings (host-ui.md §7, API 1.24).
+    /// Carries the dotted keys the patch touched.
+    case settingsChanged(RuntimePackageID, [String])
+    /// A `window.*` key changed while a session may be open; the session's
+    /// window applies it live (configuration.md §1.5, API 1.24).
+    case windowPrefsChanged(RuntimePackageID, WindowPrefs)
     /// The daemon reported a package change added by a newer API version.
     case unknown
 
     private enum AssociatedKey: String, CodingKey {
         case first = "_0"
+        case second = "_1"
         case from
         case keptData
     }
@@ -179,6 +186,17 @@ public enum PackageChange: Codable, Equatable, Sendable {
         case "iconChanged":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .iconChanged(try payload.decode(RuntimePackageID.self, forKey: .first))
+        case "settingsChanged":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .settingsChanged(
+                try payload.decode(RuntimePackageID.self, forKey: .first),
+                try payload.decodeIfPresent([String].self, forKey: .second) ?? [])
+        case "windowPrefsChanged":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .windowPrefsChanged(
+                try payload.decode(RuntimePackageID.self, forKey: .first),
+                try payload.decode(WindowPrefs.self, forKey: .second))
+
         default:
             self = .unknown
         }
@@ -214,6 +232,20 @@ public enum PackageChange: Codable, Equatable, Sendable {
                 forKey: RuntimeEventCodingKey("iconChanged")
             )
             try payload.encode(packageID, forKey: .first)
+        case .settingsChanged(let packageID, let keys):
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self,
+                forKey: RuntimeEventCodingKey("settingsChanged")
+            )
+            try payload.encode(packageID, forKey: .first)
+            try payload.encode(keys, forKey: .second)
+        case .windowPrefsChanged(let packageID, let prefs):
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self,
+                forKey: RuntimeEventCodingKey("windowPrefsChanged")
+            )
+            try payload.encode(packageID, forKey: .first)
+            try payload.encode(prefs, forKey: .second)
         case .unknown:
             throw EncodingError.invalidValue(
                 self,

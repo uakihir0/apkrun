@@ -737,8 +737,41 @@ public actor RuntimeHost {
         try await service.open()
         let result = try await service.updatePackageSettings(request)
         eventHub.publishPackageChange(
-            .settingsChanged(request.packageID), operationID: nil)
+            .settingsChanged(
+                request.packageID,
+                request.patch.set.keys.sorted() + request.patch.clear.sorted()),
+            operationID: nil)
+        // `window.*` keys reach an open session's window live
+        // (configuration.md §1.5, package-metadata-json.md §3.4).
+        let touched =
+            Set(request.patch.set.keys).union(request.patch.clear)
+            .intersection(["window.resizable", "window.alwaysOnTop", "window.zoom"])
+        if !touched.isEmpty,
+            let prefs = Self.windowPrefs(from: result)
+        {
+            eventHub.publishPackageChange(
+                .windowPrefsChanged(request.packageID, prefs), operationID: nil)
+        }
         return result
+    }
+
+    /// `SessionDescriptor.windowPrefs` of a resolved settings reply
+    /// (runtime-api.md §10.2): missing keys keep their defaults.
+    static func windowPrefs(from settings: PackageSettingsWire) -> WindowPrefs? {
+        func value(_ key: String) -> String? {
+            settings.entries.first { $0.key == key }?.value
+        }
+        guard let resizable = value("window.resizable"),
+            let alwaysOnTop = value("window.alwaysOnTop"),
+            let zoom = value("window.zoom"),
+            let zoomValue = Double(zoom)
+        else {
+            return nil
+        }
+        return WindowPrefs(
+            resizable: resizable == "true",
+            alwaysOnTop: alwaysOnTop == "true",
+            zoom: zoomValue)
     }
 
     /// Starts Android on demand, attaches its package channel, and installs an inspected import.

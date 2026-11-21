@@ -282,10 +282,20 @@ public struct UpdateValidator: Sendable {
         let containerExtensions: Set<String> = ["apks", "xapk", "apkm", "zip"]
         let expanded =
             preview.artifactSet.files.count != preview.sourceFileNames.count
-        for declared in candidate.artifacts {
+        for (index, declared) in candidate.artifacts.enumerated() {
             guard let declaredDigest = declared.sha256 else { continue }
             let declaredName = declared.url.lastPathComponent
-            if let file = stagedByName[declaredName] {
+            let storedName = declared.storedFileName(
+                index: index, in: candidate.artifacts)
+            // A bare-name fallback is only safe when the declared name is
+            // unique: with a collision ("…/v2/app.apk" and "…/splits/app.apk")
+            // it would match the other artifact's staged file.
+            let uniqueDeclaredName =
+                candidate.artifacts.filter { $0.url.lastPathComponent == declaredName }
+                .count == 1
+            if let file = stagedByName[storedName]
+                ?? (uniqueDeclaredName ? stagedByName[declaredName] : nil)
+            {
                 v4Checked.append(file.name)
                 if file.sha256 != declaredDigest {
                     v4Refusal = (file.name, declaredDigest.rawValue, file.sha256.rawValue)

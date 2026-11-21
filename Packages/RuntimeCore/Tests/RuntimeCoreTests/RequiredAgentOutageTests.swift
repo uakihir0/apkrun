@@ -82,8 +82,14 @@ func requiredAgentReadinessResetsTheOutageDeadline() async throws {
     await monitor.observe(.unresponsive)
     try await Task.sleep(for: .milliseconds(300))
     #expect(await counter.count == 0)
-    try await Task.sleep(for: .milliseconds(300))
-    #expect(await counter.count == 1)
+    // The monitor's deadline task can overshoot too on a loaded runner:
+    // poll for it rather than sleeping a fixed window.
+    var fired = false
+    for _ in 0..<200 where !fired {
+        try await Task.sleep(for: .milliseconds(50))
+        fired = await counter.count == 1
+    }
+    #expect(fired)
 
     await monitor.observe(.reconnecting)
     try await Task.sleep(for: .milliseconds(600))

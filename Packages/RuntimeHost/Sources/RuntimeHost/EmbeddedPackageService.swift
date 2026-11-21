@@ -359,8 +359,9 @@ public actor EmbeddedPackageService: RuntimeService {
     /// creates it and applies wrapper.json's first-record settings. A record
     /// whose state is not `uninstalledKeepingData` fails B2.
     private func firstBootstrapRecord(for packageID: PackageID) async throws -> Bool {
-        guard let record = try await store.listManagedPackages()
-            .first(where: { $0.packageId == packageID })
+        guard
+            let record = try await store.listManagedPackages()
+                .first(where: { $0.packageId == packageID })
         else {
             return true
         }

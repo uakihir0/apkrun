@@ -131,6 +131,14 @@ final class FakeRuntimeService: RuntimeService, @unchecked Sendable {
         return try await refreshWrapper(packageID: packageID)
     }
 
+    var importBootstrapCalls = 0
+    func importBootstrap(
+        bundleID: String, bootstrapJSON: Data, files: [FileHandle]
+    ) async throws -> OperationHandle {
+        record { importBootstrapCalls += 1 }
+        return OperationHandle(operationID: OperationID(), kind: .bootstrapImport)
+    }
+
     func repairPackage(packageID: RuntimePackageID) async throws -> OperationHandle {
         count("repairPackage")
         return OperationHandle(operationID: OperationID(), kind: .repair)
@@ -332,11 +340,13 @@ private func package(
         managed: true, updateAuthority: authority)
 }
 
-private func wrapperSummary(_ id: String = "com.example.a") -> WrapperSummary {
+private func wrapperSummary(
+    _ id: String = "com.example.a", kind: WrapperKindTag = .local
+) -> WrapperSummary {
     WrapperSummary(
         packageID: RuntimePackageID(rawValue: id)!,
         bundleID: "io.apkrun.android.com-example-a",
-        displayName: "Example", kind: .local,
+        displayName: "Example", kind: kind,
         bundleURL: URL(fileURLWithPath: "/Applications/Example.app"),
         status: WrapperStatus(state: .valid), approval: .generated, launcherVersion: "1",
         createdAt: Date(), refreshedAt: nil)
@@ -434,6 +444,12 @@ final class HomeRowStatusTests: XCTestCase {
         XCTAssertEqual(s(.signatureInvalid).actions, [.createItAgain])
         XCTAssertEqual(s(.unknownPackage).text, "Example isn't installed")
         XCTAssertEqual(s(.unknownPackage).actions, [.trashMacApp])
+        // A portable wrapper also offers the bundled install (§3.4).
+        let portable = status(
+            wrapper: WrapperListEntryWire(
+                summary: wrapperSummary(kind: .portable), state: .unknownPackage))
+        XCTAssertEqual(
+            portable.actions, [.installFromMacApp, .trashMacApp])
     }
 
     // §5.3 row 7

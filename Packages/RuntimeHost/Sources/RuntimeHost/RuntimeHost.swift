@@ -2037,11 +2037,6 @@ public actor RuntimeHost {
         operationID requestedID: WireOperationID,
         clientKind: RuntimeClientKind
     ) throws(RuntimeWireError) -> OperationHandle {
-        guard !change.makeLocal else {
-            throw .runtime(
-                "malformedRequest",
-                message: "makeLocal is not supported yet.")
-        }
         let request = RuntimeRefreshWrapperControlRequest(
             header: APIRequestHeader(
                 operationID: requestedID.rawValue, clientKind: clientKind),
@@ -2312,6 +2307,26 @@ public actor RuntimeHost {
                 stagingRoot: paths.wrapperStagingDirectory
             )
         )
+        // `makeLocal` converts a portable wrapper to `local` and drops
+        // `bootstrap/` (host-ui.md §7.6); keeping `portable` rebuilds the
+        // payload from the installed package (wrapper-json.md §3.2).
+        let targetKind: WrapperKind = change.makeLocal ? .local : entry.kind
+        var bootstrap: BootstrapSet? = nil
+        if targetKind == .portable {
+            guard let storePackageID = PackageID(rawValue: entry.packageId) else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The package ID is not readable.")
+            }
+            do {
+                let installed = try await service.store.bootstrapSet(
+                    for: storePackageID)
+                bootstrap = Self.bootstrapSet(
+                    from: installed.set, in: installed.directory)
+            } catch {
+                throw Self.wrapperWireError(for: .packageNotInstalled(packageID))
+            }
+        }
         let staged: (bundle: URL, cdhash: String)
         do {
             staged = try await generator.stageForRefresh(
@@ -2323,7 +2338,8 @@ public actor RuntimeHost {
                         window: window,
                         updates: updates,
                         integrations: integrations,
-                        kind: entry.kind
+                        kind: targetKind,
+                        bootstrap: bootstrap
                     ),
                     fileName: fileName
                 ),
@@ -2401,7 +2417,8 @@ public actor RuntimeHost {
         let bookmark = (try? finalURL.bookmarkData()) ?? Data()
         do {
             try await registry.finishRefresh(
-                bundleID: entry.bundleId, path: finalURL, bookmark: bookmark)
+                bundleID: entry.bundleId, path: finalURL, bookmark: bookmark,
+                kind: targetKind)
         } catch {
             throw Self.wrapperWireError(for: .registryUnavailable)
         }
@@ -3388,8 +3405,9 @@ public actor RuntimeHost {
         }
         // The wrapper.json of the registered bundle supplies the first-record
         // settings and the initial update defaults (wrapper-json.md §3.3).
-        guard let wrapperDocument = try? WrapperDocumentCodec.load(
-            from: URL(fileURLWithPath: entry.path))
+        guard
+            let wrapperDocument = try? WrapperDocumentCodec.load(
+                from: URL(fileURLWithPath: entry.path))
         else {
             throw Self.wrapperWireError(for: .bootstrapInvalid(.malformed))
         }

@@ -295,6 +295,24 @@ final class PackageDetailModel {
         }
     }
 
+    /// **Make Local Mac App** (§7.6): regenerates the portable wrapper as
+    /// `kind: local`, dropping `bootstrap/` (wrapper-json.md §3.1).
+    func makeLocal() {
+        Task {
+            do {
+                _ = try await service().refreshWrapper(
+                    packageID: packageID,
+                    change: WrapperRefreshWire(makeLocal: true),
+                    iconFile: nil)
+                wrapper = try await service().listWrappers().first {
+                    $0.summary.packageID == packageID
+                }
+            } catch {
+                loadError = Self.describe(error)
+            }
+        }
+    }
+
     func createWrapper() {
         Task {
             do {

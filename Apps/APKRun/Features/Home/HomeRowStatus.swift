@@ -13,6 +13,9 @@ enum HomeRowAction: Equatable {
     case createMacApp
     /// Row 6 `signatureInvalid`: Create It Again
     case createItAgain
+    /// Row 6 `unknownPackage`, portable wrapper: Install from Mac App
+    /// (wrapper-json.md §3.4).
+    case installFromMacApp
     /// Row 6 `unknownPackage`: Move Mac App to Trash
     case trashMacApp
     /// Row 7: Update Mac App
@@ -135,7 +138,11 @@ struct HomeRowStatus: Equatable {
                 return
             case .unknownPackage:
                 text = "\(package.displayName) isn't installed"
-                actions = [.trashMacApp]
+                if wrapper?.summary.kind == .portable {
+                    actions = [.installFromMacApp, .trashMacApp]
+                } else {
+                    actions = [.trashMacApp]
+                }
                 return
             case .valid, .moved:
                 break

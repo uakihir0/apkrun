@@ -209,4 +209,41 @@ struct PortableWrapperTests {
                 ))
         }
     }
+
+    /// **Make Local Mac App** (host-ui.md §7.6) flips a portable entry to
+    /// `local` through `finishRefresh`.
+    @Test func finishRefreshChangesKind() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let registry = WrapperRegistry(
+            fileURL: root.appendingPathComponent("registry.json"),
+            stagingRoot: root)
+        _ = await registry.load()
+        let bundleID = "io.apkrun.android.com-example-game"
+        try await registry.markPending(
+            WrapperRegistryEntry(
+                bundleId: bundleID,
+                packageId: "com.example.game",
+                kind: .portable,
+                state: .pending,
+                path: root.appendingPathComponent("Game.app").path,
+                cdhash: "old",
+                launcherVersion: "1",
+                launcherAPI: "1",
+                fileName: "Game",
+                displayName: "Game",
+                createdAt: Date()))
+        try await registry.activate(
+            bundleID: bundleID,
+            path: root.appendingPathComponent("Game.app"),
+            bookmark: Data())
+        try await registry.finishRefresh(
+            bundleID: bundleID,
+            path: root.appendingPathComponent("Game.app"),
+            bookmark: Data(),
+            kind: .local)
+        #expect(await registry.entry(bundleID: bundleID)?.kind == .local)
+    }
 }

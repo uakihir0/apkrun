@@ -100,6 +100,7 @@ private final class FrameStatisticsController {
 @MainActor
 private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
+    private var bootstrapInstall: BootstrapInstallController?
     private let frameStatistics = FrameStatisticsController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -139,6 +140,14 @@ private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
         // TODO(#45): install a ClipboardController once the launcher owns a
         // session window (WrapperIdentity + openSession); the session window is
         // built by #45.
+        let bootstrapInstall = BootstrapInstallController()
+        self.bootstrapInstall = bootstrapInstall
+        Task {
+            // Screen N: `openSession` on an uninstalled portable package
+            // returns `packageNotInstalled`; the launcher offers the bundled
+            // install and then repeats `openSession` (retried by #45).
+            _ = await bootstrapInstall.offerInstall()
+        }
     }
 
     @objc private func toggleFrameStatistics(_ sender: NSMenuItem) {

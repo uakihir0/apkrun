@@ -389,6 +389,12 @@ private struct AppRowView: View {
                 Button(action == .createMacApp ? "Create Mac App" : "Create It Again") {
                     Task { await model.wrappers.createWrapper(packageID: package.packageID) }
                 }
+            case .installFromMacApp:
+                Button("Install from Mac App") {
+                    if let entry = model.wrappers.entry(for: package.packageID) {
+                        Task { await model.wrappers.installFromMacApp(entry: entry) }
+                    }
+                }
             case .trashMacApp:
                 Button("Move Mac App to Trash") {
                     if let url = model.wrappers.entry(for: package.packageID)?.summary.bundleURL {

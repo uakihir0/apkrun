@@ -1628,6 +1628,16 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return packageInfoData
     }
 
+    func listSessions(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        let reply = RuntimeListSessionsControlReply(sessions: [])
+        return (try? JSONEncoder().encode(reply)) ?? Data()
+    }
+
+    func packageIcon(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        let reply = RuntimePackageIconControlReply()
+        return (try? JSONEncoder().encode(reply)) ?? Data()
+    }
+
     func importPackage(
         _ request: Data,
         files: [FileHandle]

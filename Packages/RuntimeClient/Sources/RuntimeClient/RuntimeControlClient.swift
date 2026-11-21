@@ -695,6 +695,56 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Lists the live app sessions (host-ui.md §5.2).
+    public func listSessions() async throws(RuntimeControlClientError) -> [WireSessionSummary] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeListSessionsControlRequest(header: makeHeader())
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.listSessions(data)
+            let reply = try Self.decode(RuntimeListSessionsControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let sessions = reply.sessions else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return sessions
+        } catch let error as RuntimeControlClientError {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: Self.transportFailure(error))
+            throw Self.transportFailure(error)
+        }
+    }
+
+    /// Returns the composed Mac icon PNG of one package (host-ui.md §5.3).
+    public func packageIcon(
+        packageID: RuntimePackageID
+    ) async throws(RuntimeControlClientError) -> Data? {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimePackageIconControlRequest(
+                header: makeHeader(), packageID: packageID)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.packageIcon(data)
+            let reply = try Self.decode(RuntimePackageIconControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            return reply.png
+        } catch let error as RuntimeControlClientError {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: Self.transportFailure(error))
+            throw Self.transportFailure(error)
+        }
+    }
+
     /// Copies and inspects package files without starting Android.
     ///
     /// The file handles are passed once to the daemon. A transport failure is not replayed because
@@ -2537,6 +2587,8 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func resetAndroid(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func listPackages(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func listSessions(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func packageIcon(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func importPackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
     func installImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func discardImport(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -2918,6 +2970,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.packageInfo(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func listSessions(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.listSessions(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func packageIcon(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.packageIcon(request) { response in finish(.success(response)) }
         }
     }
 

@@ -1122,6 +1122,8 @@ extension RuntimeSetupControlRequest: VersionedControlRequest {}
 extension RuntimeResetAndroidControlRequest: VersionedControlRequest {}
 extension RuntimeListPackagesControlRequest: VersionedControlRequest {}
 extension RuntimePackageInfoControlRequest: VersionedControlRequest {}
+extension RuntimeListSessionsControlRequest: VersionedControlRequest {}
+extension RuntimePackageIconControlRequest: VersionedControlRequest {}
 extension RuntimeLaunchControlRequest: VersionedControlRequest {}
 extension RuntimeTerminateControlRequest: VersionedControlRequest {}
 extension RuntimeImportPackageControlRequest: VersionedControlRequest {}
@@ -1176,6 +1178,8 @@ enum RuntimeControlOperation {
     case resetAndroid
     case listPackages
     case packageInfo
+    case listSessions
+    case packageIcon
     case launch
     case terminate
     case importPackage
@@ -1280,6 +1284,13 @@ enum RuntimeControlOperation {
             case .app, .menuBar, .cli, .launcher:
                 true
             case .wrapper:
+                false
+            }
+        case .listSessions, .packageIcon:
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
                 false
             }
         case .launch, .terminate, .verifyWrapper, .placeStagedWrapper, .wrapperInfo,
@@ -1647,6 +1658,78 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimePackageInfoControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func listSessions(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply, snapshotBarrier: true)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeListSessionsControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .listSessions,
+                as: RuntimeListSessionsControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeListSessionsControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            do {
+                response.beginSnapshotBarrier()
+                let sessions = await host.listSessions()
+                response.send(Self.encode(RuntimeListSessionsControlReply(sessions: sessions)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeListSessionsControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func packageIcon(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply, snapshotBarrier: true)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimePackageIconControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .packageIcon,
+                as: RuntimePackageIconControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimePackageIconControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimePackageIconControlRequest.self, from: request) else {
+                response.send(
+                    Self.encode(RuntimePackageIconControlReply(error: Self.malformedWireError))
+                )
+                return
+            }
+            do {
+                response.beginSnapshotBarrier()
+                let png = await host.packageIcon(packageID: decoded.packageID)
+                response.send(Self.encode(RuntimePackageIconControlReply(png: png)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimePackageIconControlReply(error: wireError)))
             }
         }
     }

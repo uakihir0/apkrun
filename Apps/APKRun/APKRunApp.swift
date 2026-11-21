@@ -13,6 +13,7 @@ struct APKRunApp: App {
     @State private var isRegistrationErrorPresented = false
     @StateObject private var approvalCenter = ApprovalCenter.shared
     @State private var runtimeStatus = RuntimeStatusModel()
+    @State private var homeModel = HomeModel()
 
     /// Whether apkrund opened the app for a wrapper approval (host-ui.md §3.3).
     /// Only the approval window is shown then.
@@ -45,10 +46,19 @@ struct APKRunApp: App {
 
     var body: some Scene {
         WindowGroup("APKRun") {
-            Text("APKRun")
-                .frame(minWidth: 480, minHeight: 320)
+            HomeView()
+                .frame(minWidth: 640, minHeight: 420)
                 .environment(runtimeStatus)
-                .task { runtimeStatus.start() }
+                .environment(homeModel)
+                .task {
+                    runtimeStatus.start()
+                    homeModel.start()
+                }
+                // apkrun:// URLs only navigate (host-ui.md §3.1).
+                .onOpenURL { url in
+                    guard let route = AppRouter.route(url) else { return }
+                    homeModel.apply(route)
+                }
                 // First-run provisioning (host-ui.md §4): the sheet reopens
                 // whenever setup is not `complete`; apkrund resumes at the
                 // first incomplete step.

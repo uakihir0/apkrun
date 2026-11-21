@@ -20,7 +20,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// (runtime-api.md §10.5).
     /// 1.21 adds `refreshWrapper` and `refreshAllWrappers` (wrapper.md §9.3).
     /// 1.22 adds `repairPackage` (package-store.md §11.1).
-    public static let current = APIVersion(major: 1, minor: 22)
+    /// 1.23 adds `listSessions`, `packageIcon`, and `sessions` topic events
+    /// (host-ui.md §5.2–§5.3).
+    public static let current = APIVersion(major: 1, minor: 23)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -592,6 +594,34 @@ public struct RuntimeListPackagesControlReply: Codable, Equatable, Sendable {
     }
 }
 
+/// Returns the composed Mac icon of one package (host-ui.md §5.3).
+public struct RuntimePackageIconControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The Android package whose icon is requested.
+    public let packageID: RuntimePackageID
+
+    /// Creates a package-icon request.
+    public init(header: APIRequestHeader, packageID: RuntimePackageID) {
+        self.header = header
+        self.packageID = packageID
+    }
+}
+
+/// The result or typed error returned by a control package-icon request.
+public struct RuntimePackageIconControlReply: Codable, Equatable, Sendable {
+    /// The icon PNG bytes, present when the package has an icon.
+    public let png: Data?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a reply.
+    public init(png: Data? = nil, error: RuntimeWireError? = nil) {
+        self.png = png
+        self.error = error
+    }
+}
+
 /// The result or typed error returned by a control package-info request.
 public struct RuntimePackageInfoControlReply: Codable, Equatable, Sendable {
     /// The package details, present on success.
@@ -680,6 +710,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func listPackages(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns details for one package.
     func packageInfo(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Lists the live app sessions (host-ui.md §5.2).
+    func listSessions(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns the composed Mac icon PNG of one package (host-ui.md §5.3).
+    func packageIcon(_ request: Data, reply: @escaping (Data) -> Void)
     /// Copies and inspects APK files without starting Android.
     func importPackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
     /// Starts installation and returns an operation handle without waiting for installation to finish.

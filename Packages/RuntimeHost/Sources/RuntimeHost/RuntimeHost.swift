@@ -1515,6 +1515,84 @@ public actor RuntimeHost {
         return try await service.packageInfo(request)
     }
 
+    /// Snapshots of the live app sessions (host-ui.md §5.2).
+    public func listSessions() async -> [WireSessionSummary] {
+        guard let service = sessionServiceForIntegrations() else {
+            return []
+        }
+        return await service.sessionSnapshots().compactMap(Self.wireSessionSummary)
+    }
+
+    /// The composed Mac icon PNG of one package (host-ui.md §5.3).
+    ///
+    /// Returns `nil` when the store holds no rendered icon; callers fall back
+    /// to the host preview placeholder.
+    public func packageIcon(packageID: RuntimePackageID) async -> Data? {
+        let service = packageQueryServiceInstance()
+        try? await service.open()
+        guard
+            let rendered = await service.renderedIconLayers(for: packageID),
+            let master = Self.composedIconMaster(
+                kind: rendered.manifest.kind, layers: rendered.layers),
+            let png = try? IconComposer.pngData(master)
+        else { return nil }
+        return png
+    }
+
+    /// Maps a session snapshot to its wire summary (host-ui.md §5.2).
+    static func wireSessionSummary(_ snapshot: AppSessionSnapshot) -> WireSessionSummary? {
+        let phase: WireSessionPhase
+        switch snapshot.state {
+        case .requested, .waitingForRuntime, .acquiringDisplay, .launching:
+            phase = .starting
+        case .running:
+            phase = .running
+        case .backgrounded:
+            phase = .backgrounded
+        case .closing:
+            phase = .closing
+        case .ended:
+            phase = .closing
+        }
+        guard case .app(let sessionID) = snapshot.id,
+            let packageID = RuntimePackageID(rawValue: snapshot.packageID)
+        else { return nil }
+        return WireSessionSummary(
+            sessionID: sessionID,
+            packageID: packageID,
+            phase: phase
+        )
+    }
+
+    /// The `sessions` topic event for one committed session snapshot.
+    static func sessionChange(for snapshot: AppSessionSnapshot) -> SessionChange? {
+        guard let summary = wireSessionSummary(snapshot) else {
+            return nil
+        }
+        if case .ended(let reason) = snapshot.state {
+            return .ended(
+                sessionID: summary.sessionID,
+                packageID: summary.packageID,
+                reason: sessionEndReasonName(reason))
+        }
+        return .changed(summary)
+    }
+
+    /// The `SessionEndReason` case name sent on the wire.
+    static func sessionEndReasonName(_ reason: SessionEndReason) -> String {
+        switch reason {
+        case .userClosed: return "userClosed"
+        case .appExited: return "appExited"
+        case .appCrashed: return "appCrashed"
+        case .runtimeStopped: return "runtimeStopped"
+        case .updating: return "updating"
+        case .runtimeUpdating: return "runtimeUpdating"
+        case .packageUninstalled: return "packageUninstalled"
+        case .updateHealthCheck: return "updateHealthCheck"
+        case .error: return "error"
+        }
+    }
+
     /// Verifies a wrapper bundle against the registry and the package store (runtime-api.md §10.4).
     ///
     /// The check never starts Android and never reads the store beyond one package list. When the
@@ -2554,26 +2632,31 @@ public actor RuntimeHost {
     /// Composes the wrapper icon from store-rendered layers: the `.icns`
     /// bytes plus the SHA-256 hex digest of the 1024 px master
     /// (wrapper.md §8.2–§8.5). The monochrome layer is stored but unused.
-    static func composedIcon(
+    /// The 1024px icon master for a rendered layer set (wrapper.md §8.2).
+    static func composedIconMaster(
         kind: StoreIconKind, layers: [StoreIconLayer]
-    ) -> (icns: Data, digest: String)? {
+    ) -> CGImage? {
         func image(_ role: StoreIconRole) -> CGImage? {
             guard let png = layers.first(where: { $0.role == role })?.png,
                 let source = CGImageSourceCreateWithData(png as CFData, nil)
             else { return nil }
             return CGImageSourceCreateImageAtIndex(source, 0, nil)
         }
-        let master: CGImage?
         switch kind {
         case .adaptive:
             guard let background = image(.background), let foreground = image(.foreground)
             else { return nil }
-            master = try? IconComposer.composeAdaptive(
+            return try? IconComposer.composeAdaptive(
                 background: background, foreground: foreground)
         case .legacy:
-            master = image(.legacy).flatMap { try? IconComposer.composeLegacy($0) }
+            return image(.legacy).flatMap { try? IconComposer.composeLegacy($0) }
         }
-        guard let master,
+    }
+
+    static func composedIcon(
+        kind: StoreIconKind, layers: [StoreIconLayer]
+    ) -> (icns: Data, digest: String)? {
+        guard let master = composedIconMaster(kind: kind, layers: layers),
             let masterPNG = try? IconComposer.pngData(master),
             let icns = try? IconsetWriter.icnsData(from: master)
         else { return nil }
@@ -3842,6 +3925,10 @@ public actor RuntimeHost {
             logSink: diagnostics?.logSink
         )
         await attachPerfObservers(to: service)
+        await service.setSessionChangeObserver { [weak self] snapshot in
+            guard let change = Self.sessionChange(for: snapshot) else { return }
+            self?.eventHub.publishSessionChange(change)
+        }
         headlessSessionService = service
         await wireUpdateGateSessionHooks()
         return service

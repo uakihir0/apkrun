@@ -241,6 +241,8 @@ public enum EventPayload: Codable, Equatable, Sendable {
     case wrappers(WrapperChange)
     /// A Mac ↔ Android integration event, such as a guest clip for the key window.
     case integrations(IntegrationChange)
+    /// An app session appeared, changed phase, or ended.
+    case sessions(SessionChange)
     /// Events for the topic were dropped; fetch a fresh snapshot.
     case resyncRequired(EventTopic)
     /// The daemon reported an event kind added by a newer API version.
@@ -253,6 +255,7 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case resyncRequired
         case wrappers
         case integrations
+        case sessions
     }
 
     private enum AssociatedKey: String, CodingKey {
@@ -286,6 +289,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case "integrations":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .integrations(try payload.decode(IntegrationChange.self, forKey: .first))
+        case "sessions":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .sessions(try payload.decode(SessionChange.self, forKey: .first))
         default:
             self = .unknown
         }
@@ -309,6 +315,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
             try payload.encode(change, forKey: .first)
         case .integrations(let change):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .integrations)
+            try payload.encode(change, forKey: .first)
+        case .sessions(let change):
+            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .sessions)
             try payload.encode(change, forKey: .first)
         case .resyncRequired(let topic):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .resyncRequired)

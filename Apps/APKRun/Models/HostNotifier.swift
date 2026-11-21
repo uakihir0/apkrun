@@ -147,7 +147,11 @@ final class HostNotifier: NSObject, UNUserNotificationCenterDelegate {
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        notification.request.content.sound != nil ? [.banner, .list, .sound] : [.banner, .list]
+        // A replay restores an already-seen notification: list only, no banner.
+        guard notification.request.content.interruptionLevel != .passive else {
+            return [.list]
+        }
+        return notification.request.content.sound != nil ? [.banner, .list, .sound] : [.banner, .list]
     }
 
     nonisolated func userNotificationCenter(

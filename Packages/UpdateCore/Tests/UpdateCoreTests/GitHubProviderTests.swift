@@ -58,6 +58,11 @@ private struct GitHubMemoryCache: ProviderCache {
     }
 }
 
+private final class CursorRecorder: @unchecked Sendable {
+    private(set) var cursor: ProviderCursor?
+    func record(_ cursor: ProviderCursor) { self.cursor = cursor }
+}
+
 private struct GitHubCredentials: ProviderCredentials {
     var token: String?
     func token(for _: String) -> String? { token }
@@ -264,8 +269,15 @@ private func releaseJSON(
     // A release-note edit moves the listing ETag; the chosen release and
     // asset are unchanged, so the processed release is not offered again.
     http.getEtag = "\"listing-2\""
-    let second = try await provider.check(package, context: context)
+    let refreshed = CursorRecorder()
+    var context2 = context
+    context2.cursorRefresh = { refreshed.record($0) }
+    let second = try await provider.check(package, context: context2)
     #expect(second == nil)
+    // …but the refreshed listing cursor still reaches the caller, so the
+    // next check can stay conditional on the new ETag.
+    #expect(refreshed.cursor?.value.hasPrefix("\"listing-2\"\t") == true)
+    #expect(refreshed.cursor?.value.contains("2:200:") == true)
 }
 
 @Test func checkRefetchesWhenTheChannelOrGlobChanged() async throws {

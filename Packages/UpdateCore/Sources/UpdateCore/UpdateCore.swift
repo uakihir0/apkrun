@@ -282,6 +282,11 @@ public struct ProviderContext: Sendable {
     /// versions but none is compatible (update-system.md §4.5 `signerDiffers`).
     /// Lets a provider return nil yet still record the reason.
     public var incompatibleNote: (@Sendable (NoCompatibleArtifactReason) -> Void)?
+    /// Called when a check ends with no candidate but the provider refreshed
+    /// its listing state (e.g. a new GitHub ETag for the same release).
+    /// Lets a provider return nil yet still advance the stored cursor so the
+    /// next check stays conditional.
+    public var cursorRefresh: (@Sendable (ProviderCursor) -> Void)?
 
     /// Creates a provider context.
     public init(
@@ -289,13 +294,15 @@ public struct ProviderContext: Sendable {
         cache: any ProviderCache,
         credentials: any ProviderCredentials,
         userInitiated: Bool = false,
-        incompatibleNote: (@Sendable (NoCompatibleArtifactReason) -> Void)? = nil
+        incompatibleNote: (@Sendable (NoCompatibleArtifactReason) -> Void)? = nil,
+        cursorRefresh: (@Sendable (ProviderCursor) -> Void)? = nil
     ) {
         self.http = http
         self.cache = cache
         self.credentials = credentials
         self.userInitiated = userInitiated
         self.incompatibleNote = incompatibleNote
+        self.cursorRefresh = cursorRefresh
     }
 }
 

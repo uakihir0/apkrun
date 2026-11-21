@@ -209,6 +209,9 @@ public struct GitHubProvider: UpdateProvider {
         let cursor = ProviderCursor(
             type: .github, value: cursorValue(etag: listingTag, release: release, asset: asset))
         if !context.userInitiated, storedIdentity == identity(release: release, asset: asset) {
+            // Same asset, but the listing may carry a new ETag: hand the
+            // refreshed cursor up so the next check stays conditional.
+            context.cursorRefresh?(cursor)
             return nil
         }
         return UpdateCandidate(

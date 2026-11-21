@@ -708,6 +708,11 @@ extension RuntimeHost {
                 // The global switch wins over the stored package value
                 // (configuration.md §2.2).
                 guard settings.globalEnabled("sharedFolders") else { return "off" }
+                // The picker has no stored setting: while the feature is on
+                // its ceiling is the root's own cap (§6.4).
+                if packageID.rawValue == SharedFolderService.documentsUIPackage {
+                    return "readWrite"
+                }
                 return settings.packageValue(packageID.rawValue, "sharedFolders") ?? "off"
             })
     }

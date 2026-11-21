@@ -447,18 +447,6 @@ public actor SharedFolderService {
         // visible here, and the picker's choice is itself the user's consent.
         // The picker may therefore create in roots whose cap is readWrite;
         // every other write op still requires the real package's access.
-        if package.rawValue == Self.browserOnlyPackage {
-            let roots = await source.roots()
-            guard let root = roots.first(where: { $0.rootID == rootID }) else {
-                throw SharedFolderFailure(.notFound)
-            }
-            guard root.maxAccess == .readWrite else {
-                throw SharedFolderFailure(.permissionDenied, .readOnly)
-            }
-            return try await create(
-                root: root, package: package,
-                parentPath: parentPath, name: name, isDirectory: isDirectory)
-        }
         let (root, _) = try await checkedAccess(
             package: package, rootID: rootID, write: true)
         return try await create(
@@ -611,10 +599,16 @@ public actor SharedFolderService {
             throw SharedFolderFailure(.notFound)
         }
         if package.rawValue == Self.browserOnlyPackage {
-            guard !write else {
+            guard write else { return (root, .readOnly) }
+            // The picker's effective access is the global switch capped by
+            // the root: a create through it can never bypass a global off or
+            // a readOnly cap (§6.4).
+            guard let effective = try await effectiveAccess(package: package, root: root),
+                effective == .readWrite
+            else {
                 throw SharedFolderFailure(.permissionDenied, .readOnly)
             }
-            return (root, .readOnly)
+            return (root, effective)
         }
         guard let effective = try await effectiveAccess(package: package, root: root) else {
             throw SharedFolderFailure(

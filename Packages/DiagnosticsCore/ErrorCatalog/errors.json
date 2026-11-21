@@ -695,6 +695,47 @@
       }
     },
     {
+      "code": "image.imageRejected",
+      "message": {
+        "en": "This Android image was rejected."
+      },
+      "remediation": {
+        "en": "The image failed its compatibility or post-migration check. Install a newer image or roll back to the previous one."
+      },
+      "parameters": [
+        "version",
+        "reason"
+      ],
+      "action": "reportProblem",
+      "cliExit": 1,
+      "doc": {
+        "case": "imageRejected(version:reason:)",
+        "when": "an image fails its compatibility check, migration, or post-migration health check",
+        "raisedBy": "ImageUpdateCoordinator",
+        "ref": "[../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4"
+      }
+    },
+    {
+      "code": "image.imageUpdateBusy",
+      "message": {
+        "en": "An Android image update is already in progress."
+      },
+      "remediation": {
+        "en": "Wait for the current image operation to finish, then try again."
+      },
+      "parameters": [
+        "detail"
+      ],
+      "cliExit": 1,
+      "doc": {
+        "case": "imageUpdateBusy(detail:)",
+        "when": "a second image update is requested while one is running",
+        "raisedBy": "ImageUpdateCoordinator",
+        "ref": "[../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4"
+      },
+      "action": "retry"
+    },
+    {
       "code": "image.incompatibleProtocol",
       "parameters": [
         "minimum",

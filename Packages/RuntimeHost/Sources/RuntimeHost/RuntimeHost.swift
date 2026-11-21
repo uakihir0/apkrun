@@ -469,6 +469,9 @@ public actor RuntimeHost {
             } catch {
                 recordDegradedStartup(step: 5, code: error.qualifiedCode)
             }
+            // #59: a daemon restart may leave a migration half-applied;
+            // reconcile update-state.json against what is actually installed.
+            await reconcileImageUpdate()
         }
 
         // Startup step 7: the provisioning record feeds status and the notProvisioned gate.
@@ -5465,15 +5468,64 @@ public actor RuntimeHost {
                     throw fail(.installingImage, error)
                 }
                 setProvisioningState(.installingImage(fraction: 1))
-            case .feed, .archive, .unknown:
-                // The release feed and .aar archives arrive with #59; setup needs a local image
-                // bundle until then (apkrun setup --image <dir>).
+            case .archive(let fileIndex):
+                // `apkrun setup --image <file.aar>` installs the archive
+                // (runtime-maintenance.md §4.7); `.feed` arrives with the
+                // distribution task (#88). The `.aar` travels as a FileHandle;
+                // stage a copy so the extractor sees a filesystem path. The
+                // user's file is only read, never moved or deleted.
+                guard fileIndex >= 0, fileIndex < files.count else {
+                    throw ProvisioningStepFailure(
+                        step: .installingImage,
+                        wireError: .runtime(
+                            "malformedRequest",
+                            message: "The image archive couldn't be read."
+                        )
+                    )
+                }
+                let staging = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("apkrun-image-\(UUID().uuidString).aar")
+                FileManager.default.createFile(atPath: staging.path, contents: nil)
+                defer { try? FileManager.default.removeItem(at: staging) }
+                do {
+                    let source = files[fileIndex]
+                    let out = try FileHandle(forWritingTo: staging)
+                    try source.seek(toOffset: 0)
+                    while let chunk = try source.read(upToCount: 1 << 20), !chunk.isEmpty {
+                        try out.write(contentsOf: chunk)
+                    }
+                    try out.synchronize()
+                    try out.close()
+                } catch {
+                    throw fail(.installingImage, error)
+                }
+                let images =
+                    imageStore
+                    ?? ImageStore(
+                        paths: paths,
+                        trust: .standard(),
+                        diagnostics: diagnostics ?? .live(paths: paths)
+                    )
+                imageStore = images
+                do {
+                    let installed = try await images.install(from: .archive(staging))
+                    image = installed
+                    if instanceStore == nil, let diagnostics {
+                        instanceStore = InstanceStore(paths: paths, diagnostics: diagnostics)
+                    }
+                } catch {
+                    throw fail(.installingImage, error)
+                }
+                setProvisioningState(.installingImage(fraction: 1))
+            case .feed, .unknown:
+                // The release feed arrives with #88; setup needs a local image
+                // bundle or .aar until then (apkrun setup --image <path>).
                 throw ProvisioningStepFailure(
                     step: .installingImage,
                     wireError: .runtime(
                         "serviceUnavailable",
                         message: "Image downloads are not available yet.",
-                        remediation: "Install a local image bundle with `apkrun setup --image <folder>`."
+                        remediation: "Install a local image with `apkrun setup --image <folder-or-aar>`."
                     )
                 )
             }

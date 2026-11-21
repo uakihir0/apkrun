@@ -86,8 +86,8 @@ public actor RuntimeHost {
     /// completes (runtime-daemon.md §9.2). The daemon enforces it; dev and test hosts do not.
     private let enforceProvisioning: Bool
     private var provisioningState: WireProvisioningState = .notStarted
-    private var imageStore: ImageStore?
-    private var diagnostics: DiagnosticsContext?
+    var imageStore: ImageStore?
+    var diagnostics: DiagnosticsContext?
     /// The health-check registry, for checks hosted outside this file
     /// (`updates.waiting` in RuntimeHostUpdates.swift).
     var healthCheckRegistry: HealthCheckRegistry? {
@@ -98,12 +98,12 @@ public actor RuntimeHost {
     var hostLogSink: (any LogSink)? {
         diagnostics?.logSink
     }
-    private var logger: APKLogger?
+    var logger: APKLogger?
     private var instanceLock: InstanceLock?
     private var stateStore: DaemonStateStore?
     private var startupAssessment: DaemonStartupAssessment?
-    private var image: InstalledImage?
-    private var instanceStore: InstanceStore?
+    var image: InstalledImage?
+    var instanceStore: InstanceStore?
     var supervisor: RuntimeSupervisor?
     private var supervisorEventsTask: Task<Void, Never>?
     private var packageQueryService: EmbeddedPackageService?
@@ -118,7 +118,7 @@ public actor RuntimeHost {
     private var runtimeSessionGeneration: UInt64 = 0
     private var bootProgressEstimator: BootProgressEstimator?
     private var bootStartedAt: ContinuousClock.Instant?
-    private var bootPurpose: RuntimeAPI.BootPurpose?
+    var bootPurpose: RuntimeAPI.BootPurpose?
     private var bootProgressGeneration: UInt64 = 0
     private var runtimeStateSnapshotRevision: UInt64 = 0
     private var runtimeStateEventRevision: UInt64 = 0
@@ -190,6 +190,7 @@ public actor RuntimeHost {
     var apkrunAppReported = false
     /// Whether an image migration is in progress (#59 reports it here).
     var imageMigrating = false
+    var _imageUpdateCoordinator: ImageUpdateCoordinator?
     /// `restartForUpdate` set this; the daemon exits at the next idle check.
     var restartExitRequested = false
 
@@ -5771,7 +5772,7 @@ public actor RuntimeHost {
 
     /// The runtime supervisor, creating it when provisioning installed the first image after
     /// the daemon started without one.
-    private func supervisorInstance() throws -> RuntimeSupervisor {
+    func supervisorInstance() throws -> RuntimeSupervisor {
         if let supervisor {
             return supervisor
         }

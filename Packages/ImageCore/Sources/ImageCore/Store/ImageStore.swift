@@ -66,6 +66,11 @@ public actor ImageStore {
         return try installedImage(named: name, depth: .quick)
     }
 
+    /// The installed image for `version`, or `imageNotInstalled`.
+    public func installed(_ version: ImageVersion) throws(ImageFailure) -> InstalledImage {
+        try installedImage(named: version.description, depth: .quick)
+    }
+
     /// The previous image, when one is kept.
     public func previous() -> InstalledImage? {
         guard let name = linkedName(paths.previousImage) else {

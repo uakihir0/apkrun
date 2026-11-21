@@ -361,7 +361,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
 
     /// §7.3 Update Now: close the live session with the updating reason;
     /// the Android process may keep running — only the session ends.
-    func endSessionForUpdate(packageID: RuntimePackageID) async {
+    func endSessionForUpdate(packageID: RuntimePackageID, reason: SessionEndReason = .updating) async {
         guard let sessionID,
             let current = await registry.session(packageID: packageID.rawValue),
             current.id == sessionID
@@ -369,7 +369,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         if !current.state.isEnded, current.state != .closing {
             _ = try? await transition(to: .closing)
         }
-        _ = try? await transition(to: .ended(.updating))
+        _ = try? await transition(to: .ended(reason))
     }
 
     /// §7.3 Update Now: relaunch the package after the install.

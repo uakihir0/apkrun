@@ -1,4 +1,5 @@
 import RuntimeAPI
+import RuntimeCore
 
 /// Queries package-session activity and closes an app session before package removal.
 /// A session or background-task event the update gate reacts to
@@ -25,7 +26,7 @@ protocol PackageMutationSessionHandling: Sendable {
         _ observer: @escaping @Sendable (RuntimePackageID, PackageSessionActivity) -> Void
     ) async
     /// §7.3 Update Now: end the package's live session with `.updating`.
-    func endSessionForUpdate(packageID: RuntimePackageID) async
+    func endSessionForUpdate(packageID: RuntimePackageID, reason: SessionEndReason) async
     /// §7.3 Update Now: launch the package again after the install.
     func reopenPackageSession(packageID: RuntimePackageID) async throws
 }
@@ -40,7 +41,7 @@ extension PackageMutationSessionHandling {
         _ observer: @escaping @Sendable (RuntimePackageID, PackageSessionActivity) -> Void
     ) async {}
     /// Ending sessions is a no-op when nothing can run sessions.
-    func endSessionForUpdate(packageID: RuntimePackageID) async {}
+    func endSessionForUpdate(packageID: RuntimePackageID, reason: SessionEndReason) async {}
     /// Reopening is a no-op when the service cannot launch sessions.
     func reopenPackageSession(packageID: RuntimePackageID) async throws {}
 }

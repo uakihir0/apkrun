@@ -1562,7 +1562,7 @@ extension RuntimeHost {
                 else {
                     return
                 }
-                await handling.endSessionForUpdate(packageID: wireID)
+                await handling.endSessionForUpdate(packageID: wireID, reason: .updating)
             },
             reopenPackage: { [weak self] packageID in
                 guard let self,

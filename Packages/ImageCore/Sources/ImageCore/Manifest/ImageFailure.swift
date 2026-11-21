@@ -75,6 +75,12 @@ public enum ImageFailure: APKRunError, Equatable {
     /// The migrated image failed its health check and A was restored (§12.3 step 6b).
     case migrationHealthFailed(report: String)
 
+    /// The version is on the image rejection list (runtime-maintenance.md §4.8).
+    case imageRejected(version: String, reason: String)
+
+    /// An image apply is already running.
+    case imageUpdateBusy(detail: String)
+
     /// The stable error-code namespace owned by ImageCore.
     public static let domain: ErrorDomain = .image
 
@@ -105,6 +111,8 @@ public enum ImageFailure: APKRunError, Equatable {
         case .imageArchiveUnsafeEntry: "imageArchiveUnsafeEntry"
         case .migrationInterrupted: "migrationInterrupted"
         case .migrationHealthFailed: "migrationHealthFailed"
+        case .imageRejected: "imageRejected"
+        case .imageUpdateBusy: "imageUpdateBusy"
         }
     }
 
@@ -158,6 +166,10 @@ public enum ImageFailure: APKRunError, Equatable {
             [:]
         case .migrationHealthFailed(let report):
             ["report": .text(report)]
+        case .imageRejected(let version, let reason):
+            ["version": .text(version), "reason": .text(reason)]
+        case .imageUpdateBusy(let detail):
+            ["detail": .text(detail)]
         }
     }
 

@@ -416,6 +416,8 @@ public enum MaintenanceEvent: Codable, Equatable, Sendable {
     case hostStateChanged(HostState)
     /// The self-update probe's snapshot changed.
     case selfUpdateStatusChanged(SelfUpdateStatus)
+    /// The Android image update phase changed (runtime-maintenance.md §4.3).
+    case imageUpdateChanged(WireImageUpdatePhase)
     /// An event kind added by a newer build.
     case unknown
 
@@ -438,6 +440,9 @@ public enum MaintenanceEvent: Codable, Equatable, Sendable {
         case "selfUpdateStatusChanged":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .selfUpdateStatusChanged(try payload.decode(SelfUpdateStatus.self, forKey: .first))
+        case "imageUpdateChanged":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .imageUpdateChanged(try payload.decode(WireImageUpdatePhase.self, forKey: .first))
         case "unknown":
             self = .unknown
         default:
@@ -457,6 +462,10 @@ public enum MaintenanceEvent: Codable, Equatable, Sendable {
             var payload = container.nestedContainer(
                 keyedBy: AssociatedKey.self, forKey: RuntimeEventCodingKey("selfUpdateStatusChanged"))
             try payload.encode(status, forKey: .first)
+        case .imageUpdateChanged(let phase):
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self, forKey: RuntimeEventCodingKey("imageUpdateChanged"))
+            try payload.encode(phase, forKey: .first)
         case .unknown:
             Self.encodeEmpty("unknown", into: &container)
         }
@@ -467,5 +476,222 @@ public enum MaintenanceEvent: Codable, Equatable, Sendable {
         into container: inout KeyedEncodingContainer<RuntimeEventCodingKey>
     ) {
         _ = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: RuntimeEventCodingKey(caseName))
+    }
+}
+
+// MARK: - Android image update
+
+/// One image version the updater might apply (runtime-maintenance.md §4.3).
+public struct WireImageCandidate: Codable, Equatable, Sendable {
+    /// The image version.
+    public var version: String
+    /// The feed channel the entry came from, if any.
+    public var channel: String?
+    /// Expected SHA-256 of the archive, lower-case hex, when the feed gave one.
+    public var archiveSHA256: String?
+    /// Expected archive size in bytes, when the feed gave one.
+    public var archiveSize: Int64?
+    /// The installed tree's size, for the space check.
+    public var expandedSize: Int64?
+    /// Where the archive comes from.
+    public var archiveLocation: String?
+    /// Whether the entry is critical (ignores the rollout bucket).
+    public var isCritical: Bool
+
+    /// Creates a candidate.
+    public init(
+        version: String,
+        channel: String? = nil,
+        archiveSHA256: String? = nil,
+        archiveSize: Int64? = nil,
+        expandedSize: Int64? = nil,
+        archiveLocation: String? = nil,
+        isCritical: Bool = false
+    ) {
+        self.version = version
+        self.channel = channel
+        self.archiveSHA256 = archiveSHA256
+        self.archiveSize = archiveSize
+        self.expandedSize = expandedSize
+        self.archiveLocation = archiveLocation
+        self.isCritical = isCritical
+    }
+}
+
+/// The image-update phase machine (runtime-maintenance.md §4.3), wire form.
+public enum WireImageUpdatePhase: Equatable, Sendable {
+    /// Up to date, or nothing compatible.
+    case idle
+    /// A check is running.
+    case checking
+    /// A compatible candidate exists but no download started.
+    case available(WireImageCandidate)
+    /// A download is running.
+    case downloading(WireImageCandidate, progress: Double)
+    /// An archive is being extracted and verified.
+    case installing(WireImageCandidate, fraction: Double)
+    /// In `Images/`, not current; waiting for the apply gate.
+    case ready(String)
+    /// The migration is running.
+    case applying(from: String, to: String)
+    /// A check, download, install, or apply failed.
+    case failed(WireImageCandidate?, reason: String, retryAt: Date?)
+}
+
+/// A rejected image version (runtime-maintenance.md §4.8).
+public struct WireRejectedImage: Codable, Equatable, Sendable {
+    /// The rejected version.
+    public var version: String
+    /// When the rejection was recorded.
+    public var at: Date
+    /// `migrationFailed` or `userRolledBack`.
+    public var reason: String
+    /// The failure detail for `migrationFailed`.
+    public var detail: String?
+
+    /// Creates a rejection record.
+    public init(version: String, at: Date, reason: String, detail: String? = nil) {
+        self.version = version
+        self.at = at
+        self.reason = reason
+        self.detail = detail
+    }
+}
+
+/// One instance recovery point (`/Recovery/…`, runtime-maintenance.md §4.4).
+public struct WireRecoveryPoint: Codable, Equatable, Sendable {
+    /// Its directory name (the recovery-point ID for `apkrun image recovery-points delete`).
+    public var name: String
+    /// The image version it holds, nil for a failed-migration dump.
+    public var imageVersion: String?
+    /// When it was created.
+    public var createdAt: Date
+    /// Whether it is a post-mortem dump kept for diagnostics.
+    public var isFailedDump: Bool
+
+    /// Creates a recovery-point record.
+    public init(name: String, imageVersion: String?, createdAt: Date, isFailedDump: Bool) {
+        self.name = name
+        self.imageVersion = imageVersion
+        self.createdAt = createdAt
+        self.isFailedDump = isFailedDump
+    }
+}
+
+/// The `imageStatus` reply: the update phase plus the installed image facts
+/// `apkrun image` and Settings → Storage need (runtime-maintenance.md §4.10).
+public struct WireImageStatus: Codable, Equatable, Sendable {
+    /// The update phase.
+    public var phase: WireImageUpdatePhase
+    /// The image Android currently runs.
+    public var current: String?
+    /// The image Android ran before `current`, kept for rollback (§4.8).
+    public var previous: String?
+    /// Rejected versions, kept seven days (§4.8).
+    public var rejected: [WireRejectedImage]
+    /// `installed(<version>)` or `rejected(<version>, <reason>)` — the last apply's outcome.
+    public var lastResult: String?
+    /// When the last feed check finished (#88).
+    public var lastCheckAt: Date?
+    /// When the next automatic check is due (#88).
+    public var nextCheckAt: Date?
+    /// The recovery points of the instance directory (§4.4).
+    public var recoveryPoints: [WireRecoveryPoint]
+
+    /// Creates a status snapshot.
+    public init(
+        phase: WireImageUpdatePhase,
+        current: String?,
+        previous: String?,
+        rejected: [WireRejectedImage],
+        lastResult: String?,
+        lastCheckAt: Date?,
+        nextCheckAt: Date?,
+        recoveryPoints: [WireRecoveryPoint]
+    ) {
+        self.phase = phase
+        self.current = current
+        self.previous = previous
+        self.rejected = rejected
+        self.lastResult = lastResult
+        self.lastCheckAt = lastCheckAt
+        self.nextCheckAt = nextCheckAt
+        self.recoveryPoints = recoveryPoints
+    }
+}
+
+extension WireImageUpdatePhase: Codable {
+    private enum Kind: String, Codable {
+        case idle, checking, available, downloading, installing, ready, applying, failed
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .idle: self = .idle
+        case .checking: self = .checking
+        case .available:
+            self = .available(try container.decode(WireImageCandidate.self, forKey: .candidate))
+        case .downloading:
+            self = .downloading(
+                try container.decode(WireImageCandidate.self, forKey: .candidate),
+                progress: try container.decode(Double.self, forKey: .progress)
+            )
+        case .installing:
+            self = .installing(
+                try container.decode(WireImageCandidate.self, forKey: .candidate),
+                fraction: try container.decode(Double.self, forKey: .progress)
+            )
+        case .ready:
+            self = .ready(try container.decode(String.self, forKey: .version))
+        case .applying:
+            self = .applying(
+                from: try container.decode(String.self, forKey: .from),
+                to: try container.decode(String.self, forKey: .to)
+            )
+        case .failed:
+            self = .failed(
+                try container.decodeIfPresent(WireImageCandidate.self, forKey: .candidate),
+                reason: try container.decode(String.self, forKey: .reason),
+                retryAt: try container.decodeIfPresent(Date.self, forKey: .retryAt)
+            )
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .idle:
+            try container.encode(Kind.idle, forKey: .kind)
+        case .checking:
+            try container.encode(Kind.checking, forKey: .kind)
+        case .available(let candidate):
+            try container.encode(Kind.available, forKey: .kind)
+            try container.encode(candidate, forKey: .candidate)
+        case .downloading(let candidate, let progress):
+            try container.encode(Kind.downloading, forKey: .kind)
+            try container.encode(candidate, forKey: .candidate)
+            try container.encode(progress, forKey: .progress)
+        case .installing(let candidate, let fraction):
+            try container.encode(Kind.installing, forKey: .kind)
+            try container.encode(candidate, forKey: .candidate)
+            try container.encode(fraction, forKey: .progress)
+        case .ready(let version):
+            try container.encode(Kind.ready, forKey: .kind)
+            try container.encode(version, forKey: .version)
+        case .applying(let from, let to):
+            try container.encode(Kind.applying, forKey: .kind)
+            try container.encode(from, forKey: .from)
+            try container.encode(to, forKey: .to)
+        case .failed(let candidate, let reason, let retryAt):
+            try container.encode(Kind.failed, forKey: .kind)
+            try container.encodeIfPresent(candidate, forKey: .candidate)
+            try container.encode(reason, forKey: .reason)
+            try container.encodeIfPresent(retryAt, forKey: .retryAt)
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, candidate, progress, version, from, to, reason, retryAt
     }
 }

@@ -189,4 +189,9 @@ extension InstanceStore {
         }
         try? FileManager.default.removeItem(at: url)
     }
+    /// The instance's recorded userdata schema (android-image.md §12.1), when a
+    /// configuration exists.
+    public func userdataSchemaVersion() -> Int? {
+        (try? loadConfiguration())?.userdataSchemaVersion
+    }
 }

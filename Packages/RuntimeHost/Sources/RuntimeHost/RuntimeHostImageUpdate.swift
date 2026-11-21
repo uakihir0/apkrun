@@ -1,11 +1,10 @@
 import DiagnosticsCore
 import Foundation
-import ImageCore
-import IOKit.pwr_mgt
-import RuntimeAPI
 import GuestProtocol
+import IOKit.pwr_mgt
+import ImageCore
+import RuntimeAPI
 import RuntimeCore
-
 
 /// The Android image update driver (runtime-maintenance.md §4, android-image.md §12.3).
 extension RuntimeHost {
@@ -86,8 +85,10 @@ extension RuntimeHost {
             from: from,
             to: target,
             hostRuntimeVersion: buildIdentity.marketingVersion,
-            hostProtocol: (min: Int(ProtocolVersion.supportedMajors.lowerBound),
-                           max: Int(ProtocolVersion.supportedMajors.upperBound)),
+            hostProtocol: (
+                min: Int(ProtocolVersion.supportedMajors.lowerBound),
+                max: Int(ProtocolVersion.supportedMajors.upperBound)
+            ),
             userdataSchema: userdataSchema
         )
         try await migration.beginMigration(from: from, to: target, images: images)

@@ -102,6 +102,7 @@ public struct ImageUpdateState: Codable, Equatable, Sendable {
     /// The persisted schema version.
     public static let currentSchema = 1
 
+    /// The schema version this state was written with.
     public var schemaVersion: Int
     /// The feed channel the state was built for (#88).
     public var channel: String
@@ -151,6 +152,7 @@ extension ImageUpdatePhase: Codable {
         case idle, checking, available, downloading, installing, ready, applying, failed
     }
 
+    /// Decodes the phase from its kind key, keeping associated values.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
@@ -184,6 +186,7 @@ extension ImageUpdatePhase: Codable {
         }
     }
 
+    /// Encodes the phase through its kind key and associated values.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
@@ -227,6 +230,7 @@ extension ImageUpdateResult: Codable {
         case installed, rejected
     }
 
+    /// Decodes the outcome: an installed version or a rejected one with its reason.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
@@ -240,6 +244,7 @@ extension ImageUpdateResult: Codable {
         }
     }
 
+    /// Encodes the outcome through its kind key and associated values.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {

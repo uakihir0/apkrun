@@ -41,13 +41,16 @@ private func version(_ text: String) throws -> ImageCore.ImageVersion {
 
     let snapshot = await coordinator.stateSnapshot()
     #expect(snapshot.phase == .ready(version))
-    #expect(FileManager.default.fileExists(atPath: directory
-            .appendingPathComponent("Images/update-state.json").path))
+    #expect(
+        FileManager.default.fileExists(
+            atPath:
+                directory
+                .appendingPathComponent("Images/update-state.json").path))
 }
 
 final class VersionBox: @unchecked Sendable {
-        var value: ImageCore.ImageVersion?
-    }
+    var value: ImageCore.ImageVersion?
+}
 
 @Test func applyRunsTheMigrationAndEndsIdle() async throws {
     let box = VersionBox()
@@ -82,7 +85,8 @@ final class VersionBox: @unchecked Sendable {
 
     let snapshot = await coordinator.stateSnapshot()
     #expect(snapshot.rejected[to.description] != nil)
-    if case .failed = snapshot.phase {} else {
+    if case .failed = snapshot.phase {
+    } else {
         Issue.record("expected .failed, got \(snapshot.phase)")
     }
     // §4.8: a rejected version may not be applied again without force.

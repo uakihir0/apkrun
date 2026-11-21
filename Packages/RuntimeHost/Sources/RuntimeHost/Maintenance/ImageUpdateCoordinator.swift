@@ -3,7 +3,6 @@ import Foundation
 import ImageCore
 import RuntimeAPI
 
-
 /// Owns the Android image update phase machine and `Images/update-state.json`
 /// (runtime-maintenance.md §4.3). It is the file's only writer, decides when a
 /// `ready` image may be applied, records rejections and rollbacks (§4.8), and
@@ -104,7 +103,9 @@ public actor ImageUpdateCoordinator {
         }
         let task = Task { [self, migrate] in
             do {
-                logger.notice("IMAGE_MIGRATION_START \(version.description, .public) operation \(operationID.uuidString, .public)")
+                logger.notice(
+                    "IMAGE_MIGRATION_START \(version.description, .public) operation \(operationID.uuidString, .public)"
+                )
                 await self.setPhase(.applying(from: from, to: version))
                 try await migrate(version, operationID)
                 await self.noteInstalled(version)
@@ -206,7 +207,8 @@ public actor ImageUpdateCoordinator {
     private func noteApplyFailed(_ version: ImageCore.ImageVersion, error: any Error) {
         // The supervisor already restored the previous image; record the
         // rejection (§4.8).
-        logger.notice("IMAGE_MIGRATION_END \(version.description, .public) rejected: \(error.localizedDescription, .public)")
+        logger.notice(
+            "IMAGE_MIGRATION_END \(version.description, .public) rejected: \(error.localizedDescription, .public)")
         state.phase = .failed(state.candidate, reason: error.localizedDescription, retryAt: nil)
         state.lastResult = .rejected(version, reason: .migrationFailed)
         state.rejected[version.description] = RejectedImage(

@@ -54,9 +54,11 @@ struct StoragePane: View {
                         }
                     }
                     if !imageStatus.recoveryPoints.isEmpty {
-                        Text("\(imageStatus.recoveryPoints.count) recovery point(s) kept. Delete them with `apkrun image recovery-points delete`.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        Text(
+                            "\(imageStatus.recoveryPoints.count) recovery point(s) kept. Delete them with `apkrun image recovery-points delete`."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
                 } else {
                     Text("No Android image information yet.")

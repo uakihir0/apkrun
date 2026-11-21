@@ -625,6 +625,7 @@ extension WireImageUpdatePhase: Codable {
         case idle, checking, available, downloading, installing, ready, applying, failed
     }
 
+    /// Decodes the phase from its kind key, keeping associated values.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
@@ -658,6 +659,7 @@ extension WireImageUpdatePhase: Codable {
         }
     }
 
+    /// Encodes the phase through its kind key and associated values.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
@@ -699,20 +701,26 @@ extension WireImageUpdatePhase: Codable {
 /// `installImage` request: the `.aar` arrives as the single FileHandle beside
 /// the message (runtime-maintenance.md §4.7).
 public struct WireImageInstallRequest: Codable, Sendable {
+    /// Call metadata and API version.
     public var header: APIRequestHeader
     /// `true` when the caller already confirmed ("Install anyway?").
     public var assumeYes: Bool
 
+    /// Creates the request.
     public init(header: APIRequestHeader, assumeYes: Bool) {
         self.header = header
         self.assumeYes = assumeYes
     }
 }
 
+/// `installImage` reply: `version` is the installed candidate's version.
 public struct WireImageInstallReply: Codable, Sendable {
+    /// The installed image version, on success.
     public var version: String?
+    /// The failure, if any.
     public var error: RuntimeWireError?
 
+    /// Creates the reply.
     public init(version: String? = nil, error: RuntimeWireError? = nil) {
         self.version = version
         self.error = error
@@ -721,9 +729,12 @@ public struct WireImageInstallReply: Codable, Sendable {
 
 /// `applyImage` request: the `ready` version to apply.
 public struct WireImageApplyRequest: Codable, Sendable {
+    /// Call metadata and API version.
     public var header: APIRequestHeader
+    /// The version text of the `ready` candidate to apply.
     public var version: String
 
+    /// Creates the request.
     public init(header: APIRequestHeader, version: String) {
         self.header = header
         self.version = version
@@ -732,8 +743,10 @@ public struct WireImageApplyRequest: Codable, Sendable {
 
 /// `rollbackImage` request: back to `previous`.
 public struct WireImageRollbackRequest: Codable, Sendable {
+    /// Call metadata and API version.
     public var header: APIRequestHeader
 
+    /// Creates the request.
     public init(header: APIRequestHeader) {
         self.header = header
     }
@@ -741,9 +754,12 @@ public struct WireImageRollbackRequest: Codable, Sendable {
 
 /// `deleteImageRecoveryPoint` request.
 public struct WireImageRecoveryPointDeleteRequest: Codable, Sendable {
+    /// Call metadata and API version.
     public var header: APIRequestHeader
+    /// The recovery point name to delete.
     public var name: String
 
+    /// Creates the request.
     public init(header: APIRequestHeader, name: String) {
         self.header = header
         self.name = name
@@ -753,9 +769,12 @@ public struct WireImageRecoveryPointDeleteRequest: Codable, Sendable {
 /// Shared reply for `applyImage`, `rollbackImage`, and
 /// `deleteImageRecoveryPoint`: `result` is a human one-liner for the CLI.
 public struct WireImageApplyReply: Codable, Sendable {
+    /// A human-readable one-liner for the CLI, on success.
     public var result: String?
+    /// The failure, if any.
     public var error: RuntimeWireError?
 
+    /// Creates the reply.
     public init(result: String? = nil, error: RuntimeWireError? = nil) {
         self.result = result
         self.error = error
@@ -764,17 +783,23 @@ public struct WireImageApplyReply: Codable, Sendable {
 
 /// `imageStatus` request; the request body only carries the header.
 public struct WireImageStatusRequest: Codable, Sendable {
+    /// Call metadata and API version.
     public var header: APIRequestHeader
 
+    /// Creates the request.
     public init(header: APIRequestHeader) {
         self.header = header
     }
 }
 
+/// `imageStatus` reply.
 public struct WireImageStatusReply: Codable, Sendable {
+    /// The coordinator's status snapshot, on success.
     public var status: WireImageStatus?
+    /// The failure, if any.
     public var error: RuntimeWireError?
 
+    /// Creates the reply.
     public init(status: WireImageStatus? = nil, error: RuntimeWireError? = nil) {
         self.status = status
         self.error = error

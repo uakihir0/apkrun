@@ -384,7 +384,8 @@ public actor EmbeddedUpdateService {
             lastCheckAt: state?.lastCheckAt,
             nextCheckAt: state?.nextCheckAt,
             consecutiveFailures: state?.consecutiveFailures ?? 0,
-            waiting: []
+            waiting: [],
+            incompatibleReason: state?.incompatibleReason
         )
     }
 
@@ -426,6 +427,23 @@ public actor EmbeddedUpdateService {
         }
         // The §2.1–§2.4 authority rules live in UpdateCore.
         let resolution = try UpdatePolicyRules.resolve(policy, for: record)
+
+        // §11.1: a signed-remote provider makes one test request before the
+        // policy is written — for F-Droid it fetches and verifies entry.jar,
+        // so a wrong URL or fingerprint fails here, not on the first check.
+        if let providerRef = resolution.provider {
+            switch providerRef.type {
+            case .fdroid:
+                let provider = try FDroidProvider(ref: providerRef)
+                _ = try await provider.fetchEntry(
+                    context: providerContext(userInitiated: true))
+            case .github:
+                // #53.
+                break
+            case .local, .direct:
+                break
+            }
+        }
 
         try await store.setUpdateMode(for: packageID, mode: resolution.settingsMode)
         // `requireProvider` makes the provider requirement atomic inside the

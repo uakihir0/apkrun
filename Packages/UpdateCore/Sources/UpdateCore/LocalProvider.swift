@@ -13,6 +13,10 @@ public enum ProviderRegistry {
         bookmark: Data? = nil,
         developerModeEnabled: Bool
     ) throws(UpdateFailure) -> UpdateProviderRef {
+        // A bare `fdroid` spec names the main repository (§4.5).
+        if spec == "fdroid" {
+            return try FDroidProvider.providerRef(for: "")
+        }
         let parts = spec.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2, let type = ProviderType(rawValue: String(parts[0])) else {
             throw UpdateFailure.providerMetadataInvalid(detail: "unknown provider spec")
@@ -37,8 +41,10 @@ public enum ProviderRegistry {
             return UpdateProviderRef(
                 type: .direct,
                 configuration: .direct(url: try Self.directURL(body)))
-        case .fdroid, .github:
-            // Parsed in the provider's own task (#52, #53).
+        case .fdroid:
+            return try FDroidProvider.providerRef(for: body)
+        case .github:
+            // Parsed in the provider's own task (#53).
             throw UpdateFailure.providerNotConfigured
         }
     }
@@ -91,8 +97,10 @@ public enum ProviderRegistry {
             return LocalProvider(ref: ref, root: root, displayPath: path)
         case .direct:
             return try DirectProvider(ref: ref)
-        case .fdroid, .github:
-            // F-Droid (#52), GitHub (#53).
+        case .fdroid:
+            return try FDroidProvider(ref: ref)
+        case .github:
+            // GitHub (#53).
             throw UpdateFailure.providerNotConfigured
         }
     }

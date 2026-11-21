@@ -216,13 +216,20 @@ public actor UpdateCoordinator {
 
         setPhase(packageID, .checking)
         let settings = try? await store.packageSettings(for: packageID)
+        // Providers that find versions but no compatible one (§4.5
+        // `signerDiffers`) report through the note instead of failing the
+        // check; it is recorded in state and history below.
+        let incompatibleNote = IncompatibleNoteBox()
+        var providerContext = context
+        providerContext.incompatibleNote = { incompatibleNote.record($0) }
         do {
             let provider = try resolveProvider(providerRef)
-            let candidate = try await provider.check(installed, context: context)
+            let candidate = try await provider.check(installed, context: providerContext)
             guard let candidate else {
                 await recordCheck(
                     row: row, record: record, outcome: .upToDate,
-                    failures: 0, now: started, trigger: trigger)
+                    failures: 0, now: started, trigger: trigger,
+                    incompatibleReason: incompatibleNote.reason)
                 return .upToDate
             }
 
@@ -241,6 +248,8 @@ public actor UpdateCoordinator {
                     state.cursor = newCursor
                 }
                 state.phase = "available"
+                // A found candidate clears a recorded §4.5 note.
+                state.incompatibleReason = nil
                 state.candidate = PackageUpdateState.CandidateSummary(
                     versionCode: candidate.declaredVersionCode,
                     versionName: candidate.declaredVersionName,
@@ -1204,13 +1213,15 @@ public actor UpdateCoordinator {
         outcome: SkipReason,
         failures: Int,
         now: Date,
-        trigger: UpdateTrigger
+        trigger: UpdateTrigger,
+        incompatibleReason: NoCompatibleArtifactReason? = nil
     ) async {
         await stateStore.update(record.packageId) { state in
             state.lastCheckAt = now
             state.nextCheckAt = Self.nextCheck(
                 after: now, intervalHours: checkIntervalHours, failures: failures)
             state.consecutiveFailures = failures
+            state.incompatibleReason = incompatibleReason?.rawValue
             // A still-staged candidate survives an up-to-date check: the
             // provider has nothing newer, but §7.2 may yet install the
             // staged set (and §3.5 counts its stagedAt age).
@@ -1222,7 +1233,11 @@ public actor UpdateCoordinator {
         setPhase(record.packageId, .completed(.skipped(outcome)))
         await appendHistory(
             record: record, to: nil, provider: record.updateProvider?.type,
-            trigger: trigger, outcome: "skipped.\(outcome.name)", failure: nil, started: now)
+            trigger: trigger, outcome: "skipped.\(outcome.name)",
+            failure: incompatibleReason.map {
+                "update.noCompatibleArtifact/\($0.rawValue)"
+            },
+            started: now)
         await stateStore.flush()
     }
 
@@ -1267,5 +1282,16 @@ public actor UpdateCoordinator {
         }
         let jitter = interval * 0.1 * Double.random(in: -1...1)
         return after.addingTimeInterval(interval + jitter)
+    }
+}
+
+/// A `@Sendable`-safe box a provider's `incompatibleNote` writes through.
+private final class IncompatibleNoteBox: @unchecked Sendable {
+    /// The note reported during `check`, if any.
+    private(set) var reason: NoCompatibleArtifactReason?
+
+    /// Records a note; the first reason wins.
+    func record(_ reason: NoCompatibleArtifactReason) {
+        if self.reason == nil { self.reason = reason }
     }
 }

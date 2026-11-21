@@ -25,7 +25,7 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.24 adds `packageSettings` and `updatePackageSettings` (host-ui.md §7).
     /// 1.25 adds `RuntimePackageDetails.previous`; 1.26 adds the wrapper
     /// endpoint's `importBootstrap` (wrapper-json.md §3.4).
-    public static let current = APIVersion(major: 1, minor: 26)
+    public static let current = APIVersion(major: 1, minor: 27)
 
     /// The incompatible protocol generation.
     public let major: Int

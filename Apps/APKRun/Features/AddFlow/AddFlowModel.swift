@@ -146,6 +146,8 @@ final class AddFlowModel {
                 hasMacApp = true
             }
             macAppName = preview.displayName
+            // §4.7: the host's suggestion stays off until the user turns it on.
+            suggestedProvider = preview.suggestedProvider.map { ProviderSpec(spec: $0) }
             location = defaultLocation
             stage = .review
         } catch {

@@ -41,6 +41,10 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
     public var skippedVersions: [VersionCode]
     /// The last update-available notification's cursor, so it posts once.
     public var notifiedCursor: ProviderCursor?
+    /// Why the last check found no candidate though the provider has
+    /// versions (`NoCompatibleArtifactReason` raw value, §4.5); nil when the
+    /// last check was clean or found a candidate.
+    public var incompatibleReason: String?
 
     /// A compact candidate description persisted in state.json.
     public struct CandidateSummary: Codable, Sendable, Equatable {
@@ -111,7 +115,8 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
         stagedAt: Date? = nil,
         waitingNotifiedAt: Date? = nil,
         skippedVersions: [VersionCode] = [],
-        notifiedCursor: ProviderCursor? = nil
+        notifiedCursor: ProviderCursor? = nil,
+        incompatibleReason: String? = nil
     ) {
         self.lastCheckAt = lastCheckAt
         self.nextCheckAt = nextCheckAt
@@ -123,6 +128,7 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
         self.waitingNotifiedAt = waitingNotifiedAt
         self.skippedVersions = skippedVersions
         self.notifiedCursor = notifiedCursor
+        self.incompatibleReason = incompatibleReason
     }
 }
 

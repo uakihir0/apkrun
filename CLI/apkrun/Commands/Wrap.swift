@@ -24,6 +24,9 @@
         @Flag(name: .long, help: "Install the APK file first, as `apkrun install --yes` would.")
         var install = false
 
+        @Flag(name: .long, help: "Bundle the APK set so the Mac app can install it elsewhere (#90).")
+        var portable = false
+
         @Option(name: .long, help: "A provider spec such as local:/path or direct:<https-url>.")
         var provider: String?
 
@@ -84,41 +87,60 @@
             }
 
             let packageID: RuntimePackageID
+            var portableTicket: RuntimeImportTicket?
+            var portableDefaults: WrapperUpdateDefaultsWire?
             if isFile {
                 let preview = try await WrapCommandSupport.importFile(at: inputURL, client: client)
-                switch WrapCommandSupport.filePlan(relation: preview.relation, install: install) {
-                case .confirmInstall:
-                    DaemonInstallSupport.writePreview(preview)
-                    if !yes {
-                        guard isatty(STDIN_FILENO) == 1 else {
-                            throw RuntimeWireError(
-                                domain: "wrapper",
-                                code: "wrapper.packageNotInstalled",
-                                message: "\(preview.packageID.rawValue) isn't installed in APKRun.",
-                                remediation: "Install it too with `apkrun wrap <file> --install`, "
-                                    + "or answer yes with --yes.",
-                                parameters: ["app": preview.packageID.rawValue]
-                            )
-                        }
-                        try CLIConfirmation.confirm(
-                            "Install and create the Mac app?", yes: false)
-                    }
-                    packageID = try await WrapCommandSupport.installPreview(
-                        preview,
-                        options: try updateOptions(),
-                        client: client
-                    )
-                case .installAndWrap:
-                    DaemonInstallSupport.writePreview(preview)
-                    packageID = try await WrapCommandSupport.installPreview(
-                        preview,
-                        options: try updateOptions(),
-                        client: client
-                    )
-                case .wrapInstalled(let note):
-                    try rejectUpdateFlags()
-                    Output.writeLogLine(note.text, toStandardError: true)
+                if portable && !install {
+                    // wrapper.md §10.1: a portable wrapper of an uninstalled
+                    // package embeds the ticket's files; the icon is the
+                    // placeholder until the package is installed.
+                    portableTicket = preview.ticket
+                    portableDefaults = try updateDefaultsWire()
                     packageID = preview.packageID
+                    if preview.relation == .newPackage || preview.relation == .unknown {
+                        Output.writeLogLine(
+                            "The Mac app's icon is the placeholder because "
+                                + "\(preview.packageID.rawValue) isn't installed.",
+                            toStandardError: true)
+                    }
+                } else {
+                    switch WrapCommandSupport.filePlan(
+                        relation: preview.relation, install: install)
+                    {
+                    case .confirmInstall:
+                        DaemonInstallSupport.writePreview(preview)
+                        if !yes {
+                            guard isatty(STDIN_FILENO) == 1 else {
+                                throw RuntimeWireError(
+                                    domain: "wrapper",
+                                    code: "wrapper.packageNotInstalled",
+                                    message: "\(preview.packageID.rawValue) isn't installed in APKRun.",
+                                    remediation: "Install it too with `apkrun wrap <file> --install`, "
+                                        + "or answer yes with --yes.",
+                                    parameters: ["app": preview.packageID.rawValue]
+                                )
+                            }
+                            try CLIConfirmation.confirm(
+                                "Install and create the Mac app?", yes: false)
+                        }
+                        packageID = try await WrapCommandSupport.installPreview(
+                            preview,
+                            options: try updateOptions(),
+                            client: client
+                        )
+                    case .installAndWrap:
+                        DaemonInstallSupport.writePreview(preview)
+                        packageID = try await WrapCommandSupport.installPreview(
+                            preview,
+                            options: try updateOptions(),
+                            client: client
+                        )
+                    case .wrapInstalled(let note):
+                        try rejectUpdateFlags()
+                        Output.writeLogLine(note.text, toStandardError: true)
+                        packageID = preview.packageID
+                    }
                 }
             } else {
                 guard !install else {
@@ -162,8 +184,14 @@
                 iconHandle: iconHandle,
                 replace: replace ? .sameWrapper : .never,
                 windowDefaults: try windowDefaults(),
+                portable: portable,
+                importTicket: portableTicket,
+                updateDefaults: portableDefaults,
                 client: client
             )
+            if portable {
+                WrapCommandSupport.writePortableNote(info)
+            }
             if open {
                 WrapCommandSupport.open(bundleURL: info.summary.bundleURL)
             }
@@ -180,6 +208,23 @@
             try InstallUpdateOptions.options(
                 provider: provider, updates: updates, update: update,
                 updateProvider: updateProvider, updateURL: updateURL)
+        }
+
+        /// The update flags as `wrapper.json` `updates` defaults for a
+        /// portable wrapper of an uninstalled package (wrapper-json.md §3.2).
+        private func updateDefaultsWire() throws -> WrapperUpdateDefaultsWire {
+            let options = try updateOptions()
+            let choice: String?
+            switch options.updateMode {
+            case .none: choice = nil
+            case .automatic: choice = "automatic"
+            case .notifyOnly: choice = "notify"
+            case .manual: choice = "manual"
+            }
+            return WrapperUpdateDefaultsWire(
+                authority: options.authority == .apkrun ? .apkrun : .manual,
+                choice: choice,
+                provider: options.provider?.spec)
         }
 
         /// Update flags on an already-installed package are refused with
@@ -620,6 +665,9 @@
             iconHandle: FileHandle?,
             replace: WireReplacePolicy,
             windowDefaults: WrapperWindowDefaultsWire?,
+            portable: Bool = false,
+            importTicket: RuntimeImportTicket? = nil,
+            updateDefaults: WrapperUpdateDefaultsWire? = nil,
             client: RuntimeControlClient
         ) async throws -> WrapperInfo {
             let operationID = RuntimeAPI.OperationID()
@@ -629,8 +677,11 @@
                 fileName: fileName,
                 displayName: displayName,
                 icon: icon,
+                portable: portable,
                 replace: replace,
-                windowDefaults: windowDefaults
+                importTicket: importTicket,
+                windowDefaults: windowDefaults,
+                updateDefaults: updateDefaults
             )
             let handle: OperationHandle
             do {
@@ -990,6 +1041,46 @@
                 )
             }
             return result
+        }
+
+        /// The portable note of legal-and-licensing.md §9, printed after a
+        /// successful `wrap --portable`.
+        static func writePortableNote(_ info: WrapperInfo) {
+            let directory = info.summary.bundleURL
+                .appendingPathComponent("Contents/Resources/bootstrap")
+            var size = Int64(0)
+            var version: String?
+            if let items = try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: [.fileSizeKey])
+            {
+                for item in items {
+                    size += Int64(
+                        (try? item.resourceValues(forKeys: [.fileSizeKey]).fileSize)
+                            ?? 0)
+                }
+            }
+            if let json = try? Data(
+                contentsOf: directory.appendingPathComponent("bootstrap.json")),
+                let document = try? JSONDecoder().decode(
+                    PortableBootstrapDocument.self, from: json)
+            {
+                version = document.versionName ?? String(document.versionCode)
+            }
+            let sizeText = ByteCountFormatter.string(
+                fromByteCount: size, countStyle: .file)
+            Output.writeLogLine(
+                "This Mac app contains \(info.summary.displayName) "
+                    + "\(version ?? "") (\(info.summary.packageID.rawValue)) "
+                    + "and is \(sizeText). Share it with other people only if "
+                    + "you have the right to redistribute this app.",
+                toStandardError: true)
+        }
+
+        /// The `bootstrap.json` fields the portable note reads
+        /// (wrapper-json.md §3.2).
+        private struct PortableBootstrapDocument: Decodable {
+            var versionCode: Int64
+            var versionName: String?
         }
 
         /// The one-line human result: the bundle path (cli.md §4.4).

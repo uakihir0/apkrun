@@ -78,7 +78,7 @@ import Testing
                 "unsupportedABI", "minSdkTooHigh", "targetSdkTooLow", "expansionFilesNotSupported",
                 "reservedPackage", "tooLarge", "resourcesArscNotAligned", "signerMismatch",
                 "alreadyInstalled", "downgradeRefused", "packageAlreadyManaged",
-                "packageInUse", "stagedUpdateMissing",
+                "packageInUse", "stagedUpdateMissing", "rollbackUnavailable",
             ].map { "store.\($0)" }
             + [
                 "providerNotConfigured", "providerMetadataInvalid", "providerHTTPStatus",

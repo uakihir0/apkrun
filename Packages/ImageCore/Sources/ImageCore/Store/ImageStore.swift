@@ -136,8 +136,11 @@ public actor ImageStore {
     /// checks the copy in full, renames it into place, and makes it current (android-image.md
     /// §10.3). An image that is already installed under this name, with the same manifest, is
     /// left as it is.
+    /// `activate` makes the image current; a `ready` candidate (#59's update
+    /// flow) installs with `activate: false` and stays non-current until
+    /// `ImageUpdateCoordinator` applies it (runtime-maintenance.md §4.3).
     @discardableResult
-    public func install(from source: ImageSource) throws(ImageFailure) -> InstalledImage {
+    public func install(from source: ImageSource, activate: Bool = true) throws(ImageFailure) -> InstalledImage {
         // Archives extract into a staging directory that is removed once the bundle has been
         // cloned into `.installing-<version>/`.
         var extractedStaging: URL?
@@ -179,7 +182,9 @@ public actor ImageStore {
                 throw .unexpectedFile(file: "manifest.json")
             }
             try checkFiles(in: target, bundle: installed, depth: .full)
-            try setCurrent(version)
+            if activate {
+                try setCurrent(version)
+            }
             return try installedImage(named: name, depth: .quick)
         }
 
@@ -211,6 +216,10 @@ public actor ImageStore {
             throw storageFailure(error)
         }
         logger.notice("Installed the image \(name, .public) from a directory")
+        guard activate else {
+            logger.notice("Installed the image \(name, .public) without activating it")
+            return try installedImage(named: name, depth: .quick)
+        }
         do {
             try beforeActivation()
         } catch let failure as ImageFailure {

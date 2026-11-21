@@ -26,7 +26,7 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// `SettingApplies` on `updateGlobalConfiguration` (desktop-integration.md
     /// §9). 1.31 adds `selfUpdateStatus` and `noteSelfUpdateStatus`
     /// (runtime-api.md §12.2).
-    public static let current = APIVersion(major: 1, minor: 31)
+    public static let current = APIVersion(major: 1, minor: 32)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -880,6 +880,20 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     /// Closes one of this connection's streams; idempotent
     /// (runtime-api.md §16.4). Reply: `RuntimeStreamControlReply`.
     func closeStream(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Installs an Android image from an `.aar` file (runtime-maintenance.md
+    /// §4.7). Reply: `WireImageInstallReply`.
+    func installImage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+    /// The image update status (`apkrun image list`). Reply: `WireImageStatusReply`.
+    func imageStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Applies a `ready` image (`apkrun image apply` / the UI apply gate).
+    /// Reply: `WireImageApplyReply`.
+    func applyImage(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Goes back to the previous image (`apkrun image rollback`).
+    /// Reply: `WireImageApplyReply`.
+    func rollbackImage(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Deletes a recovery point (`apkrun image recovery-points delete`).
+    /// Reply: `WireImageApplyReply`.
+    func deleteImageRecoveryPoint(_ request: Data, reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.

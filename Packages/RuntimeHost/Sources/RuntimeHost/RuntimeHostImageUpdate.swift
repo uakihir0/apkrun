@@ -309,3 +309,57 @@ extension ImageUpdateResult {
         }
     }
 }
+
+extension RuntimeHost {
+    /// `installImage` handler (runtime-maintenance.md §4.7): copies the `.aar`
+    /// FileHandle to a temporary file — the user's file is only read, never
+    /// moved, deleted, or closed by us — installs it without activating, and
+    /// marks the candidate `ready`.
+    func installImage(from file: FileHandle) async throws -> ImageCore.ImageVersion {
+        let staging = FileManager.default.temporaryDirectory
+            .appendingPathComponent("apkrun-image-\(UUID().uuidString).aar")
+        FileManager.default.createFile(atPath: staging.path, contents: nil)
+        defer { try? FileManager.default.removeItem(at: staging) }
+        let out = try FileHandle(forWritingTo: staging)
+        do {
+            try file.seek(toOffset: 0)
+            while let chunk = try file.read(upToCount: 1 << 20), !chunk.isEmpty {
+                try out.write(contentsOf: chunk)
+            }
+            try out.synchronize()
+        }
+        try out.close()
+        guard let imageStore else {
+            throw ImageFailure.instanceMissing
+        }
+        let installed = try await imageStore.install(from: .archive(staging), activate: false)
+        await imageUpdateCoordinator.noteReady(installed.version)
+        return installed.version
+    }
+
+    /// Applies the named `ready` image (`apkrun image apply`).
+    func applyImage(_ versionText: String) async throws {
+        guard let version = ImageCore.ImageVersion(versionText) else {
+            throw ImageFailure.imageRejected(version: versionText, reason: "malformedVersion")
+        }
+        guard let current = image?.version else {
+            throw ImageFailure.noCurrentImage
+        }
+        try await imageUpdateCoordinator.apply(version, from: current)
+    }
+
+    /// Goes back to the previous image (`apkrun image rollback`).
+    func rollbackImage() async throws -> String {
+        guard let imageStore else {
+            throw ImageFailure.instanceMissing
+        }
+        guard let previous = try await imageStore.previous() else {
+            throw ImageFailure.imageRejected(version: "previous", reason: "noPreviousImage")
+        }
+        guard let abandoned = image?.version else {
+            throw ImageFailure.noCurrentImage
+        }
+        try await imageUpdateCoordinator.rollback(to: previous.version, abandoned: abandoned)
+        return "Rolled back to \(previous.version)."
+    }
+}

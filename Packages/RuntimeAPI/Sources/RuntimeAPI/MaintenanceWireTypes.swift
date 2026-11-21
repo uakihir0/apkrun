@@ -695,3 +695,88 @@ extension WireImageUpdatePhase: Codable {
         case kind, candidate, progress, version, from, to, reason, retryAt
     }
 }
+
+/// `installImage` request: the `.aar` arrives as the single FileHandle beside
+/// the message (runtime-maintenance.md §4.7).
+public struct WireImageInstallRequest: Codable, Sendable {
+    public var header: APIRequestHeader
+    /// `true` when the caller already confirmed ("Install anyway?").
+    public var assumeYes: Bool
+
+    public init(header: APIRequestHeader, assumeYes: Bool) {
+        self.header = header
+        self.assumeYes = assumeYes
+    }
+}
+
+public struct WireImageInstallReply: Codable, Sendable {
+    public var version: String?
+    public var error: RuntimeWireError?
+
+    public init(version: String? = nil, error: RuntimeWireError? = nil) {
+        self.version = version
+        self.error = error
+    }
+}
+
+/// `applyImage` request: the `ready` version to apply.
+public struct WireImageApplyRequest: Codable, Sendable {
+    public var header: APIRequestHeader
+    public var version: String
+
+    public init(header: APIRequestHeader, version: String) {
+        self.header = header
+        self.version = version
+    }
+}
+
+/// `rollbackImage` request: back to `previous`.
+public struct WireImageRollbackRequest: Codable, Sendable {
+    public var header: APIRequestHeader
+
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
+/// `deleteImageRecoveryPoint` request.
+public struct WireImageRecoveryPointDeleteRequest: Codable, Sendable {
+    public var header: APIRequestHeader
+    public var name: String
+
+    public init(header: APIRequestHeader, name: String) {
+        self.header = header
+        self.name = name
+    }
+}
+
+/// Shared reply for `applyImage`, `rollbackImage`, and
+/// `deleteImageRecoveryPoint`: `result` is a human one-liner for the CLI.
+public struct WireImageApplyReply: Codable, Sendable {
+    public var result: String?
+    public var error: RuntimeWireError?
+
+    public init(result: String? = nil, error: RuntimeWireError? = nil) {
+        self.result = result
+        self.error = error
+    }
+}
+
+/// `imageStatus` request; the request body only carries the header.
+public struct WireImageStatusRequest: Codable, Sendable {
+    public var header: APIRequestHeader
+
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
+public struct WireImageStatusReply: Codable, Sendable {
+    public var status: WireImageStatus?
+    public var error: RuntimeWireError?
+
+    public init(status: WireImageStatus? = nil, error: RuntimeWireError? = nil) {
+        self.status = status
+        self.error = error
+    }
+}

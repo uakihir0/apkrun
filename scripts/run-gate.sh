@@ -364,6 +364,9 @@ if [[ "$gate" == G9 ]]; then
         "APKRUN_G9_ARTIFACTS=$artifacts"
         "APKRUN_G9_ADB=$g9_android_home/platform-tools/adb"
     )
+    # The same names go to the test process as exported environment variables: a command-line build
+    # setting is not guaranteed to reach the test runner's environment on every Xcode release.
+    for entry in "${g9_build_settings[@]}"; do export "$entry"; done
     {
         printf 'bundle: %s\n' "$g9_bundle"
         printf 'app: %s\n' "$staging/APKRun.app"

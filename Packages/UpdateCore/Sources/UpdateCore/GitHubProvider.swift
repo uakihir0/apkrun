@@ -8,7 +8,7 @@ import Foundation
 /// token lives only in the Keychain and is sent only to the API host.
 public struct GitHubProvider: UpdateProvider {
     /// The public REST API base.
-    public static let apiBase = URL(string: "https://api.github.com")!
+    public static let apiBaseURLString = "https://api.github.com"
     /// The Keychain service the token is stored under (§4.6).
     public static let tokenService = "io.apkrun.provider.github"
     /// The releases listing body cap.
@@ -35,7 +35,10 @@ public struct GitHubProvider: UpdateProvider {
     /// Creates a provider for a stored `{type:github}` reference against the
     /// public API.
     public init(ref: UpdateProviderRef) throws(UpdateFailure) {
-        try self.init(ref: ref, apiBase: Self.apiBase)
+        guard let apiBase = URL(string: Self.apiBaseURLString) else {
+            throw .providerNotConfigured
+        }
+        try self.init(ref: ref, apiBase: apiBase)
     }
 
     /// Creates a provider against a custom API base; only the loopback base
@@ -82,13 +85,14 @@ public struct GitHubProvider: UpdateProvider {
                 channel: configuration.channel))
     }
 
-    /// The `GET /repos/{owner}/{name}/releases` URL (§4.6).
-    var releasesURL: URL {
+    /// The `GET /repos/{owner}/{name}/releases` URL (§4.6); nil only if
+    /// `apiBase` is malformed, which `isAllowed` rules out at init.
+    var releasesURL: URL? {
         var components = URLComponents(
             url: apiBase.appendingPathComponent("repos/\(repository)/releases"),
-            resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "per_page", value: "10")]
-        return components.url!
+            resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "per_page", value: "10")]
+        return components?.url
     }
 
     /// The request headers of §4.6; `Authorization` appears only when a
@@ -149,6 +153,7 @@ public struct GitHubProvider: UpdateProvider {
             if !stored.isEmpty { etag = stored }
         }
         log.debug("github releases check host=\(apiBase.host ?? "-", .public)")
+        guard let releasesURL else { throw .providerNotConfigured }
         let response = try await context.http.get(
             releasesURL,
             headers: headers(context: context, etag: etag),
@@ -271,6 +276,7 @@ public struct GitHubProvider: UpdateProvider {
     /// The one §2.3 test request of `setUpdatePolicy`: fetch the release
     /// listing so a wrong repository or token fails before anything writes.
     public func testConnection(context: ProviderContext) async throws(UpdateFailure) {
+        guard let releasesURL else { throw .providerNotConfigured }
         let response = try await context.http.get(
             releasesURL,
             headers: headers(context: context),

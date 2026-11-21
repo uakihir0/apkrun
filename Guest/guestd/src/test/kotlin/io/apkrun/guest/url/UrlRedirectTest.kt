@@ -24,6 +24,7 @@ class UrlRedirectTest {
         val opened: MutableList<Int> = mutableListOf(),
         var roleHeld: Boolean = true,
         var roleTakes: Int = 0,
+        val scheduled: MutableList<Pair<Long, () -> Unit>> = mutableListOf(),
     ) {
         val output = ByteArrayOutputStream()
         val events = EventBus().also { it.attach(FrameWriter(output)) }
@@ -33,6 +34,7 @@ class UrlRedirectTest {
                 uptimeMillis = { clock },
                 roleHeld = { roleHeld },
                 takeRole = { roleTakes += 1 },
+                schedule = { delay, action -> scheduled += delay to action },
             )
 
         fun published(): List<Event> {
@@ -147,5 +149,43 @@ class UrlRedirectTest {
             harness.published().filter { it.hasHealthWarning() }.map { it.healthWarning.kind }
         assertEquals(listOf(HealthWarningKind.HEALTH_WARNING_KIND_BROWSER_ROLE_LOST), warnings)
         assertEquals(1, harness.roleTakes)
+    }
+
+    @Test
+    fun `losing the role between links warns and retakes on the next link`() {
+        val harness = Harness()
+        enable(harness.redirect)
+        harness.roleHeld = false
+        harness.link("https://example.com", "io.app", 1)
+        val warnings =
+            harness.published().filter { it.hasHealthWarning() }.map { it.healthWarning.kind }
+        assertEquals(listOf(HealthWarningKind.HEALTH_WARNING_KIND_BROWSER_ROLE_LOST), warnings)
+        assertEquals(1, harness.roleTakes)
+    }
+
+    @Test
+    fun `a kept intent expires at the deadline even without an answer`() {
+        val harness = Harness()
+        enable(harness.redirect)
+        harness.link("https://example.com", "io.app", 3)
+        assertEquals(1, harness.redirect.pendingCount())
+        val (delay, expiry) = harness.scheduled.single()
+        assertEquals(UrlRedirect.KEEP_MILLIS, delay)
+        expiry()
+        assertEquals(0, harness.redirect.pendingCount())
+        val id = harness.published().single().openUrlOnHost.requestId
+        assertThrows(GuestFailure::class.java) {
+            harness.redirect.resolve(resolve(id, UrlAction.URL_ACTION_OPEN_IN_GUEST))
+        }
+    }
+
+    @Test
+    fun `stale kept intents are purged when the next link arrives`() {
+        val harness = Harness()
+        enable(harness.redirect)
+        harness.link("https://example.com/a", "io.app", 1)
+        harness.clock = UrlRedirect.KEEP_MILLIS
+        harness.link("https://example.com/b", "io.app", 2)
+        assertEquals(1, harness.redirect.pendingCount())
     }
 }

@@ -105,6 +105,9 @@ class Daemon(internal val scope: CoroutineScope) {
                 uptimeMillis = { SystemClock.elapsedRealtime() },
                 roleHeld = { browserRoleHeld() },
                 takeRole = { takeBrowserRole() },
+                // Kept intents expire on the callbacks thread so a silent host
+                // cannot hold the intercepted intent forever (§7.1).
+                schedule = { delay, action -> callbackHandler.postDelayed(action, delay) },
             )
             .also {
                 // The activity and the daemon share a process in PRIVILEGED_APP mode

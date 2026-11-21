@@ -28,6 +28,11 @@ class UrlRedirect(
     private val roleHeld: () -> Boolean,
     /** Takes the browser role again (`RoleManager.addRoleHolderAsUser`). */
     private val takeRole: () -> Unit,
+    /**
+     * Schedules [action] after `delayMs` on any thread, used to expire kept intents. Null means
+     * entries expire only when [resolve] or the next [onLink] observes the deadline.
+     */
+    private val schedule: ((delayMs: Long, action: () -> Unit) -> Unit)? = null,
 ) {
     /** The redirect state the `SetUrlRedirect` operation (op 44) writes. */
     internal data class Config(val enabled: Boolean, val excludedPackages: Set<String>)
@@ -70,8 +75,16 @@ class UrlRedirect(
             reopen(displayId)
             return
         }
+        // The role can be lost while the config stays enabled (another browser
+        // takes it); check on every link so the warning and retake run at once.
+        checkBrowserRole()
+        purgeExpired()
         val requestId = sequence.incrementAndGet()
-        pending[requestId] = KeptLink(displayId, uptimeMillis() + KEEP_MILLIS, reopen)
+        val deadline = uptimeMillis() + KEEP_MILLIS
+        pending[requestId] = KeptLink(displayId, deadline, reopen)
+        // A kept intent must not outlive KEEP_MILLIS even if the host never
+        // answers: the scheduled expiry releases the activity's intent.
+        schedule?.invoke(KEEP_MILLIS) { pending.remove(requestId) }
         events.publish {
             it.openUrlOnHost =
                 OpenUrlOnHost.newBuilder()
@@ -125,6 +138,12 @@ class UrlRedirect(
 
     /** Whether the app currently holds the browser role. */
     fun browserRoleHeld(): Boolean = roleHeld()
+
+    /** Drops every kept intent past its deadline. */
+    private fun purgeExpired() {
+        val now = uptimeMillis()
+        pending.entries.removeIf { it.value.deadlineMs <= now }
+    }
 
     /** The kept intents, for tests. */
     internal fun pendingCount(): Int = pending.size

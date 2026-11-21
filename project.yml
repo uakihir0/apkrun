@@ -266,6 +266,7 @@ targets:
       - path: Tests/IntegrationTests/G3GraphicsTests
       - path: Tests/IntegrationTests/GuestAgentTests
       - path: Tests/IntegrationTests/AndroidInputTests
+      - path: Tests/IntegrationTests/WrapperDesktopTests
       - path: Tests/IntegrationTests/Support
       - path: Tests/IntegrationTests/RunResources
         excludes:

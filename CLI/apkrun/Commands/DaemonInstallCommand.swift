@@ -375,7 +375,7 @@
                 switch clientError {
                 case .operationResultUnknown:
                     return uncertainInstallResult(packageID: packageID, operationID: operationID)
-                case .remoteFailure(let code, _) where code == "runtime.operationNotFound":
+                case .remoteFailure(let code, _, _) where code == "runtime.operationNotFound":
                     return uncertainInstallResult(packageID: packageID, operationID: operationID)
                 default:
                     break
@@ -400,7 +400,7 @@
                 case .transportFailure, .requestTimedOut, .requestCancelled, .operationResultUnknown,
                     .malformedReply, .invalidRemoteProxy:
                     return uncertainInstallResult(packageID: packageID, operationID: operationID)
-                case .remoteFailure(let code, _) where code == "runtime.operationNotFound":
+                case .remoteFailure(let code, _, _) where code == "runtime.operationNotFound":
                     return uncertainInstallResult(packageID: packageID, operationID: operationID)
                 default:
                     break
@@ -450,7 +450,7 @@
                 switch clientError {
                 case .operationResultUnknown:
                     return true
-                case .remoteFailure(let code, _) where code == "runtime.operationNotFound":
+                case .remoteFailure(let code, _, _) where code == "runtime.operationNotFound":
                     return true
                 default:
                     break

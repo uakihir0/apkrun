@@ -125,8 +125,11 @@ public enum WrapperFailure: APKRunError, Equatable {
             ["reason": .text(reason)]
         case .destinationNotWritable(let url):
             ["file": .fileName(url.lastPathComponent)]
-        case .destinationNotAccessible(let url, _):
-            ["file": .fileName(url.lastPathComponent)]
+        case .destinationNotAccessible(let url, let stagingToken):
+            [
+                "file": .fileName(url.lastPathComponent),
+                "stagingToken": .text(stagingToken),
+            ]
         case .nameConflict(let url, _):
             ["file": .fileName(url.lastPathComponent)]
         case .wrapperExists(let packageID, let url):

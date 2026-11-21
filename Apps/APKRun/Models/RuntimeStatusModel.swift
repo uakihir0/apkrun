@@ -122,7 +122,7 @@ final class RuntimeStatusModel {
     private static func wireError(for error: any Error) -> RuntimeWireError {
         if let wire = error as? RuntimeWireError { return wire }
         if let clientError = error as? RuntimeControlClientError,
-            case .remoteFailure(let code, let message) = clientError
+            case .remoteFailure(let code, let message, _) = clientError
         {
             return RuntimeWireError(domain: "runtime", code: code, message: message)
         }

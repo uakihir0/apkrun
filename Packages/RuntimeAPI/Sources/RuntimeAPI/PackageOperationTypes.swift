@@ -868,13 +868,20 @@ public struct RuntimeWireError: Error, Codable, Sendable, Equatable {
     public var message: String
     /// An optional action the user can take to recover.
     public var remediation: String?
+    /// The error's named parameters, such as a `stagingToken` for
+    /// `wrapper.destinationNotAccessible`. Not part of the message.
+    public var parameters: [String: String]
 
     /// Creates a transport-safe failure.
-    public init(domain: String, code: String, message: String, remediation: String? = nil) {
+    public init(
+        domain: String, code: String, message: String, remediation: String? = nil,
+        parameters: [String: String] = [:]
+    ) {
         self.domain = domain
         self.code = code
         self.message = message
         self.remediation = remediation
+        self.parameters = parameters
     }
 
     /// Creates a runtime-domain error.

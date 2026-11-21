@@ -173,6 +173,49 @@ public struct RuntimeVerifyWrapperControlReply: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - placeStagedWrapper (wrapper.md §6.3)
+
+/// Finishes a generation whose destination the daemon cannot reach: the
+/// client moved the staged bundle and reports where it went.
+public struct RuntimePlaceStagedWrapperControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The token from the `wrapper.destinationNotAccessible` error.
+    public let stagingToken: String
+    /// Where the client placed the bundle.
+    public let finalURL: URL
+    /// The client's security bookmark for `finalURL`, base64.
+    public let bookmark: String?
+
+    /// Creates a place-staged-wrapper control request.
+    public init(header: APIRequestHeader, stagingToken: String, finalURL: URL, bookmark: String?) {
+        self.header = header
+        self.stagingToken = stagingToken
+        self.finalURL = finalURL
+        self.bookmark = bookmark
+    }
+}
+
+/// The result or typed error returned by a control place-staged-wrapper request.
+public struct RuntimePlaceStagedWrapperControlReply: Codable, Equatable, Sendable {
+    /// The registered wrapper, present on success.
+    public let result: WrapperInfo?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: WrapperInfo) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
 // MARK: - createWrapper (runtime-api.md §10.3)
 
 /// The on-demand status of a wrapper (wrapper.md §9.1). Never stored.

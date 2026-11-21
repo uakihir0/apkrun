@@ -27,7 +27,7 @@ public enum RuntimeControlClientError: Error, Equatable, Sendable {
     /// The caller cancelled while waiting for a state-changing operation.
     case requestCancelled(operation: String)
     /// The control endpoint returned a catalog-backed error.
-    case remoteFailure(code: String, message: String)
+    case remoteFailure(code: String, message: String, parameters: [String: String] = [:])
     /// JSON encoding failed.
     case encodingFailure
 }
@@ -60,7 +60,7 @@ extension RuntimeControlClientError: LocalizedError {
             "APKRun couldn't confirm whether the operation completed."
         case .requestCancelled:
             "The operation was cancelled."
-        case .remoteFailure(_, let message):
+        case .remoteFailure(_, let message, _):
             message
         case .encodingFailure:
             "The runtime request could not be encoded."
@@ -389,7 +389,8 @@ public actor RuntimeControlClient {
                 throw RuntimeControlClientError.malformedReply
             }
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let result = reply.result else {
                 throw RuntimeControlClientError.malformedReply
@@ -691,7 +692,8 @@ public actor RuntimeControlClient {
             let response = try await opened.channel.createWrapper(data, icon: icon)
             let reply = try Self.decode(RuntimeCreateWrapperControlReply.self, from: response)
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let handle = reply.result else {
                 throw RuntimeControlClientError.malformedReply
@@ -732,6 +734,43 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Completes a staged wrapper placement after the client moved the
+    /// bundle into the protected folder (wrapper.md §6.3). API 1.18+.
+    public func placeStagedWrapper(
+        stagingToken: String,
+        finalURL: URL,
+        bookmark: String?
+    ) async throws(RuntimeControlClientError) -> WrapperInfo {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimePlaceStagedWrapperControlRequest(
+                header: makeHeader(),
+                stagingToken: stagingToken,
+                finalURL: finalURL,
+                bookmark: bookmark
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.placeStagedWrapper(data)
+            let reply = try Self.decode(RuntimePlaceStagedWrapperControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message,
+                    parameters: failure.parameters)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
     /// The approval prompts waiting for APKRun.app (runtime-api.md §10.6).
     public func pendingApprovals() async throws(RuntimeControlClientError) -> [ApprovalPrompt] {
         let opened = try await ensureControl()
@@ -744,7 +783,8 @@ public actor RuntimeControlClient {
                 throw RuntimeControlClientError.malformedReply
             }
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let result = reply.result else {
                 throw RuntimeControlClientError.malformedReply
@@ -773,7 +813,8 @@ public actor RuntimeControlClient {
                 throw RuntimeControlClientError.malformedReply
             }
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
         } catch {
             let clientError = Self.clientError(from: error)
@@ -794,7 +835,8 @@ public actor RuntimeControlClient {
                 throw RuntimeControlClientError.malformedReply
             }
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let result = reply.result else {
                 throw RuntimeControlClientError.malformedReply
@@ -823,7 +865,8 @@ public actor RuntimeControlClient {
                 throw RuntimeControlClientError.malformedReply
             }
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
         } catch {
             let clientError = Self.clientError(from: error)
@@ -848,7 +891,8 @@ public actor RuntimeControlClient {
                 throw RuntimeControlClientError.malformedReply
             }
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let result = reply.result else {
                 throw RuntimeControlClientError.malformedReply
@@ -877,7 +921,8 @@ public actor RuntimeControlClient {
                 throw RuntimeControlClientError.malformedReply
             }
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let sessions = reply.sessions else {
                 throw RuntimeControlClientError.malformedReply
@@ -906,7 +951,8 @@ public actor RuntimeControlClient {
                 throw RuntimeControlClientError.malformedReply
             }
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let ack = reply.ack else {
                 throw RuntimeControlClientError.malformedReply
@@ -931,7 +977,8 @@ public actor RuntimeControlClient {
             let response = try await opened.channel.clipboardWritten(data)
             let reply = try Self.decode(RuntimeClipboardWrittenControlReply.self, from: response)
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
         } catch {
             let clientError = Self.clientError(from: error)
@@ -952,7 +999,8 @@ public actor RuntimeControlClient {
             let response = try await opened.channel.focusChanged(data)
             let reply = try Self.decode(RuntimeFocusChangedControlReply.self, from: response)
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
         } catch {
             let clientError = Self.clientError(from: error)
@@ -976,7 +1024,8 @@ public actor RuntimeControlClient {
                 throw RuntimeControlClientError.malformedReply
             }
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let status = reply.status else {
                 throw RuntimeControlClientError.malformedReply
@@ -1004,7 +1053,8 @@ public actor RuntimeControlClient {
             let response = try await opened.channel.checkForUpdates(data)
             let reply = try Self.decode(RuntimeCheckForUpdatesControlReply.self, from: response)
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let operation = reply.operation else {
                 throw RuntimeControlClientError.malformedReply
@@ -1029,7 +1079,8 @@ public actor RuntimeControlClient {
                 throw RuntimeControlClientError.malformedReply
             }
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let updates = reply.updates else {
                 throw RuntimeControlClientError.malformedReply
@@ -1059,7 +1110,8 @@ public actor RuntimeControlClient {
                 throw RuntimeControlClientError.malformedReply
             }
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let entries = reply.entries else {
                 throw RuntimeControlClientError.malformedReply
@@ -1089,7 +1141,8 @@ public actor RuntimeControlClient {
                 throw RuntimeControlClientError.malformedReply
             }
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let status = reply.status else {
                 throw RuntimeControlClientError.malformedReply
@@ -1119,7 +1172,8 @@ public actor RuntimeControlClient {
                 throw RuntimeControlClientError.malformedReply
             }
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let status = reply.status else {
                 throw RuntimeControlClientError.malformedReply
@@ -1150,7 +1204,7 @@ public actor RuntimeControlClient {
             let reply = try Self.decode(RuntimeConfigGetControlReply.self, from: response)
             if let failure = reply.error {
                 throw RuntimeControlClientError.remoteFailure(
-                    code: failure.code, message: failure.message)
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let values = reply.values else {
                 throw RuntimeControlClientError.malformedReply
@@ -1177,7 +1231,7 @@ public actor RuntimeControlClient {
             let reply = try Self.decode(RuntimeConfigSetControlReply.self, from: response)
             if let failure = reply.error {
                 throw RuntimeControlClientError.remoteFailure(
-                    code: failure.code, message: failure.message)
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let values = reply.values else {
                 throw RuntimeControlClientError.malformedReply
@@ -1204,7 +1258,7 @@ public actor RuntimeControlClient {
             let reply = try Self.decode(RuntimeRollbackPackageControlReply.self, from: response)
             if let failure = reply.error {
                 throw RuntimeControlClientError.remoteFailure(
-                    code: failure.code, message: failure.message)
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard (reply.rolledBackTo != nil) != (reply.unavailable == true) else {
                 throw RuntimeControlClientError.malformedReply
@@ -1234,7 +1288,7 @@ public actor RuntimeControlClient {
             let reply = try Self.decode(RuntimeUpdateSkipControlReply.self, from: response)
             if let failure = reply.error {
                 throw RuntimeControlClientError.remoteFailure(
-                    code: failure.code, message: failure.message)
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
         } catch {
             let clientError = Self.clientError(from: error)
@@ -1261,7 +1315,8 @@ public actor RuntimeControlClient {
             let response = try await opened.channel.updatePackage(data, files: files)
             let reply = try Self.decode(RuntimeUpdatePackageControlReply.self, from: response)
             if let failure = reply.error {
-                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
             }
             guard let operation = reply.operation else {
                 throw RuntimeControlClientError.malformedReply
@@ -1393,7 +1448,8 @@ public actor RuntimeControlClient {
                 if let error = reply.error {
                     throw RuntimeControlClientError.remoteFailure(
                         code: error.code,
-                        message: error.message
+                        message: error.message,
+                        parameters: error.parameters
                     )
                 }
                 guard reply.result?.contains(topic) == true else {
@@ -1453,7 +1509,8 @@ public actor RuntimeControlClient {
             if let error = reply.error {
                 throw RuntimeControlClientError.remoteFailure(
                     code: error.code,
-                    message: error.message
+                    message: error.message,
+                    parameters: error.parameters
                 )
             }
             guard reply.result != nil else {
@@ -1773,7 +1830,7 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         if let error = reply.error {
-            throw .remoteFailure(code: error.code, message: error.message)
+            throw .remoteFailure(code: error.code, message: error.message, parameters: error.parameters)
         }
         guard let status = reply.status else {
             throw .malformedReply
@@ -1789,7 +1846,7 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         if let failure = reply.error {
-            throw .remoteFailure(code: failure.code, message: failure.message)
+            throw .remoteFailure(code: failure.code, message: failure.message, parameters: failure.parameters)
         }
         guard let result = reply.result else {
             throw .malformedReply
@@ -1805,7 +1862,7 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         if let failure = reply.error {
-            throw .remoteFailure(code: failure.code, message: failure.message)
+            throw .remoteFailure(code: failure.code, message: failure.message, parameters: failure.parameters)
         }
         guard let result = reply.result else {
             throw .malformedReply
@@ -1821,7 +1878,7 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         if let failure = reply.error {
-            throw .remoteFailure(code: failure.code, message: failure.message)
+            throw .remoteFailure(code: failure.code, message: failure.message, parameters: failure.parameters)
         }
         guard let result = reply.result else {
             throw .malformedReply
@@ -1837,7 +1894,7 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         if let failure = reply.error {
-            throw .remoteFailure(code: failure.code, message: failure.message)
+            throw .remoteFailure(code: failure.code, message: failure.message, parameters: failure.parameters)
         }
         guard let result = reply.result else {
             throw .malformedReply
@@ -1853,7 +1910,7 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         if let failure = reply.error {
-            throw .remoteFailure(code: failure.code, message: failure.message)
+            throw .remoteFailure(code: failure.code, message: failure.message, parameters: failure.parameters)
         }
         guard let result = reply.result else {
             throw .malformedReply
@@ -1869,7 +1926,7 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         if let failure = reply.error {
-            throw .remoteFailure(code: failure.code, message: failure.message)
+            throw .remoteFailure(code: failure.code, message: failure.message, parameters: failure.parameters)
         }
         guard let result = reply.result else {
             throw .malformedReply
@@ -1885,7 +1942,7 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         if let failure = reply.error {
-            throw .remoteFailure(code: failure.code, message: failure.message)
+            throw .remoteFailure(code: failure.code, message: failure.message, parameters: failure.parameters)
         }
         guard let result = reply.result else {
             throw .malformedReply
@@ -1901,7 +1958,7 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         if let failure = reply.error {
-            throw .remoteFailure(code: failure.code, message: failure.message)
+            throw .remoteFailure(code: failure.code, message: failure.message, parameters: failure.parameters)
         }
         guard let result = reply.result else {
             throw .malformedReply
@@ -1917,7 +1974,7 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         if let failure = reply.error {
-            throw .remoteFailure(code: failure.code, message: failure.message)
+            throw .remoteFailure(code: failure.code, message: failure.message, parameters: failure.parameters)
         }
         guard let result = reply.result else {
             throw .malformedReply
@@ -1935,7 +1992,7 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         if let failure = reply.error {
-            throw .remoteFailure(code: failure.code, message: failure.message)
+            throw .remoteFailure(code: failure.code, message: failure.message, parameters: failure.parameters)
         }
         guard let result = reply.result else {
             throw .malformedReply
@@ -1951,7 +2008,7 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         if let failure = reply.error {
-            throw .remoteFailure(code: failure.code, message: failure.message)
+            throw .remoteFailure(code: failure.code, message: failure.message, parameters: failure.parameters)
         }
         guard let result = reply.result else {
             throw .malformedReply
@@ -1967,7 +2024,7 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         if let failure = reply.error {
-            throw .remoteFailure(code: failure.code, message: failure.message)
+            throw .remoteFailure(code: failure.code, message: failure.message, parameters: failure.parameters)
         }
         guard let result = reply.result else {
             throw .malformedReply
@@ -1983,7 +2040,7 @@ public actor RuntimeControlClient {
             throw .malformedReply
         }
         if let failure = reply.error {
-            throw .remoteFailure(code: failure.code, message: failure.message)
+            throw .remoteFailure(code: failure.code, message: failure.message, parameters: failure.parameters)
         }
         guard let result = reply.result else {
             throw .malformedReply
@@ -2015,7 +2072,9 @@ public actor RuntimeControlClient {
             return try JSONDecoder().decode(RuntimeHelloReply.self, from: data)
         } catch {
             if let brokerError = try? JSONDecoder().decode(RuntimeBrokerErrorReply.self, from: data) {
-                throw .remoteFailure(code: brokerError.error.code, message: brokerError.error.message)
+                throw .remoteFailure(
+                    code: brokerError.error.code, message: brokerError.error.message,
+                    parameters: brokerError.error.parameters)
             }
             throw .malformedReply
         }
@@ -2213,6 +2272,8 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
 
     /// Starts a wrapper generation; the reply carries the operation handle.
     func createWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data
+    /// Finishes a staged wrapper placement (wrapper.md §6.3).
+    func placeStagedWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Returns the approval prompts waiting for APKRun.app.
     func pendingApprovals(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Answers an approval prompt.
@@ -2767,6 +2828,21 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.createWrapper(request, icon: icon) { response in finish(.success(response)) }
+        }
+    }
+
+    /// Finishes a staged wrapper placement (wrapper.md §6.3).
+    func placeStagedWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.placeStagedWrapper(request) { response in finish(.success(response)) }
         }
     }
 

@@ -13,8 +13,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.14 adds `perfStatistics`, `frameStatistics`, and `RuntimeLaunchRequest.launchTiming`;
     /// 1.15 adds the gentle-update session rules and `update` package changes;
     /// 1.16 adds update ownership and rollback surfaces;
-    /// 1.17 adds the `iconChanged` package change (package-store.md §10.2).
-    public static let current = APIVersion(major: 1, minor: 17)
+    /// 1.17 adds the `iconChanged` package change (package-store.md §10.2);
+    /// 1.18 adds `placeStagedWrapper` for TCC-protected destinations (wrapper.md §6.3).
+    public static let current = APIVersion(major: 1, minor: 18)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -612,11 +613,15 @@ public struct RuntimeControlError: Codable, Equatable, Sendable {
     public let code: String
     /// A short user-facing summary.
     public let message: String
+    /// Catalog parameters a client needs to finish a deferred step, such as
+    /// `stagingToken` on `wrapper.destinationNotAccessible` (wrapper.md §6.3).
+    public let parameters: [String: String]
 
     /// Creates a control error.
-    public init(code: String, message: String) {
+    public init(code: String, message: String, parameters: [String: String] = [:]) {
         self.code = code
         self.message = message
+        self.parameters = parameters
     }
 }
 
@@ -700,6 +705,9 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func verifyWrapper(_ request: Data, reply: @escaping (Data) -> Void)
     /// Starts a wrapper generation; replies with the operation handle.
     func createWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void)
+
+    /// Completes a staged wrapper placement (wrapper.md §6.3).
+    func placeStagedWrapper(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the approval prompts waiting for APKRun.app.
     func pendingApprovals(_ request: Data, reply: @escaping (Data) -> Void)
     /// Answers an approval prompt (APKRun.app only).

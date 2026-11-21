@@ -445,10 +445,15 @@ public actor SharedFolderService {
         // ACTION_CREATE_DOCUMENT reaches the provider through the picker
         // (com.android.documentsui): the app that asked for the save is not
         // visible here, and the picker's choice is itself the user's consent.
-        // The picker may therefore create in roots whose cap is readWrite;
-        // every other write op still requires the real package's access.
-        let (root, _) = try await checkedAccess(
-            package: package, rootID: rootID, write: true)
+        // The picker may therefore create in roots whose cap is readWrite —
+        // but only create: rename and delete still need the real package.
+        let root: SharedFolderRoot
+        if package.rawValue == Self.browserOnlyPackage {
+            root = try await checkedPickerCreate(package: package, rootID: rootID)
+        } else {
+            root = try await checkedAccess(
+                package: package, rootID: rootID, write: true).0
+        }
         return try await create(
             root: root, package: package,
             parentPath: parentPath, name: name, isDirectory: isDirectory)
@@ -561,6 +566,11 @@ public actor SharedFolderService {
             throw SharedFolderFailure(.notFound)
         }
         close(oldFD)
+        // A rename never clobbers: renaming onto an existing name loses the
+        // file that was there.
+        guard faccessat(parentFD, clean, F_OK, AT_SYMLINK_NOFOLLOW) != 0 else {
+            throw SharedFolderFailure(.invalidArgument)
+        }
         let newPath = parentPath.isEmpty ? clean : parentPath + "/" + clean
         guard renameat(parentFD, oldName, parentFD, clean) == 0 else {
             throw SharedFolderFailure(.internal, .transferFailed(detail: "rename"))
@@ -569,6 +579,25 @@ public actor SharedFolderService {
             throw SharedFolderFailure(.internal, .transferFailed(detail: "stat after rename"))
         }
         return info
+    }
+
+    /// The picker's only write op: create, allowed where the global switch
+    /// is on and the root's cap is `readWrite` (§6.4). For the pseudo-
+    /// package `valueForPackage` reports `readWrite` only while the feature
+    /// is enabled, so `effectiveAccess` is exactly min(switch, cap).
+    private func checkedPickerCreate(
+        package: RuntimePackageID, rootID: String
+    ) async throws(SharedFolderFailure) -> SharedFolderRoot {
+        let roots = await source.roots()
+        guard let root = roots.first(where: { $0.rootID == rootID }) else {
+            throw SharedFolderFailure(.notFound)
+        }
+        guard let effective = try await effectiveAccess(package: package, root: root),
+            effective == .readWrite
+        else {
+            throw SharedFolderFailure(.permissionDenied, .readOnly)
+        }
+        return root
     }
 
     // MARK: Access checking
@@ -599,16 +628,10 @@ public actor SharedFolderService {
             throw SharedFolderFailure(.notFound)
         }
         if package.rawValue == Self.browserOnlyPackage {
-            guard write else { return (root, .readOnly) }
-            // The picker's effective access is the global switch capped by
-            // the root: a create through it can never bypass a global off or
-            // a readOnly cap (§6.4).
-            guard let effective = try await effectiveAccess(package: package, root: root),
-                effective == .readWrite
-            else {
+            guard !write else {
                 throw SharedFolderFailure(.permissionDenied, .readOnly)
             }
-            return (root, effective)
+            return (root, .readOnly)
         }
         guard let effective = try await effectiveAccess(package: package, root: root) else {
             throw SharedFolderFailure(

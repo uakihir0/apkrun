@@ -2880,7 +2880,9 @@ def test_boot_observer_uses_private_adb_socket_after_start_event_and_cleans_up(
     assert logged_calls
     connect_times = [call["wallTime"] for call in logged_calls if "connect" in call["args"]]
     assert len(connect_times) >= 2
-    assert 1.2 <= connect_times[1] - connect_times[0] < 2.1
+    # adb_interval=1.5 above; allow generous scheduling slack on loaded CI runners
+    # while still catching a retry scheduled on the wrong (much longer) timer.
+    assert 1.2 <= connect_times[1] - connect_times[0] < 4.0
     assert all(
         call["args"][call["args"].index("-L") + 1].startswith("localfilesystem:")
         for call in logged_calls

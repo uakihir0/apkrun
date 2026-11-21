@@ -22,9 +22,11 @@ import io.apkrun.guest.protocol.v1.PackageSummary
 import io.apkrun.guest.protocol.v1.Ping
 import io.apkrun.guest.protocol.v1.QueryPackage
 import io.apkrun.guest.protocol.v1.Request
+import io.apkrun.guest.protocol.v1.ResolveUrl
 import io.apkrun.guest.protocol.v1.Response
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.SetNotificationForwarding
+import io.apkrun.guest.protocol.v1.SetUrlRedirect
 import io.apkrun.guest.protocol.v1.Shutdown
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
@@ -120,6 +122,10 @@ private class FakeOperations : AgentOperations {
     override fun dismissNotification(request: DismissNotification) = enter()
 
     override fun setNotificationForwarding(request: SetNotificationForwarding) = enter()
+
+    override fun setUrlRedirect(request: SetUrlRedirect) = enter()
+
+    override fun resolveUrl(request: ResolveUrl) = enter()
 
     override fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult {
         enter()

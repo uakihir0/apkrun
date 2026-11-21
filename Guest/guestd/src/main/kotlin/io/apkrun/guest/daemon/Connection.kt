@@ -135,7 +135,8 @@ class Connection(
                 "the first frame from the host is not HelloAck"
             )
         }
-        val accepted = AgentHandshake.evaluate(ack.helloAck, ProtocolVersion.HOST, IMPLEMENTED)
+        val accepted =
+            AgentHandshake.evaluate(ack.helloAck, ProtocolVersion.HOST, daemon.implemented)
         val enabled =
             GuestCapability.entries.filter { it.wireName in accepted.enabledCapabilities }.toSet()
         return Negotiated(enabled, accepted.sessionToken)
@@ -257,13 +258,17 @@ class Connection(
                     .setBuildFingerprint(Build.FINGERPRINT)
                     .setBuildType(Build.TYPE)
             )
-            .addAllCapabilities(IMPLEMENTED.map { it.wireName })
+            .addAllCapabilities(daemon.implemented.map { it.wireName })
             .setChannel(channel)
             .setMode(AgentMode.AGENT_MODE_DEVELOPMENT_SHELL)
             .build()
 
     companion object {
-        /** The capabilities that this build implements (guest-protocol.md §5.3). */
+        /**
+         * The capabilities that this build implements (guest-protocol.md §5.3). `url.v1` is in the
+         * set; the daemon drops it in development, where its UrlRedirectActivity stays disabled and
+         * no intercept can run (issue #82, TODO(#36)).
+         */
         val IMPLEMENTED: Set<GuestCapability> =
             setOf(
                 GuestCapability.CORE,
@@ -276,6 +281,7 @@ class Connection(
                 GuestCapability.CLIPBOARD_TEXT,
                 GuestCapability.CLIPBOARD_IMAGE,
                 GuestCapability.NOTIFICATIONS,
+                GuestCapability.URL,
             )
     }
 }

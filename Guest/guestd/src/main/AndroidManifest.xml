@@ -30,6 +30,29 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+        <!-- The link intercept (desktop-integration.md §7.1): holds the browser
+             role in PRIVILEGED_APP mode. Disabled in development like the
+             listener; the privileged agent enables it (TODO(#36)). -->
+        <activity
+            android:name=".url.UrlRedirectActivity"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:enabled="false">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+                <data android:scheme="mailto" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SENDTO" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="mailto" />
+            </intent-filter>
+        </activity>
         <!-- Read-only transfer files for the clipboard image path (issue #81). -->
         <provider
             android:name=".daemon.TransferFileProvider"

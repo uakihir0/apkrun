@@ -16,13 +16,16 @@ import io.apkrun.guest.protocol.v1.ListPackages
 import io.apkrun.guest.protocol.v1.PackageInfo
 import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
+import io.apkrun.guest.protocol.v1.ResolveUrl
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.SetNotificationForwarding
+import io.apkrun.guest.protocol.v1.SetUrlRedirect
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
 import io.apkrun.guest.protocol.v1.SystemState
 import io.apkrun.guest.runtime.HiddenApi
 import io.apkrun.guest.runtime.SystemContext
+import io.apkrun.guest.url.UrlRedirect
 
 /**
  * The operations of the agent on the device, over the services (guest-components.md §6.1). The
@@ -36,6 +39,7 @@ internal class DeviceOperations(
     private val diagnostics: DiagnosticsService,
     private val clipboard: ClipboardBridge,
     private val notifications: NotificationBridge,
+    private val urlRedirect: UrlRedirect,
 ) : AgentOperations {
     override fun snapshot(): Snapshot =
         Snapshot.newBuilder()
@@ -86,6 +90,10 @@ internal class DeviceOperations(
 
     override fun setNotificationForwarding(request: SetNotificationForwarding) =
         notifications.setForwarding(request)
+
+    override fun setUrlRedirect(request: SetUrlRedirect) = urlRedirect.setRedirect(request)
+
+    override fun resolveUrl(request: ResolveUrl) = urlRedirect.resolve(request)
 
     override fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult =
         diagnostics.collect(request)

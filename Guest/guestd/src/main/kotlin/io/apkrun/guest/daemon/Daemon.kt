@@ -4,11 +4,13 @@ import android.net.LocalSocket
 import android.os.HandlerThread
 import android.os.Process
 import android.os.SystemClock
+import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.SessionManager
 import io.apkrun.guest.protocol.v1.ChannelKind
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.AgentSocketServer
 import io.apkrun.guest.runtime.SystemContext
+import io.apkrun.guest.url.UrlRedirect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -66,6 +68,17 @@ class Daemon(internal val scope: CoroutineScope) {
     }
 
     internal val events = EventBus()
+    /**
+     * The capabilities the connections advertise: `url.v1` only where the agent runs inside the app
+     * and its UrlRedirectActivity can hold the browser role. The shell-uid development agent keeps
+     * the handler off (issue #82).
+     */
+    internal val implemented: Set<GuestCapability> =
+        if (Process.myUid() == Process.SHELL_UID) {
+            Connection.IMPLEMENTED - GuestCapability.URL
+        } else {
+            Connection.IMPLEMENTED
+        }
     internal val sessions =
         SessionManager({ SystemClock.elapsedRealtime() }) { token ->
             // Publishing must not kill the control accept path: a settings failure degrades to
@@ -86,6 +99,21 @@ class Daemon(internal val scope: CoroutineScope) {
         NotificationBridge(events, ApkRunNotificationListener.access()).also {
             ApkRunNotificationListener.bridge = it
         }
+    internal val urlRedirect =
+        UrlRedirect(
+                events,
+                uptimeMillis = { SystemClock.elapsedRealtime() },
+                roleHeld = { browserRoleHeld() },
+                takeRole = { takeBrowserRole() },
+            )
+            .also {
+                // The activity and the daemon share a process in PRIVILEGED_APP mode
+                // only; in development the bridge stays unreachable and the activity
+                // is disabled (guest-components.md §3.2, TODO(#36)).
+                if (Process.myUid() != Process.SHELL_UID) {
+                    UrlRedirect.instance = it
+                }
+            }
     internal val input =
         InputService(
             boundsOf = { displayId ->
@@ -110,6 +138,7 @@ class Daemon(internal val scope: CoroutineScope) {
                     diagnostics,
                     clipboard,
                     notifications,
+                    urlRedirect,
                 ),
             uptimeMillis = { SystemClock.elapsedRealtime() },
         )
@@ -158,6 +187,48 @@ class Daemon(internal val scope: CoroutineScope) {
                 "transfers",
             )
         }
+
+    /** Whether the app holds `RoleManager.ROLE_BROWSER` (desktop-integration.md §7.1). */
+    private fun browserRoleHeld(): Boolean = runCatching {
+        val manager = SystemContext.get().getSystemService(android.app.role.RoleManager::class.java)
+        manager?.isRoleHeld(android.app.role.RoleManager.ROLE_BROWSER) == true
+    }
+        .getOrDefault(false)
+
+    /**
+     * Takes the browser role again through the privileged `RoleManager.addRoleHolderAsUser`
+     * (guest-components.md §5). The shell uid cannot hold a role, so the development agent does
+     * nothing here.
+     */
+    private fun takeBrowserRole() {
+        if (Process.myUid() == Process.SHELL_UID) return
+        runCatching {
+            val manager =
+                SystemContext.get().getSystemService(android.app.role.RoleManager::class.java)
+                    ?: return@runCatching
+            android.app.role.RoleManager::class
+                .java
+                .getMethod(
+                    "addRoleHolderAsUser",
+                    String::class.java,
+                    String::class.java,
+                    Int::class.javaPrimitiveType,
+                    android.os.UserHandle::class.java,
+                    java.util.concurrent.Executor::class.java,
+                    java.util.function.Consumer::class.java,
+                )
+                .invoke(
+                    manager,
+                    android.app.role.RoleManager.ROLE_BROWSER,
+                    GUEST_PACKAGE,
+                    0,
+                    Process.myUserHandle(),
+                    java.util.concurrent.Executor { it.run() },
+                    java.util.function.Consumer<Boolean> {},
+                )
+        }
+            .onFailure { AgentLog.warning("the browser role could not be taken") }
+    }
 
     private fun serve(socket: LocalSocket, channel: ChannelKind) {
         scope.launch(Dispatchers.IO) { Connection(socket, channel, this@Daemon).run() }

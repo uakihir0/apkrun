@@ -170,7 +170,7 @@ private struct RuntimeHeaderView: View {
 
     @ViewBuilder
     private var actionButton: some View {
-        if let status = runtimeStatus.status, !runtimeStatus.setupComplete {
+        if runtimeStatus.status != nil, !runtimeStatus.setupComplete {
             Button("Continue Setup") {}
         } else if let status = runtimeStatus.status {
             switch status.runtimeState {

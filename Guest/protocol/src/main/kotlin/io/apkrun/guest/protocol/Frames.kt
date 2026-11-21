@@ -22,6 +22,22 @@ class FrameWriter(private val output: OutputStream) {
         output.write(FrameCodec.encode(envelope.build()))
         output.flush()
     }
+
+    /**
+     * Sends one envelope with an explicit id. The agent-originated file requests of the files
+     * integration carry the id their caller waits on, so the caller picks it before the frame
+     * leaves (guest-protocol.md §12). [nextId] still moves past any id this call uses.
+     */
+    @Synchronized
+    fun sendRequest(id: Long, body: (Envelope.Builder) -> Unit) {
+        if (id >= nextId) {
+            nextId = id + 1
+        }
+        val envelope = Envelope.newBuilder().setId(id).setReplyTo(0)
+        body(envelope)
+        output.write(FrameCodec.encode(envelope.build()))
+        output.flush()
+    }
 }
 
 /**

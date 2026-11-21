@@ -53,11 +53,41 @@
                 <data android:scheme="mailto" />
             </intent-filter>
         </activity>
-        <!-- Read-only transfer files for the clipboard image path (issue #81). -->
+        <!-- Read-only transfer files for the clipboard image path (issue #81) and
+             the import drops of the files integration (desktop-integration.md §6.1). -->
         <provider
             android:name=".daemon.TransferFileProvider"
             android:authorities="io.apkrun.guest.files"
             android:exported="false"
             android:grantUriPermissions="true" />
+        <!-- The "Save to Mac" share target (desktop-integration.md §6.2): any app can
+             share files to it; the daemon relays them as export offers. Disabled in
+             development like the other components (TODO(#36)). -->
+        <activity
+            android:name=".files.SaveToMacActivity"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:enabled="false">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+        <!-- The shared-folders provider (desktop-integration.md §6.4,
+             guest-protocol.md §12): roots and documents come from Host* requests on
+             the bulk channel. -->
+        <provider
+            android:name=".files.MacFilesProvider"
+            android:authorities="io.apkrun.guest.macfiles"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.provider.action.PROVIDER_INTERFACE" />
+            </intent-filter>
+        </provider>
     </application>
 </manifest>

@@ -2,6 +2,7 @@ package io.apkrun.guest.daemon
 
 import android.os.SystemClock
 import android.provider.Settings
+import io.apkrun.guest.files.FilesBridge
 import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.ActivateNotification
 import io.apkrun.guest.protocol.v1.ClearDisplay
@@ -9,16 +10,21 @@ import io.apkrun.guest.protocol.v1.ClipData
 import io.apkrun.guest.protocol.v1.CollectDiagnostics
 import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
 import io.apkrun.guest.protocol.v1.DismissNotification
+import io.apkrun.guest.protocol.v1.ExportStart
 import io.apkrun.guest.protocol.v1.GuestErrorCode
+import io.apkrun.guest.protocol.v1.ImportFiles
+import io.apkrun.guest.protocol.v1.ImportResult
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
 import io.apkrun.guest.protocol.v1.ListPackages
 import io.apkrun.guest.protocol.v1.PackageInfo
 import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
+import io.apkrun.guest.protocol.v1.ResolveExport
 import io.apkrun.guest.protocol.v1.ResolveUrl
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.SetNotificationForwarding
+import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
 import io.apkrun.guest.protocol.v1.SetUrlRedirect
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
@@ -40,6 +46,7 @@ internal class DeviceOperations(
     private val clipboard: ClipboardBridge,
     private val notifications: NotificationBridge,
     private val urlRedirect: UrlRedirect,
+    private val files: FilesBridge,
 ) : AgentOperations {
     override fun snapshot(): Snapshot =
         Snapshot.newBuilder()
@@ -97,6 +104,13 @@ internal class DeviceOperations(
 
     override fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult =
         diagnostics.collect(request)
+
+    override fun importFiles(request: ImportFiles): ImportResult = files.import(request)
+
+    override fun resolveExport(request: ResolveExport): ExportStart = files.resolveExport(request)
+
+    override fun setSharedFolderAccess(request: SetSharedFolderAccess) =
+        files.applySharedAccess(request)
 
     /** Whether the development IME is the selected input method (input.md §5.6). */
     private fun imeSelected(): Boolean =

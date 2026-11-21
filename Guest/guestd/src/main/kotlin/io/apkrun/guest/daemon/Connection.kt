@@ -100,8 +100,10 @@ class Connection(
         }
         daemon.sessions.track(socket)
         if (channel == ChannelKind.CHANNEL_KIND_GUEST_BULK) {
-            // Diagnostics payloads leave on this connection (guest-protocol.md §10).
+            // Diagnostics and file payloads leave on this connection, and shared-folder
+            // requests return on it (guest-protocol.md §10, §12).
             daemon.bulkTransfers.attach(writer)
+            daemon.hostFileClient.attach(writer)
         }
         try {
             secondaryLoop(negotiated.enabled)
@@ -109,6 +111,7 @@ class Connection(
             daemon.sessions.untrack(socket)
             if (channel == ChannelKind.CHANNEL_KIND_GUEST_BULK) {
                 daemon.bulkTransfers.detach(writer)
+                daemon.hostFileClient.detach(writer)
             }
             if (channel == ChannelKind.CHANNEL_KIND_GUEST_INPUT) {
                 // A closed input stream releases the gestures it left open (input.md §7.3).
@@ -213,8 +216,16 @@ class Connection(
                 // The bulk channel carries inbound transfers (guest-protocol.md §10); a
                 // SetClipboard names the transfer that carries its image.
                 ChannelKind.CHANNEL_KIND_GUEST_BULK ->
-                    if (envelope.bodyCase == Envelope.BodyCase.BULK) {
-                        daemon.inboundTransfers.accept(envelope.bulk)
+                    when (envelope.bodyCase) {
+                        Envelope.BodyCase.BULK -> daemon.inboundTransfers.accept(envelope.bulk)
+                        // Answers to the agent's Host* file requests land here; the client
+                        // hands them to the waiting caller (guest-protocol.md §12).
+                        Envelope.BodyCase.RESPONSE ->
+                            daemon.hostFileClient.accept(envelope.response, envelope.replyTo)
+                        else ->
+                            throw GuestProtocolFailure.MalformedFrame(
+                                "the body is not allowed on the bulk channel"
+                            )
                     }
                 else ->
                     throw GuestProtocolFailure.MalformedFrame(
@@ -282,6 +293,8 @@ class Connection(
                 GuestCapability.CLIPBOARD_IMAGE,
                 GuestCapability.NOTIFICATIONS,
                 GuestCapability.URL,
+                GuestCapability.FILES,
+                GuestCapability.FILES_SHARED,
             )
     }
 }

@@ -132,6 +132,11 @@ final class AddFlowModel {
             let request = RuntimeImportPackageRequest(files: sources, origin: origin)
             let preview = try await serviceFactory().importPackage(request, files: handles)
             self.preview = preview
+            let globals = try? await serviceFactory()
+                .getConfig(keys: ["wrappers.defaultLocation"])
+            if let configured = globals?["wrappers.defaultLocation"] {
+                defaultLocation = Self.location(for: configured)
+            }
             // A list failure stays conservative: only a fresh or uninspected
             // package offers Create Mac app without a confirmed empty list
             // (wrapper.md §9.1, AGENTS.md §4 invariant 13).
@@ -277,6 +282,13 @@ final class AddFlowModel {
             wrapperError = Self.describe(error)
             stage = .installed
         }
+    }
+
+    /// Maps `wrappers.defaultLocation` to a picker value (configuration.md
+    /// §2.10); `ask` leaves the picker on the first choice, which the sheet
+    /// still requires the user to confirm.
+    static func location(for configured: String) -> AddFlowLocation {
+        configured == "allUsersApplications" ? .allApplications : .userApplications
     }
 
     /// The `WrapperRequest` destination for the chosen location.

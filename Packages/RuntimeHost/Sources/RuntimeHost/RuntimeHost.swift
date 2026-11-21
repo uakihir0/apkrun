@@ -1929,8 +1929,15 @@ public actor RuntimeHost {
         )
         let destination: WrapperDestination
         switch request.destination {
-        case .userApplications, .none:
+        case .userApplications:
             destination = .userApplications
+        case .none:
+            // `nil` = `wrappers.defaultLocation` (runtime-api.md §10.3); an
+            // `ask` default cannot ask here, so it falls back to the user's
+            // Applications folder.
+            let configured = GlobalSettings.load(from: paths.settingsFile)
+                .extras["wrappers.defaultLocation"]
+            destination = configured == "allUsersApplications" ? .applications : .userApplications
         case .applications:
             destination = .applications
         case .directory(let url):

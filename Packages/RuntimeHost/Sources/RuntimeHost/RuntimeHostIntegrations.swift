@@ -791,11 +791,13 @@ extension RuntimeHost {
         sessionID: UUID,
         promptID: UUID,
         choice: LinkChoice,
-        remember: Bool
+        remember: Bool,
+        callerPackageID: RuntimePackageID? = nil
     ) async throws(RuntimeWireError) {
         do {
             try await linkForwarder().resolvePrompt(
-                sessionID: sessionID, promptID: promptID, choice: choice, remember: remember)
+                sessionID: sessionID, promptID: promptID, choice: choice, remember: remember,
+                callerPackageID: callerPackageID)
         } catch let failure as IntegrationFailure {
             throw Self.integrationWireError(failure)
         } catch {

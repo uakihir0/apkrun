@@ -135,6 +135,9 @@ struct LinkForwarderTests {
         #expect(LinkForwarder.registrableDomain(of: "www.example.com") == "example.com")
         #expect(LinkForwarder.registrableDomain(of: "example.com") == "example.com")
         #expect(LinkForwarder.registrableDomain(of: "a.b.example.co.jp") == "example.co.jp")
+        #expect(LinkForwarder.registrableDomain(of: "evil.github.io") == "evil.github.io")
+        #expect(LinkForwarder.registrableDomain(of: "a.b.c.github.io") == "c.github.io")
+        #expect(LinkForwarder.registrableDomain(of: "sub.appspot.com") == "sub.appspot.com")
         #expect(LinkForwarder.registrableDomain(of: "localhost") == "localhost")
         #expect(LinkForwarder.registrableDomain(of: "例え.jp") == "例え.jp")
     }
@@ -238,6 +241,49 @@ struct LinkForwarderTests {
         let encoded = String(describing: prompt)
         #expect(!encoded.contains("token"))
         #expect(!encoded.contains("secret"))
+    }
+
+    @Test("a mailto prompt shows the address without the query")
+    func mailtoPromptStripsQuery() async throws {
+        var rig = Rig()
+        rig.packageValues["io.app"] = "ask"
+        rig.state.sessionID = UUID()
+        let forwarder = rig.forwarder()
+        let outcome = await forwarder.openUrlOnHost(
+            event(url: "mailto:team@example.com?subject=hi&body=secret%20draft", package: "io.app"))
+        guard case .prompted(let prompt) = outcome else {
+            Issue.record("expected a prompt, got \(outcome)")
+            return
+        }
+        #expect(prompt.host == "team@example.com")
+        let encoded = String(describing: prompt)
+        #expect(!encoded.contains("secret"))
+        #expect(!encoded.contains("subject"))
+    }
+
+    @Test("a wrapper cannot answer another package's prompt (NFR-SEC-07)")
+    func resolvePromptWrongPackage() async throws {
+        var rig = Rig()
+        rig.packageValues["io.victim"] = "ask"
+        rig.state.sessionID = UUID()
+        let forwarder = rig.forwarder()
+        let outcome = await forwarder.openUrlOnHost(
+            event(url: "https://example.com/", package: "io.victim"))
+        guard case .prompted(let prompt) = outcome else {
+            Issue.record("expected a prompt")
+            return
+        }
+        await #expect(throws: IntegrationFailure.self) {
+            try await forwarder.resolvePrompt(
+                sessionID: rig.state.sessionID!,
+                promptID: prompt.promptID,
+                choice: .openOnMac,
+                remember: true,
+                callerPackageID: RuntimePackageID(rawValue: "io.impostor"))
+        }
+        // A rejected resolve consumes the entry, like a real timeout does.
+        #expect(rig.opener.opened.isEmpty)
+        #expect(rig.writesHook().isEmpty)
     }
 
     @Test("resolvePrompt openOnMac opens and remembers")

@@ -3739,11 +3739,15 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 return
             }
             do {
+                // NFR-SEC-07: a wrapper connection may only answer prompts of
+                // its own package; the forwarder reports a mismatch as an
+                // expired prompt (runtime-api.md §10.1, §11.2).
                 try await host.resolveLinkPrompt(
                     sessionID: decoded.sessionID,
                     promptID: decoded.promptID,
                     choice: decoded.choice,
-                    remember: decoded.remember)
+                    remember: decoded.remember,
+                    callerPackageID: wrapperPackageID)
                 response.send(Self.encode(RuntimeResolveLinkPromptControlReply(result: RuntimeEmpty())))
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError

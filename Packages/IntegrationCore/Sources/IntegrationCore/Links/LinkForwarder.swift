@@ -225,10 +225,15 @@ public actor LinkForwarder {
         sessionID: UUID,
         promptID: UUID,
         choice: LinkChoice,
-        remember: Bool
+        remember: Bool,
+        callerPackageID: RuntimePackageID? = nil
     ) async throws(IntegrationFailure) {
+        // NFR-SEC-07: a wrapper may only answer its own package's prompt. A
+        // package mismatch is reported as a timeout, indistinguishable from
+        // an expired one, so the caller cannot probe for other apps' prompts.
         guard let entry = pending.removeValue(forKey: promptID),
-            entry.sessionID == sessionID
+            entry.sessionID == sessionID,
+            callerPackageID == nil || entry.packageID == callerPackageID
         else {
             throw .promptTimedOut
         }
@@ -293,9 +298,14 @@ public actor LinkForwarder {
     ) -> LinkPrompt {
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let scheme = components?.scheme?.lowercased() ?? ""
+        // §7.2 shows only the host or the bare address. The query of a
+        // `mailto:` link can carry a draft subject and body, so it is cut.
         let host =
             components?.host
-            ?? (scheme == "mailto" ? String(url.absoluteString.dropFirst("mailto:".count)) : "")
+            ?? (scheme == "mailto"
+                ? String(url.absoluteString.dropFirst("mailto:".count))
+                    .components(separatedBy: "?").first ?? ""
+                : "")
         let path = components?.percentEncodedPath.lowercased() ?? ""
         let signIn =
             path.contains("oauth") || path.contains("authorize") || path.contains("login")
@@ -316,6 +326,15 @@ public actor LinkForwarder {
     public static func registrableDomain(of host: String) -> String {
         let labels = host.split(separator: ".", omittingEmptySubsequences: true)
         guard labels.count >= 2 else { return host }
+        // Multi-user hosting suffixes (a subset of the Public Suffix List)
+        // are public suffixes themselves: `evil.github.io` registers under
+        // `github.io`, so its registrable domain is one label deeper.
+        for count in (2...min(3, labels.count)).reversed() {
+            let candidate = labels.suffix(count).joined(separator: ".").lowercased()
+            if Self.knownPublicSuffixes.contains(candidate), labels.count > count {
+                return labels.suffix(count + 1).joined(separator: ".")
+            }
+        }
         let slds: Set<String> = [
             "ac", "co", "com", "edu", "go", "gov", "ne", "net", "or", "org",
         ]
@@ -326,6 +345,26 @@ public actor LinkForwarder {
         }
         return labels.suffix(2).joined(separator: ".")
     }
+
+    /// Common multi-user hosting domains of the Public Suffix List where each
+    /// subdomain belongs to a different registrant. The diagnostics redactor
+    /// ships a full helper or a pinned snapshot; switch to it
+    /// (TODO(#61)); this set covers the well-known cases.
+    static let knownPublicSuffixes: Set<String> = [
+        "github.io", "gitlab.io", "githubusercontent.com", "pages.dev",
+        "workers.dev", "trycloudflare.com", "webflow.io", "ghost.io",
+        "appspot.com", "web.app", "firebaseapp.com", "run.app",
+        "netlify.app", "vercel.app", "surge.sh", "fly.dev", "onrender.com",
+        "herokuapp.com", "herokussl.com", "azurewebsites.net", "cloudapp.net",
+        "amazonaws.com", "cloudfront.net", "elasticbeanstalk.com",
+        "wordpress.com", "blogspot.com", "medium.com", "substack.com",
+        "notion.site", "myshopify.com", "square.site", "wixsite.com",
+        "weebly.com", "tumblr.com", "neocities.org", "glitch.me",
+        "itch.io", "canva.site", "godaddysites.com", "strikingly.com",
+        "githubusercontent.io", "ngrok.io", "ngrok-free.app", "localtunnel.me",
+        "co.uk", "co.jp", "co.kr", "co.in", "com.au", "com.br",
+        "com.cn", "com.tw", "com.hk", "com.sg", "com.mx", "com.tr",
+    ]
 }
 
 extension Duration {

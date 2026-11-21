@@ -776,12 +776,14 @@ public actor RuntimeHost {
                 .windowPrefsChanged(request.packageID, prefs), operationID: nil)
         }
         // A changed `integrations.*` key may alter the guest's forwarding
-        // allowlist; push it so titles and text stop leaving Android at once.
+        // allowlists; push them so titles, text, and links stop leaving
+        // Android at once (desktop-integration.md §3.2).
         if Set(request.patch.set.keys).union(request.patch.clear)
             .contains(where: { $0.hasPrefix("integrations.") })
         {
             await refreshIntegrationSettings(for: request.packageID)
             await pushNotificationForwarding()
+            await pushUrlRedirect()
         }
         return result
     }

@@ -74,6 +74,9 @@ import Testing
             ].map { "wrapper.\($0)" }
             + [
                 "disabled", "notSupportedOnImage", "guestUnavailable", "clipboardTooLarge",
+                "fileTooLarge", "folderRefused", "folderUnavailable", "linkRejected",
+                "notificationAccessMissing", "pathRejected", "promptTimedOut",
+                "readOnly", "tooManyFiles", "transferFailed",
             ].map { "integration.\($0)" }
             + [
                 "unsupportedContainer", "unreadableArchive", "archiveLimitExceeded", "notAnAPK",

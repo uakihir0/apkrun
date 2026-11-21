@@ -129,13 +129,13 @@ import Testing
         RuntimeConfigurationControlRequest.self,
         from: snapshot.configurationRequests[0]
     )
-    #expect(readRequest.header.apiVersion == APIVersion(major: 1, minor: 12))
+    #expect(readRequest.header.apiVersion == .current)
     #expect(readRequest.header.clientKind == .app)
     let updateRequest = try JSONDecoder().decode(
         RuntimeUpdateConfigurationControlRequest.self,
         from: snapshot.updateConfigurationRequests[0]
     )
-    #expect(updateRequest.header.apiVersion == APIVersion(major: 1, minor: 12))
+    #expect(updateRequest.header.apiVersion == .current)
     #expect(updateRequest.header.clientKind == .app)
     #expect(updateRequest.patch == patch)
 }

@@ -371,6 +371,9 @@ public struct PackageUpdateStatus: Codable, Sendable, Equatable {
     public var consecutiveFailures: Int
     /// False gates keeping an install waiting (GU1…GU7).
     public var waiting: [WaitingReason]
+    /// The §4.5 reason the last check offered no candidate though the
+    /// provider has versions (`signerDiffers`, `abiMismatch`, `sdkTooLow`).
+    public var incompatibleReason: String?
 
     /// Creates a package update status.
     public init(
@@ -383,7 +386,8 @@ public struct PackageUpdateStatus: Codable, Sendable, Equatable {
         lastCheckAt: Date? = nil,
         nextCheckAt: Date? = nil,
         consecutiveFailures: Int = 0,
-        waiting: [WaitingReason] = []
+        waiting: [WaitingReason] = [],
+        incompatibleReason: String? = nil
     ) {
         self.packageID = packageID
         self.choice = choice
@@ -395,6 +399,7 @@ public struct PackageUpdateStatus: Codable, Sendable, Equatable {
         self.nextCheckAt = nextCheckAt
         self.consecutiveFailures = consecutiveFailures
         self.waiting = waiting
+        self.incompatibleReason = incompatibleReason
     }
 }
 

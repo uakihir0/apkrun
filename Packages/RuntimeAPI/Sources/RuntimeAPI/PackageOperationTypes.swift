@@ -330,6 +330,9 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
     public var relation: RuntimeImportRelation
     /// Non-fatal observations from host inspection.
     public var warnings: [RuntimeImportWarning]
+    /// The provider the Add sheet may offer to enable (§4.7); only a
+    /// suggestion — it is off until the user turns it on.
+    public var suggestedProvider: String?
 
     private enum CodingKeys: String, CodingKey {
         case ticket
@@ -342,6 +345,7 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
         case excludedSplits
         case relation
         case warnings
+        case suggestedProvider
     }
 
     /// Creates an import preview.
@@ -355,7 +359,8 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
         files: [RuntimeArtifactFile],
         excludedSplits: [String] = [],
         relation: RuntimeImportRelation,
-        warnings: [RuntimeImportWarning] = []
+        warnings: [RuntimeImportWarning] = [],
+        suggestedProvider: String? = nil
     ) {
         self.ticket = ticket
         self.packageID = packageID
@@ -367,6 +372,7 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
         self.excludedSplits = excludedSplits
         self.relation = relation
         self.warnings = warnings
+        self.suggestedProvider = suggestedProvider
     }
 
     /// Decodes previews from earlier API minors that did not include signer digests.
@@ -382,6 +388,7 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
         excludedSplits = try container.decode([String].self, forKey: .excludedSplits)
         relation = try container.decode(RuntimeImportRelation.self, forKey: .relation)
         warnings = try container.decode([RuntimeImportWarning].self, forKey: .warnings)
+        suggestedProvider = try container.decodeIfPresent(String.self, forKey: .suggestedProvider)
     }
 }
 

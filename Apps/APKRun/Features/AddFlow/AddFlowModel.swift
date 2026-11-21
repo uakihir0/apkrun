@@ -150,6 +150,11 @@ final class AddFlowModel {
                 hasMacApp = true
             }
             macAppName = preview.displayName
+            // §4.7: the host's suggestion stays off until the user turns it
+            // on, and a new inspection always restarts from `manual` — the
+            // choice of a previous Add must not carry over.
+            suggestedProvider = preview.suggestedProvider.map { ProviderSpec(spec: $0) }
+            updateChoice = .manual
             location = defaultLocation
             stage = .review
         } catch {
@@ -164,6 +169,7 @@ final class AddFlowModel {
         self.preview = preview
         self.hasMacApp = hasMacApp
         macAppName = preview.displayName
+        updateChoice = .manual
         location = defaultLocation
         stage = .review
     }

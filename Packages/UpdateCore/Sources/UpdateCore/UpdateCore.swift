@@ -289,18 +289,24 @@ public struct ProviderContext: Sendable {
     public var credentials: any ProviderCredentials
     /// True when the user asked for this check.
     public var userInitiated: Bool
+    /// Called when a check ends with no candidate because the provider has
+    /// versions but none is compatible (update-system.md §4.5 `signerDiffers`).
+    /// Lets a provider return nil yet still record the reason.
+    public var incompatibleNote: (@Sendable (NoCompatibleArtifactReason) -> Void)?
 
     /// Creates a provider context.
     public init(
         http: any UpdateHTTPClient,
         cache: any ProviderCache,
         credentials: any ProviderCredentials,
-        userInitiated: Bool = false
+        userInitiated: Bool = false,
+        incompatibleNote: (@Sendable (NoCompatibleArtifactReason) -> Void)? = nil
     ) {
         self.http = http
         self.cache = cache
         self.credentials = credentials
         self.userInitiated = userInitiated
+        self.incompatibleNote = incompatibleNote
     }
 }
 

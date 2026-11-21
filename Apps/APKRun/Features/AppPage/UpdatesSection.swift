@@ -78,6 +78,17 @@ struct UpdatesSection: View {
                         "Next check",
                         value: next.formatted(date: .abbreviated, time: .shortened))
                 }
+                if status.incompatibleReason == "signerDiffers" {
+                    // §4.5: F-Droid builds carry F-Droid's signature.
+                    Text(
+                        "F-Droid's builds of \(model.displayName) are signed by F-Droid, "
+                            + "not by the developer of the installed copy. "
+                            + "To use F-Droid updates, uninstall \(model.displayName) "
+                            + "and install it from F-Droid."
+                    )
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
+                }
             }
             toggle(
                 "Undo updates that fail to start", key: "update.autoRollback")

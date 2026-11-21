@@ -196,7 +196,8 @@ public actor EmbeddedPackageService: RuntimeService {
                 origin: Self.storeImportOrigin(request.origin)
             )
             let relation = try await relation(for: preview)
-            let result = try Self.runtimePreview(from: preview, relation: relation)
+            var result = try Self.runtimePreview(from: preview, relation: relation)
+            result.suggestedProvider = fdroidProviderSuggestion(for: result)
             importPreviews[preview.ticket] = result
             return result
         } catch {
@@ -1410,6 +1411,36 @@ public actor EmbeddedPackageService: RuntimeService {
                 }
             }
         )
+    }
+
+    /// The §4.7 Add-sheet suggestion: the cached main-repository index names
+    /// the package and a version carries the imported signer, so `fdroid` is
+    /// offered — off by default until the user enables it. Reads only the
+    /// on-disk cache; it never fetches.
+    private func fdroidProviderSuggestion(for preview: RuntimeImportPreview) -> String? {
+        // No suggestion for a package another authority manages or one the
+        // signer comparison already rejects.
+        guard preview.relation != .otherSigner else { return nil }
+        let hex = SHA256Digest(data: Data(FDroidProvider.mainRepository.utf8)).hexValue
+        let indexFile =
+            paths.updatesDirectory
+            .appendingPathComponent("cache/fdroid/\(hex.prefix(16))/index.json")
+        guard let data = try? Data(contentsOf: indexFile),
+            data.count <= FDroidIndexReader.indexByteLimit,
+            let packageID = PackageID(rawValue: preview.packageID.rawValue),
+            let packages = try? FDroidIndexReader().packages(in: data, keep: [packageID]),
+            let fdroidPackage = packages[packageID]
+        else {
+            return nil
+        }
+        let imported = Set(preview.signerDigests.map { $0.rawValue.lowercased() })
+        guard !imported.isEmpty else { return nil }
+        for version in fdroidPackage.versions.values {
+            guard let signer = version.manifest.signer?.sha256 else { continue }
+            let digests = Set(signer.map { "sha256:\($0.lowercased())" })
+            if digests == imported { return "fdroid" }
+        }
+        return nil
     }
 
     private static func storeImportOrigin(_ origin: RuntimeImportOrigin) -> ImportOrigin {

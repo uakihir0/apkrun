@@ -6,6 +6,7 @@ Serves Tests/Fixtures/update-repos/ on http://127.0.0.1:<port>:
   /local/<package>/<versionCode>/manifest.json   synthesized Direct manifest
   /local/<package>/<versionCode>/<file>          artifact bytes
   /direct/<path>                                  fixtures under direct/
+  /fdroid/<path>                                  the F-Droid v2 fixture repo
   /status/<code>                                  empty reply with that status
   /redirect/<code>/<path>                         3xx to /<path>
 
@@ -142,6 +143,10 @@ class Handler(BaseHTTPRequestHandler):
         elif parts[:1] == ["local"]:
             body = read_file(self.root, os.path.join(*parts))
         elif parts[:1] == ["direct"]:
+            body = read_file(self.root, os.path.join(*parts))
+            if parts[-1].endswith(".json"):
+                headers["Content-Type"] = "application/json"
+        elif parts[:1] == ["fdroid"]:
             body = read_file(self.root, os.path.join(*parts))
             if parts[-1].endswith(".json"):
                 headers["Content-Type"] = "application/json"

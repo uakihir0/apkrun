@@ -14,10 +14,12 @@ import io.apkrun.guest.protocol.v1.AccessLevel
 import io.apkrun.guest.protocol.v1.DocInfo
 import io.apkrun.guest.protocol.v1.HostCloseFile
 import io.apkrun.guest.protocol.v1.HostCreateDocument
+import io.apkrun.guest.protocol.v1.HostDeleteDocument
 import io.apkrun.guest.protocol.v1.HostListRoots
 import io.apkrun.guest.protocol.v1.HostOpenFile
 import io.apkrun.guest.protocol.v1.HostQueryChildren
 import io.apkrun.guest.protocol.v1.HostReadRange
+import io.apkrun.guest.protocol.v1.HostRenameDocument
 import io.apkrun.guest.protocol.v1.HostStat
 import io.apkrun.guest.protocol.v1.HostWriteRange
 import io.apkrun.guest.protocol.v1.OpenMode
@@ -221,6 +223,41 @@ internal class MacFilesProvider : DocumentsProvider() {
                 { it.hostCreateDocument },
             ) ?: throw FileNotFoundException(parentDocumentId)
         return "$rootId/${created.path}"
+    }
+
+    override fun deleteDocument(documentId: String) {
+        val caller = callerPackage()
+        val (rootId, path) = splitDocumentId(documentId) ?: throw FileNotFoundException(documentId)
+        hostCall(
+            {
+                it.hostDeleteDocument =
+                    HostDeleteDocument.newBuilder()
+                        .setPackage(caller)
+                        .setRootId(rootId)
+                        .setPath(path)
+                        .build()
+            },
+            { it.hostDeleteDocument },
+        ) ?: throw FileNotFoundException(documentId)
+    }
+
+    override fun renameDocument(documentId: String, displayName: String): String {
+        val caller = callerPackage()
+        val (rootId, path) = splitDocumentId(documentId) ?: throw FileNotFoundException(documentId)
+        val renamed =
+            hostCall(
+                {
+                    it.hostRenameDocument =
+                        HostRenameDocument.newBuilder()
+                            .setPackage(caller)
+                            .setRootId(rootId)
+                            .setPath(path)
+                            .setNewName(displayName)
+                            .build()
+                },
+                { it.hostRenameDocument },
+            ) ?: throw FileNotFoundException(documentId)
+        return "$rootId/${renamed.path}"
     }
 
     // ---- opening --------------------------------------------------------------------

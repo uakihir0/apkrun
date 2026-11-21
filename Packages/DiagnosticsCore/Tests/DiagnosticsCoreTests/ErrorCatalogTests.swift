@@ -48,7 +48,7 @@ import Testing
                 "guestAgentOperationFailed", "inputNotBound",
                 "busy", "operationNotFound", "notProvisioned", "hostRequirementsNotMet",
                 "developerModeRequired", "invalidConfigValue", "unknownConfigKey",
-                "invalidSettingValue", "unknownSetting",
+                "invalidSettingValue", "unknownSetting", "hostUpdating",
                 "unknownResult",
             ].map { "runtime.\($0)" }
             + [
@@ -97,6 +97,9 @@ import Testing
                 "validation", "installFailed", "healthCheckFailed", "rollbackFailed",
                 "tooLarge", "cancelled", "authorityDoesNotAllowUpdates",
             ].map { "update.\($0)" }
+            + [
+                "dataCreatedByNewerVersion", "schemaMigrationFailed", "cancelled",
+            ].map { "maintenance.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)
     #expect(
@@ -128,6 +131,7 @@ import Testing
                 || entry.code.hasPrefix("runtime.")
                 || entry.code.hasPrefix("graphics.")
                 || entry.code.hasPrefix("image.")
+                || entry.code.hasPrefix("maintenance.")
                 || entry.code.hasPrefix("wrapper.")
                 || entry.code.hasPrefix("integration.")
                 || entry.code.hasPrefix("store.")

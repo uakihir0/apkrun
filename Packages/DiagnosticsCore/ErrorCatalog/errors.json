@@ -5197,6 +5197,87 @@
         "raisedBy": "PackageStore",
         "ref": "wrapper-json.md §3.4"
       }
+    },
+    {
+      "code": "runtime.hostUpdating",
+      "parameters": [],
+      "message": {
+        "en": "APKRun is restarting to finish an update."
+      },
+      "remediation": {
+        "en": "Wait a moment and try again."
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "case": "hostUpdating",
+        "when": "the host state is `updating` or `restartPending` while an APKRun update finishes (runtime-maintenance.md §3.5–§3.6)",
+        "raisedBy": "RuntimeHost",
+        "ref": "runtime-maintenance.md §3.6"
+      }
+    },
+    {
+      "code": "maintenance.dataCreatedByNewerVersion",
+      "parameters": [
+        "file",
+        "schema",
+        "supported"
+      ],
+      "message": {
+        "en": "This data was created by a newer version of APKRun."
+      },
+      "remediation": {
+        "en": "Install the latest version of APKRun."
+      },
+      "action": "updateAPKRun",
+      "cliExit": 70,
+      "doc": {
+        "case": "dataCreatedByNewerVersion(file:schema:supported:)",
+        "when": "a file's schemaVersion is newer than the build understands; the file is never written and the owner starts degraded",
+        "raisedBy": "SchemaMigrator",
+        "ref": "runtime-maintenance.md §5"
+      }
+    },
+    {
+      "code": "maintenance.schemaMigrationFailed",
+      "parameters": [
+        "file",
+        "from",
+        "to",
+        "detail"
+      ],
+      "message": {
+        "en": "APKRun could not update its saved data to the new format."
+      },
+      "remediation": {
+        "en": "Report the problem. The original file was kept next to the migrated one."
+      },
+      "action": "reportProblem",
+      "cliExit": 70,
+      "doc": {
+        "case": "schemaMigrationFailed(file:from:to:detail:)",
+        "when": "a schema migration step throws or produces invalid output; `detail` is logged",
+        "raisedBy": "SchemaMigrator",
+        "ref": "runtime-maintenance.md §5"
+      }
+    },
+    {
+      "code": "maintenance.cancelled",
+      "parameters": [],
+      "message": {
+        "en": "The update was cancelled."
+      },
+      "remediation": {
+        "en": "Start the update again when you are ready."
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "case": "cancelled",
+        "when": "a maintenance operation is cancelled by the user or superseded",
+        "raisedBy": "MaintenanceService",
+        "ref": "runtime-maintenance.md §11"
+      }
     }
   ]
 }

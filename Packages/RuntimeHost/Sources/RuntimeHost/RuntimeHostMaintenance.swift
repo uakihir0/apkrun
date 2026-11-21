@@ -4,6 +4,47 @@ import RuntimeAPI
 // MARK: - Frozen maintenance endpoint dispatch (runtime-api.md §12)
 
 extension RuntimeHost {
+    /// Watches `APKRun.app`'s on-disk build; §3.6. `nil` when apkrund is not
+    /// inside a `.app` bundle (development runs).
+    var bundleWatcher: BundleWatcher? {
+        if let _bundleWatcher { return _bundleWatcher }
+        guard let bundleURL = Self.apkRunAppBundleURL() else { return nil }
+        let watcher = BundleWatcher(
+            bundleURL: bundleURL,
+            ownBuild: buildIdentity.buildNumberInt
+        ) { [weak self] onDiskBuild in
+            Task { await self?.noteBundleReplaced(build: onDiskBuild) }
+        }
+        _bundleWatcher = watcher
+        return watcher
+    }
+
+    /// `APKRun.app` that contains this apkrund binary
+    /// (`APKRun.app/Contents/Library/LaunchServices/io.apkrun.apkrund`).
+    static func apkRunAppBundleURL() -> URL? {
+        var url = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+        while url.pathExtension != "app", url.path != "/" {
+            url.deleteLastPathComponent()
+        }
+        return url.pathExtension == "app" ? url : nil
+    }
+
+    /// §3.6: re-check the bundle build (called on every broker `hello`).
+    func checkBundleForReplacement() {
+        bundleWatcher?.check()
+    }
+
+    /// Starts the 60 s poll and the vnode watch once the host is up.
+    func startBundleWatcher() {
+        bundleWatcher?.start()
+    }
+
+    /// `BundleWatcher` reports the on-disk build changed (§3.6).
+    func noteBundleReplaced(build: Int?) async {
+        await maintenanceService.noteBundleReplaced(bundleBuild: build)
+        maintenanceHostState = await maintenanceService.state
+    }
+
     /// The maintenance coordinator; built on first use so boot stays cheap.
     var maintenanceService: MaintenanceService {
         if let _maintenanceService { return _maintenanceService }

@@ -136,6 +136,15 @@ private final class ApprovalWindowDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // §3.7 first-launch tasks run before any view uses the runtime.
+        Task { @MainActor in
+            if let refreshCount = try? await SelfUpdateController()
+                .completeUpdateIfNeeded(),
+                refreshCount > 0
+            {
+                SelfUpdatePrompt.show(wrapperCount: refreshCount)
+            }
+        }
         cancellable = ApprovalCenter.shared.$current.sink { [weak self] prompt in
             if prompt != nil {
                 self?.showApprovalWindow()
@@ -163,7 +172,7 @@ private final class ApprovalWindowDelegate: NSObject, NSApplicationDelegate {
 }
 
 @MainActor
-private enum RuntimeRegistrationCommand {
+enum RuntimeRegistrationCommand {
     private static let registeredPlistHashKey = "registeredAgentPlistSHA256"
 
     static func run() -> Never {

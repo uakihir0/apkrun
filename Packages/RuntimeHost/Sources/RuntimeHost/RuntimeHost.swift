@@ -181,6 +181,7 @@ public actor RuntimeHost {
     var updatesHealthChecksRegistered = false
     /// The lazily built maintenance coordinator (runtime-api.md §12).
     var _maintenanceService: MaintenanceService?
+    var _bundleWatcher: BundleWatcher?
     /// Whether an image migration is in progress (#59 reports it here).
     var imageMigrating = false
     /// `restartForUpdate` set this; the daemon exits at the next idle check.
@@ -493,6 +494,7 @@ public actor RuntimeHost {
         }
         hostState = startupFailure == nil ? "running" : "degraded"
         logger.notice("Daemon startup completed with host state \(hostState, .public)")
+        startBundleWatcher()
         completeStartup()
     }
 

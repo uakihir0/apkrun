@@ -3196,9 +3196,13 @@ protocol RuntimeXPCConnectionFactory: Sendable {
         signingRequirement: String,
         eventSink: RuntimeEventSinkReceiver
     ) throws(RuntimeControlClientError) -> any RuntimeControlChannel
+    func makeMaintenance(
+        endpoint: RuntimeXPCListenerEndpoint,
+        signingRequirement: String
+    ) throws(RuntimeControlClientError) -> any RuntimeMaintenanceChannel
 }
 
-private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
+struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
     func makeBroker(
         serviceName: String,
         signingRequirement: String
@@ -3227,6 +3231,21 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
             exportedObject: eventSink
         )
         return XPCControlChannel(connection: connection)
+    }
+
+    func makeMaintenance(
+        endpoint: RuntimeXPCListenerEndpoint,
+        signingRequirement: String
+    ) throws(RuntimeControlClientError) -> any RuntimeMaintenanceChannel {
+        guard let listenerEndpoint = endpoint.value as? NSXPCListenerEndpoint else {
+            throw .malformedReply
+        }
+        let connection = configuredConnection(
+            NSXPCConnection(listenerEndpoint: listenerEndpoint),
+            interface: NSXPCInterface(with: RuntimeMaintenanceXPC.self),
+            signingRequirement: signingRequirement
+        )
+        return XPCMaintenanceChannel(connection: connection)
     }
 
     private func configuredConnection(
@@ -4415,7 +4434,7 @@ private final class RuntimeXPCConnectionEventRelay: @unchecked Sendable {
     }
 }
 
-private final class XPCReplyGate: @unchecked Sendable {
+final class XPCReplyGate: @unchecked Sendable {
     private let lock = NSLock()
     private var didComplete = false
 
@@ -4433,7 +4452,7 @@ private final class XPCReplyGate: @unchecked Sendable {
     }
 }
 
-private func withXPCReply<Value: Sendable>(
+func withXPCReply<Value: Sendable>(
     _ invoke: (@escaping (Result<Value, RuntimeControlClientError>) -> Void) -> Void
 ) async throws(RuntimeControlClientError) -> Value {
     do {

@@ -51,8 +51,6 @@ targets:
       - path: Apps/APKRun
         excludes:
           - Tests
-      - path: Apps/APKRun/Resources/Localizable.xcstrings
-        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: APKRun

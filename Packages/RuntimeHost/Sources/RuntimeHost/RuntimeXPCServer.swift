@@ -888,6 +888,7 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
 
         Task {
             defer { pending.finish() }
+            await host.checkBundleForReplacement()
             let status = await host.status()
             let version = Int(buildInfo.buildNumber) ?? 0
             let helloReply = RuntimeHelloReply(

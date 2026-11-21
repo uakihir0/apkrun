@@ -1,146 +1,226 @@
 {
-  "sourceLanguage" : "en",
-  "strings" : {
-    "Allow APKRun in System Settings > General > Login Items, then reopen it." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Allow APKRun in System Settings > General > Login Items, then reopen it."
+  "sourceLanguage": "en",
+  "strings": {
+    "APKRun": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "APKRun"
           }
         }
       }
     },
-    "APKRun couldn't change the menu bar item. Check Login Items in System Settings." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "APKRun couldn't change the menu bar item. Check Login Items in System Settings."
+    "APKRun couldn't change the menu bar item. Check Login Items in System Settings.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "APKRun couldn't change the menu bar item. Check Login Items in System Settings."
           }
         }
       }
     },
-    "APKRun couldn't open the menu bar item. Check Login Items in System Settings." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "APKRun couldn't open the menu bar item. Check Login Items in System Settings."
+    "APKRun couldn't open the menu bar item. Check Login Items in System Settings.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "APKRun couldn't open the menu bar item. Check Login Items in System Settings."
           }
         }
       }
     },
-    "APKRun couldn't register the menu bar item. Check Login Items in System Settings." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "APKRun couldn't register the menu bar item. Check Login Items in System Settings."
+    "APKRun couldn't register the menu bar item. Check Login Items in System Settings.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "APKRun couldn't register the menu bar item. Check Login Items in System Settings."
           }
         }
       }
     },
-    "Allow APKRun in System Settings > General > Login Items to show the menu bar item." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Allow APKRun in System Settings > General > Login Items to show the menu bar item."
+    "Allow APKRun in System Settings > General > Login Items to show the menu bar item.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow APKRun in System Settings > General > Login Items to show the menu bar item."
           }
         }
       }
     },
-    "Approval required" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Approval required"
+    "Allow APKRun in System Settings > General > Login Items, then reopen it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow APKRun in System Settings > General > Login Items, then reopen it."
           }
         }
       }
     },
-    "APKRun" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "APKRun"
+    "Approval required": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Approval required"
           }
         }
       }
     },
-    "Background service setup failed" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Background service setup failed"
+    "Background service setup failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Background service setup failed"
           }
         }
       }
     },
-    "General" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "General"
+    "General": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "General"
           }
         }
       }
     },
-    "Later" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Later"
+    "Language & Region": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Language & Region"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "言語と地域"
           }
         }
       }
     },
-    "Move APKRun.app to Applications and reopen it." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Move APKRun.app to Applications and reopen it."
+    "Later": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Later"
           }
         }
       }
     },
-    "Open Login Items Settings" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open Login Items Settings"
+    "Move APKRun.app to Applications and reopen it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move APKRun.app to Applications and reopen it."
           }
         }
       }
     },
-    "Show APKRun in the menu bar" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Show APKRun in the menu bar"
+    "Open Login Items Settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Login Items Settings"
           }
         }
       }
     },
-    "The menu bar item is unavailable in this copy of APKRun." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The menu bar item is unavailable in this copy of APKRun."
+    "Show APKRun in the menu bar": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show APKRun in the menu bar"
+          }
+        }
+      }
+    },
+    "The menu bar item is unavailable in this copy of APKRun.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The menu bar item is unavailable in this copy of APKRun."
+          }
+        }
+      }
+    },
+    "These settings are temporarily unavailable.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These settings are temporarily unavailable."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "これらの設定は一時的に利用できません。"
+          }
+        }
+      }
+    },
+    "Use the Mac's 12/24-hour setting": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use the Mac's 12/24-hour setting"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac の 12 時間／24 時間表示設定を使用"
+          }
+        }
+      }
+    },
+    "Use the Mac's language in Android": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use the Mac's language in Android"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Android で Mac の言語を使用"
+          }
+        }
+      }
+    },
+    "Use the Mac's time zone": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use the Mac's time zone"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac のタイムゾーンを使用"
           }
         }
       }
     }
   },
-  "version" : 1
+  "version": 1
 }

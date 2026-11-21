@@ -30,6 +30,9 @@ protocol RuntimeService: Sendable {
     func importPackage(
         _ request: RuntimeImportPackageRequest, files: [FileHandle]
     ) async throws -> RuntimeImportPreview
+    func installImported(
+        _ request: RuntimeInstallImportedRequest
+    ) async throws -> RuntimePackageSummary
     func discardImport(_ request: RuntimeDiscardImportRequest) async throws
     func subscribe(to topic: EventTopic) async throws -> AsyncStream<EventEnvelope>
 }

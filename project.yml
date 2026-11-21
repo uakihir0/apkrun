@@ -166,6 +166,7 @@ targets:
       - path: Apps/APKRun/Models/AppRouter.swift
       - path: Apps/APKRun/Models/RuntimeStatusModel.swift
       - path: Apps/APKRun/Features/Home/HomeRowStatus.swift
+      - path: Apps/APKRun/Features/AddFlow/AddFlowModel.swift
     settings:
       base:
         PRODUCT_NAME: APKRunTests

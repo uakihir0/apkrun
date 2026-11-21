@@ -1525,6 +1525,34 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Starts reinstalling a broken package from `current/` (package-store.md
+    /// §11.1). `apkrun repair` and the app-page Repair button both end here;
+    /// the repair is a `repair` long operation.
+    public func repairPackage(
+        packageID: RuntimePackageID
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeBeginRepairPackageControlRequest(
+                header: makeHeader(), request: RuntimePackageRequest(packageID: packageID))
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.beginRepairPackage(data)
+            let reply = try Self.decode(RuntimeBeginRepairPackageControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let handle = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return handle
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
     /// Adds or removes a versionCode on the package's skip list
     /// (runtime-api.md §9.1, update-system.md §8.4, cli.md §4.3).
     public func updateSkipped(
@@ -2577,6 +2605,8 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func setUpdateAuthority(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Rolls a package back to `previous/` (runtime-api.md §9.1, update-system.md §8.5).
     func rollbackPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Starts reinstalling a broken package from `current/` (package-store.md §11.1).
+    func beginRepairPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Adds or removes a version on the package's skip list (§8.4).
     func updateSkipped(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Checks and installs a package update now, optionally from files (runtime-api.md §9.1).
@@ -3414,6 +3444,20 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.setUpdateAuthority(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func beginRepairPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.beginRepairPackage(request) { response in finish(.success(response)) }
         }
     }
 

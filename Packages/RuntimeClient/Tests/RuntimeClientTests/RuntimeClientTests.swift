@@ -1790,6 +1790,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
     }
 
+    func beginRepairPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
     func updateSkipped(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
     }

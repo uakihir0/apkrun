@@ -1130,6 +1130,7 @@ extension RuntimeDiscardImportControlRequest: VersionedControlRequest {}
 extension RuntimeAdoptPackageControlRequest: VersionedControlRequest {}
 extension RuntimeBeginInstallImportedControlRequest: VersionedControlRequest {}
 extension RuntimeBeginUninstallPackageControlRequest: VersionedControlRequest {}
+extension RuntimeBeginRepairPackageControlRequest: VersionedControlRequest {}
 extension RuntimeCancelOperationControlRequest: VersionedControlRequest {}
 extension RuntimeListOperationsControlRequest: VersionedControlRequest {}
 extension RuntimeOperationStatusControlRequest: VersionedControlRequest {}
@@ -1213,6 +1214,7 @@ enum RuntimeControlOperation {
     case setUpdatePolicy
     case setUpdateAuthority
     case rollbackPackage
+    case beginRepairPackage
     case updateSkipped
     case updatePackage
     case getConfig
@@ -1309,8 +1311,8 @@ enum RuntimeControlOperation {
                 false
             }
         case .checkForUpdates, .listUpdates, .updateHistory, .setUpdatePolicy,
-            .setUpdateAuthority, .rollbackPackage, .updateSkipped, .updatePackage,
-            .getConfig, .setConfig:
+            .setUpdateAuthority, .rollbackPackage, .beginRepairPackage,
+            .updateSkipped, .updatePackage, .getConfig, .setConfig:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -3451,6 +3453,61 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeRollbackPackageControlReply(error: wireError)))
+            }
+        }
+    }
+
+    /// `repairPackage` (package-store.md §11.1, cli.md §4.3): a long
+    /// operation that reinstalls a `broken` package from `current/`.
+    func beginRepairPackage(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeBeginRepairPackageControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .beginRepairPackage,
+                as: RuntimeBeginRepairPackageControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeBeginRepairPackageControlReply(
+                            error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeBeginRepairPackageControlRequest.self,
+                    from: request
+                ),
+                let operationID = RuntimeAPI.OperationID(rawValue: decoded.header.operationID)
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeBeginRepairPackageControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let handle = try await host.beginRepairPackage(
+                    decoded.request,
+                    operationID: operationID,
+                    clientKind: clientKind
+                )
+                response.send(
+                    Self.encode(RuntimeBeginRepairPackageControlReply(result: handle)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(
+                    Self.encode(RuntimeBeginRepairPackageControlReply(error: wireError)))
             }
         }
     }

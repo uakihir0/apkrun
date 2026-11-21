@@ -90,6 +90,12 @@
 
         @Flag(
             name: .long,
+            help: "Keep the generated Mac app instead of moving it to the Trash."
+        )
+        var keepWrapper = false
+
+        @Flag(
+            name: .long,
             help: ArgumentHelp(
                 "Forget APKRun's record and stored APKs without contacting Android or determining the app-data outcome."
             )
@@ -108,7 +114,8 @@
                 throw CLIFailure.invalidArgument(argument: "--keep-data", reason: "incompatibleWithForget")
             }
             let service = EmbeddedPackageService()
-            let options = RuntimeUninstallOptions(keepData: keepData, forget: forget)
+            let options = RuntimeUninstallOptions(
+                keepData: keepData, trashWrappers: !keepWrapper, forget: forget)
             let request = RuntimeUninstallPackageRequest(packageID: packageID, options: options)
             try PackageCommandSupport.confirm(
                 forget

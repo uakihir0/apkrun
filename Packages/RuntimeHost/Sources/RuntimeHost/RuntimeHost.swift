@@ -942,6 +942,88 @@ public actor RuntimeHost {
         return handle
     }
 
+    /// Starts a package repair asynchronously (package-store.md §11.1): a
+    /// `broken` package is reinstalled from its retained `current/` artifacts.
+    func beginRepairPackage(
+        _ request: RuntimePackageRequest,
+        operationID requestedID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) throws(RuntimeWireError) -> OperationHandle {
+        let requestPayload: Data
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            requestPayload = try encoder.encode(request)
+        } catch {
+            throw .runtime(
+                "malformedRequest",
+                message: "APKRun's background service couldn't read the request."
+            )
+        }
+
+        if let existing = trackedOperations[requestedID] {
+            guard existing.handle.kind == .repair, existing.requestPayload == requestPayload else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The operation ID is already being used for a different request."
+                )
+            }
+            return existing.handle
+        }
+
+        do {
+            try packageActivityReservations.beginInstall(packageID: request.packageID.rawValue)
+        } catch {
+            throw Self.packageOperationInProgressError
+        }
+        do {
+            try beginPackageMutation()
+        } catch {
+            packageActivityReservations.finishInstall(packageID: request.packageID.rawValue)
+            throw Self.sessionWireError(for: error)
+        }
+
+        let handle = OperationHandle(operationID: requestedID, kind: .repair)
+        let snapshot = OperationSnapshot(
+            operationID: requestedID,
+            kind: .repair,
+            packageID: request.packageID,
+            requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(
+                stage: "startingRuntime",
+                message: "Starting Android…"
+            )
+        )
+        trackedOperations[requestedID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: requestPayload,
+            snapshot: snapshot,
+            isCancellable: true,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: requestedID)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            if let diagnosticsID = DiagnosticsCore.OperationID(wire: requestedID.wireValue) {
+                let context = OperationContext(operationID: diagnosticsID)
+                await OperationContext.$current.withValue(context) {
+                    await self.runRepairPackageOperation(
+                        request,
+                        operationID: requestedID,
+                        clientKind: clientKind
+                    )
+                }
+            } else {
+                await self.runRepairPackageOperation(
+                    request, operationID: requestedID, clientKind: clientKind)
+            }
+        }
+        trackedOperations[requestedID]?.task = task
+        return handle
+    }
+
     /// Returns running operations and up to fifty recently finished operations.
     func listOperations(
         beginSnapshotBarrier: @Sendable () -> Void = {}
@@ -1060,6 +1142,57 @@ public actor RuntimeHost {
             let wireError = Self.operationWireError(for: error)
             finishOperation(operationID, result: .failed(wireError))
             logger?.error("Package uninstall operation failed", errorCode: wireError.code)
+        }
+    }
+
+    private func runRepairPackageOperation(
+        _ request: RuntimePackageRequest,
+        operationID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) async {
+        defer {
+            packageActivityReservations.finishInstall(packageID: request.packageID.rawValue)
+            finishPackageMutation()
+        }
+        do {
+            let service = packageQueryServiceInstance()
+            do {
+                try await service.open()
+            } catch {
+                throw Self.operationWireError(for: error)
+            }
+            try await startRuntimeForPackageMutation(reason: clientKind == .cli ? .cli : .user)
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            guard !Task.isCancelled else {
+                throw Self.cancelledOperationError
+            }
+            try await enterPackageStoreMutation(
+                operationID: operationID,
+                stage: "repairing",
+                message: "Reinstalling the Android package…"
+            )
+            let change = try await service.repairPackage(request)
+            let summary: RuntimePackageSummary
+            switch change {
+            case .installed(let installed), .updated(let installed, _):
+                summary = installed
+            default:
+                throw Self.operationWireError(for: CancellationError())
+            }
+            eventHub.publishPackageChange(change, operationID: operationID)
+            finishOperation(operationID, result: .succeeded(.package(summary)))
+            logger?.notice(
+                "Package repair operation completed for \(request.packageID.rawValue, .public)"
+            )
+        } catch {
+            if Task.isCancelled {
+                finishOperation(operationID, result: .cancelled)
+                logger?.notice("Package repair operation was cancelled")
+                return
+            }
+            let wireError = Self.operationWireError(for: error)
+            finishOperation(operationID, result: .failed(wireError))
+            logger?.error("Package repair operation failed", errorCode: wireError.code)
         }
     }
 
@@ -1182,6 +1315,16 @@ public actor RuntimeHost {
         }
         if let change = result.change {
             eventHub.publishPackageChange(change, operationID: operationID)
+        }
+        // §8: the Mac app goes to the Trash unless the caller asked to keep
+        // it (`--keep-wrapper`); a missing wrapper is fine.
+        if request.options.trashWrappers {
+            do {
+                _ = try await removeWrapper(packageID: request.packageID, trash: true)
+            } catch {
+                logger?.info(
+                    "Uninstall had no wrapper to trash for \(request.packageID.rawValue, .public)")
+            }
         }
     }
 
@@ -2561,6 +2704,7 @@ public actor RuntimeHost {
                 message: "APKRun couldn't update the wrapper registry.")
         }
         wrapperListCache = nil
+        eventHub.publishWrapperChange(.removed(packageID))
         return true
     }
 
@@ -4491,18 +4635,22 @@ public actor RuntimeHost {
         }
     }
 
-    /// Reinstalls one managed package from `Packages/<id>/current/` after a userdata reset.
+    /// Reinstalls a managed package from its retained `current/` artifacts
+    /// (package-store.md §9.2). Returns the install result so callers that
+    /// run a user-visible repair can publish the change; the silent §9.2
+    /// reconcile ignores it.
+    @discardableResult
     private func reinstallManagedPackage(
         packageID: RuntimePackageID,
         service: EmbeddedPackageService
-    ) async throws {
+    ) async throws -> RuntimePackageInstallResult? {
         let current = try await service.artifactCurrentDirectory(for: packageID)
         guard
             let names = try? FileManager.default.contentsOfDirectory(atPath: current.path)
                 .filter({ $0.hasSuffix(".apk") }).sorted(),
             !names.isEmpty
         else {
-            return
+            return nil
         }
         var handles: [FileHandle] = []
         var sourceFiles: [RuntimeImportSourceFile] = []
@@ -4515,7 +4663,7 @@ public actor RuntimeHost {
                 for handle in handles {
                     try? handle.close()
                 }
-                return
+                return nil
             }
             handles.append(handle)
             sourceFiles.append(RuntimeImportSourceFile(fileIndex: index, name: name))
@@ -4533,7 +4681,7 @@ public actor RuntimeHost {
         // `uninstall --forget` or uninstall committed between the reconcile's
         // snapshot and the install removes the mark or the record, and without
         // the guard the retained APKs would resurrect the app.
-        _ = try await service.installImportedWithChange(
+        return try await service.installImportedWithChange(
             RuntimeInstallImportedRequest(ticket: preview.ticket),
             requiresReinstallMark: true
         )

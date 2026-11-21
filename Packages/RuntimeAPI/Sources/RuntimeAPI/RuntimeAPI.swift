@@ -18,7 +18,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.19 adds `wrapperInfo` (runtime-api.md §10.2).
     /// 1.20 adds `listWrappers`, `removeWrapper`, and `rescanWrappers`
     /// (runtime-api.md §10.5).
-    public static let current = APIVersion(major: 1, minor: 21)
+    /// 1.21 adds `refreshWrapper` and `refreshAllWrappers` (wrapper.md §9.3).
+    /// 1.22 adds `repairPackage` (package-store.md §11.1).
+    public static let current = APIVersion(major: 1, minor: 22)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -774,6 +776,9 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     /// Checks and installs a package update now, optionally from files
     /// (runtime-api.md §9.1). File handles travel like `importPackage`.
     func updatePackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+    /// Starts reinstalling a broken package from its retained artifacts
+    /// (package-store.md §11.1, runtime-api.md §8.4).
+    func beginRepairPackage(_ request: Data, reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.

@@ -859,6 +859,41 @@ public struct RuntimeUpdateSkipControlReply: Codable, Sendable {
     }
 }
 
+/// Starts a package repair asynchronously (package-store.md §11.1,
+/// runtime-api.md §8.4): a `broken` package is reinstalled from `current/`.
+public struct RuntimeBeginRepairPackageControlRequest: Codable, Equatable, Sendable {
+    /// The authenticated request metadata. Its operation ID is reused by the returned handle.
+    public let header: APIRequestHeader
+    /// The package to repair.
+    public let request: RuntimePackageRequest
+
+    /// Creates a begin-repair request.
+    public init(header: APIRequestHeader, request: RuntimePackageRequest) {
+        self.header = header
+        self.request = request
+    }
+}
+
+/// The result or structured failure for a begin-repair request.
+public struct RuntimeBeginRepairPackageControlReply: Codable, Equatable, Sendable {
+    /// The long-running repair handle, present on success.
+    public let result: OperationHandle?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: OperationHandle) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
 /// A `getConfig` control request (configuration.md §2.7). `keys` nil means
 /// every known `updates.*` key.
 public struct RuntimeConfigGetControlRequest: Codable, Sendable {

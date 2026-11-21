@@ -493,6 +493,70 @@ public actor EmbeddedPackageService: RuntimeService {
         }
     }
 
+    /// Reinstalls a `broken` package from its retained `current/` artifacts
+    /// (package-store.md §11.1) and returns the change to publish. The caller
+    /// starts Android first; `repairPackage` itself never launches the runtime.
+    public func repairPackage(
+        _ request: RuntimePackageRequest
+    ) async throws(RuntimeWireError) -> PackageChange {
+        do {
+            try await ensureOpen()
+            guard let packageID = PackageID(rawValue: request.packageID.rawValue) else {
+                throw EmbeddedPackageServiceFailure.invalidPackageID
+            }
+            let records = try await store.listManagedPackages()
+            guard let record = records.first(where: { $0.packageId == packageID }) else {
+                throw PackageStoreFailure.packageNotFound
+            }
+            guard case .broken = record.state else {
+                throw Self.notRepairableError
+            }
+            let current = try await store.artifactCurrentDirectory(packageID: packageID)
+            let names =
+                try fileManager.contentsOfDirectory(atPath: current.path)
+                .filter { $0.hasSuffix(".apk") }
+                .sorted()
+            guard !names.isEmpty else { throw Self.repairArtifactsMissingError }
+            var handles: [FileHandle] = []
+            var sourceFiles: [RuntimeImportSourceFile] = []
+            for (index, name) in names.enumerated() {
+                guard
+                    let handle = try? FileHandle(
+                        forReadingFrom: current.appendingPathComponent(name))
+                else {
+                    for handle in handles { try? handle.close() }
+                    throw Self.repairArtifactsMissingError
+                }
+                handles.append(handle)
+                sourceFiles.append(RuntimeImportSourceFile(fileIndex: index, name: name))
+            }
+            defer {
+                for handle in handles { try? handle.close() }
+            }
+            let preview = try await importPackage(
+                RuntimeImportPackageRequest(files: sourceFiles, origin: .cli),
+                files: handles
+            )
+            let result = try await installImportedWithChange(
+                RuntimeInstallImportedRequest(ticket: preview.ticket))
+            return result.change
+        } catch let error as RuntimeWireError {
+            throw error
+        } catch {
+            throw Self.wireError(for: error)
+        }
+    }
+
+    private static let notRepairableError = RuntimeWireError.store(
+        "notRepairable",
+        message: "The package is not marked broken.",
+        remediation: "Repair applies only to a package APKRun lists as broken.")
+
+    private static let repairArtifactsMissingError = RuntimeWireError.store(
+        "notRepairable",
+        message: "APKRun has no retained APKs to reinstall.",
+        remediation: "Uninstall the package, then install it from a new APK file.")
+
     private static let packageInUseError = RuntimeWireError.store(
         "packageInUse",
         message: "The app still has an open APKRun window.",

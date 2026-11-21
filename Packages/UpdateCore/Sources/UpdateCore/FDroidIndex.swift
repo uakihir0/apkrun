@@ -77,8 +77,9 @@ public struct FDroidPackage: Codable, Sendable {
             public var maxSdkVersion: Int?
             /// The APK's signing certificates as SHA-256 hex.
             public var signer: Signer?
-            /// The ABIs the APK ships; empty means universal.
-            public var nativecode: [String]
+            /// The ABIs the APK ships; nil or empty means universal. The
+            /// real index omits the field for pure-Java builds.
+            public var nativecode: [String]?
 
             /// `UsesSdkV2`.
             public struct UsesSdk: Codable, Sendable {
@@ -125,6 +126,7 @@ enum JSONMemberScanner {
         var result: [(String, Range<Int>)] = []
         while cursor < range.upperBound {
             cursor = skipSpace(in: data, from: cursor, limit: range.upperBound)
+            guard cursor < range.upperBound else { return nil }
             if data[cursor] == UInt8(ascii: "}") { return result }
             guard let (key, keyEnd) = string(in: data, from: cursor, limit: range.upperBound) else {
                 return nil
@@ -250,8 +252,13 @@ enum JSONMergePatch {
 /// extractor that decodes only the kept packages, plus the diff merge over
 /// the cached index bytes. The decode path stays inside a 64 MiB budget.
 public struct FDroidIndexReader: Sendable {
-    /// The total index bytes the reader accepts (update-system.md §4.5).
+    /// The decode budget (update-system.md §4.5): a diff or any materialized
+    /// JSON object stays under 64 MiB.
     public static let indexByteLimit = 67_108_864
+    /// The index *file* byte cap. The real repository's index exceeds the
+    /// decode budget; the reader scans bytes and decodes only kept packages,
+    /// so the file itself may be larger.
+    public static let indexFileByteLimit: Int64 = 268_435_456
 
     /// Creates a reader.
     public init() {}
@@ -263,8 +270,8 @@ public struct FDroidIndexReader: Sendable {
     public func packages(in data: Data, keep: Set<PackageID>) throws(UpdateFailure) -> [PackageID:
         FDroidPackage]
     {
-        guard data.count <= Self.indexByteLimit else {
-            throw .providerMetadataInvalid(detail: "index: over 64 MiB")
+        guard Int64(data.count) <= Self.indexFileByteLimit else {
+            throw .providerMetadataInvalid(detail: "index: over the index file limit")
         }
         guard let members = JSONMemberScanner.members(of: "packages", in: data) else {
             throw .providerMetadataInvalid(detail: "index: no packages object")
@@ -303,8 +310,10 @@ public struct FDroidIndexReader: Sendable {
     /// - Throws: `providerMetadataInvalid` on malformed input or an over-limit
     ///   result.
     public func merged(index data: Data, diff diffData: Data) throws(UpdateFailure) -> Data {
-        guard data.count <= Self.indexByteLimit, diffData.count <= Self.indexByteLimit else {
-            throw .providerMetadataInvalid(detail: "index or diff: over 64 MiB")
+        guard Int64(data.count) <= Self.indexFileByteLimit,
+            diffData.count <= Self.indexByteLimit
+        else {
+            throw .providerMetadataInvalid(detail: "index or diff: over the size limit")
         }
         guard let patch = try? JSONSerialization.jsonObject(with: diffData),
             let patchObject = patch as? [String: Any]
@@ -416,8 +425,8 @@ public struct FDroidIndexReader: Sendable {
         packagesData.append(UInt8(ascii: "}"))
         emit("packages", packagesData)
         output.append(UInt8(ascii: "}"))
-        guard output.count <= Self.indexByteLimit else {
-            throw .providerMetadataInvalid(detail: "merged index: over 64 MiB")
+        guard Int64(output.count) <= Self.indexFileByteLimit else {
+            throw .providerMetadataInvalid(detail: "merged index: over the index file limit")
         }
         return output
     }

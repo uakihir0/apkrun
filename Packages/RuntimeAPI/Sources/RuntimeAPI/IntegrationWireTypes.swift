@@ -72,10 +72,14 @@ public struct ClipItem: Codable, Sendable, Equatable {
 public struct ClipAck: Codable, Sendable, Equatable {
     /// The sequence number the host assigned to the clip.
     public var seq: UInt64
+    /// An image that exceeded the §11.4 limits was dropped; the text and HTML
+    /// still went (desktop-integration.md §4.4).
+    public var droppedImageTooLarge: Bool
 
     /// Creates an acknowledgment.
-    public init(seq: UInt64) {
+    public init(seq: UInt64, droppedImageTooLarge: Bool = false) {
         self.seq = seq
+        self.droppedImageTooLarge = droppedImageTooLarge
     }
 }
 

@@ -148,11 +148,16 @@ public actor IntegrationPolicy {
         if let capability = context.requiredCapability, !source.supported(capability) {
             return .deny(.notSupported)
         }
-        guard context.hasSession else {
-            return .deny(.noSession)
-        }
-        guard context.windowIsKey else {
-            return .deny(.notFocused)
+        // Notifications are asynchronous events, not window actions: §5.3
+        // explicitly routes them to a background wrapper start or to APKRun's
+        // own banner precisely when no session or key window exists.
+        if kind != .notifications {
+            guard context.hasSession else {
+                return .deny(.noSession)
+            }
+            guard context.windowIsKey else {
+                return .deny(.notFocused)
+            }
         }
         return .allow
     }

@@ -567,9 +567,18 @@ public actor SharedFolderService {
         }
         close(oldFD)
         // A rename never clobbers: renaming onto an existing name loses the
-        // file that was there.
-        guard faccessat(parentFD, clean, F_OK, AT_SYMLINK_NOFOLLOW) != 0 else {
-            throw SharedFolderFailure(.invalidArgument)
+        // file that was there. A destination that IS the source — a pure
+        // case change on a case-insensitive volume — is still allowed.
+        if faccessat(parentFD, clean, F_OK, AT_SYMLINK_NOFOLLOW) == 0 {
+            var sourceInfo = Darwin.stat(), targetInfo = Darwin.stat()
+            let sameFile =
+                fstatat(parentFD, oldName, &sourceInfo, AT_SYMLINK_NOFOLLOW) == 0
+                && fstatat(parentFD, clean, &targetInfo, AT_SYMLINK_NOFOLLOW) == 0
+                && sourceInfo.st_ino == targetInfo.st_ino
+                && sourceInfo.st_dev == targetInfo.st_dev
+            guard sameFile else {
+                throw SharedFolderFailure(.invalidArgument)
+            }
         }
         let newPath = parentPath.isEmpty ? clean : parentPath + "/" + clean
         guard renameat(parentFD, oldName, parentFD, clean) == 0 else {

@@ -518,18 +518,38 @@ extension RuntimeHost {
             return
         }
         notificationRelayTask = Task.detached { [weak self] in
-            guard let self, let agent = await supervisor.developmentGuestAgent else { return }
-            await self.pushNotificationForwarding()
-            for await event in agent.notificationEvents {
-                guard !Task.isCancelled else { return }
-                switch event {
-                case .posted(let notification):
-                    await self.notificationFromGuest(notification)
-                case .removed(let removal):
-                    await self.removedFromGuest(removal)
+            guard let self else { return }
+            var agent = await supervisor.developmentGuestAgent
+            while !Task.isCancelled, let current = agent {
+                await self.pushNotificationForwarding()
+                for await event in current.notificationEvents {
+                    guard !Task.isCancelled else { return }
+                    switch event {
+                    case .posted(let notification):
+                        await self.notificationFromGuest(notification)
+                    case .removed(let removal):
+                        await self.removedFromGuest(removal)
+                    }
+                }
+                // The stream ended: an agent restart detaches it while
+                // Android keeps running. Wait for a different agent, then
+                // resubscribe — the allowlist went away with the old one.
+                agent = nil
+                while !Task.isCancelled, agent == nil {
+                    try? await Task.sleep(for: .seconds(1))
+                    let next = await supervisor.developmentGuestAgent
+                    if let next, next !== current {
+                        agent = next
+                    }
                 }
             }
+            await self.clearNotificationRelayTask()
         }
+    }
+
+    /// Clears the finished relay task so `startNotificationRelay` re-arms.
+    private func clearNotificationRelayTask() {
+        notificationRelayTask = nil
     }
 
     /// Ends the notification relay.

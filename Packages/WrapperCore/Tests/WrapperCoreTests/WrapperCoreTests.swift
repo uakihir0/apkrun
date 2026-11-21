@@ -200,6 +200,20 @@ private func sha256Tree(at url: URL) throws -> [String: String] {
     }
 }
 
+@Test func generatedBundleContainsNoAPKFile() async throws {
+    // #49: the wrapper is independent of the APK file — the bundle never
+    // embeds the source archive (wrapper.md §14, FR-WRP-03).
+    let fixture = try await Fixture()
+    defer { fixture.cleanup() }
+    let generated = try await fixture.generator().generate(fixture.request())
+    let enumerator = FileManager.default.enumerator(
+        at: generated.bundleURL, includingPropertiesForKeys: nil)
+    let files = enumerator?.allObjects.compactMap { $0 as? URL } ?? []
+    for file in files where file.pathExtension == "apk" {
+        Issue.record("generated bundle contains APK file \(file.path)")
+    }
+}
+
 @Test func generationIsByteIdentical() async throws {
     let fixture = try await Fixture()
     defer { fixture.cleanup() }

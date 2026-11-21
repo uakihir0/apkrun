@@ -1,4 +1,4 @@
-# Install script for directory: /tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/src/main/cpp
+# Install script for directory: /Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/src/main/cpp
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -50,5 +50,5 @@ endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
-file(WRITE "/tmp/apkrun-75/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/${CMAKE_INSTALL_MANIFEST}"
+file(WRITE "/Users/devin/repos/apkrun-49/Tests/Fixtures/AndroidApps/HelloSplit/.cxx/RelWithDebInfo/2l532z53/arm64-v8a/${CMAKE_INSTALL_MANIFEST}"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")

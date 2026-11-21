@@ -1763,3 +1763,26 @@ private func makeTemporaryDirectory() throws -> URL {
         try await store.adoptPackage(packageID: PackageID(rawValue: "com.example.missing")!)
     }
 }
+
+@Test func packageStoreInstallsAfterTheImportSourceWasDeleted() async throws {
+    // #49 (package-store.md §4.1): nothing after importPackage reads the
+    // source path — the private incoming copy is all the store needs.
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let channel = FakeStoreChannel()
+    let runtime = FakeStoreRuntime(channel: channel)
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let store = PackageStore(
+        packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
+        runtimeAccess: runtime,
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+    )
+    try await store.open()
+    let preview = try await store.importPackage(files: [input])
+    try FileManager.default.removeItem(at: input)
+
+    let installed = try await store.installImported(ticket: preview.ticket)
+    #expect(installed.packageId == preview.packageID)
+}

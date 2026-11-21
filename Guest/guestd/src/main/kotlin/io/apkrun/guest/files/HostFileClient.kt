@@ -27,7 +27,6 @@ internal class HostFileClient {
     private val lock = Any()
     private val writers = ArrayList<FrameWriter>()
     private val pending = HashMap<Long, Pending>()
-    private var nextRequestId = 1L
 
     /** Registers a bulk connection writer; requests can run while at least one is attached. */
     fun attach(writer: FrameWriter) {
@@ -61,17 +60,19 @@ internal class HostFileClient {
      */
     fun call(build: (Request.Builder) -> Unit, timeoutMs: Long = DEFAULT_TIMEOUT_MS): Response? {
         val target: FrameWriter
-        val requestId: Long
         val entry: Pending
+        var requestId = -1L
         synchronized(lock) {
             target = writers.firstOrNull() ?: return null
-            requestId = nextRequestId
-            nextRequestId += 2
             entry = Pending()
-            pending[requestId] = entry
         }
         try {
-            target.sendRequest(requestId) { envelope ->
+            target.sendRequest(
+                onId = { id ->
+                    synchronized(lock) { pending[id] = entry }
+                    requestId = id
+                }
+            ) { envelope ->
                 val request = Request.newBuilder()
                 build(request)
                 envelope.request = request.build()

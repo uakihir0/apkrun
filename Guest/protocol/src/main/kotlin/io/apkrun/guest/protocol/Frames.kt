@@ -38,6 +38,23 @@ class FrameWriter(private val output: OutputStream) {
         output.write(FrameCodec.encode(envelope.build()))
         output.flush()
     }
+
+    /**
+     * Sends one envelope with the next id of the shared agent sequence and reports it to [onId]
+     * before the frame leaves, so the caller can register its waiter first. Envelope ids are one
+     * strictly increasing space per connection (guest-protocol.md §5), so the request id must come
+     * from this sequence — an id the caller picks itself can collide with an auto-assigned one.
+     */
+    @Synchronized
+    fun sendRequest(onId: (Long) -> Unit, body: (Envelope.Builder) -> Unit) {
+        val id = nextId
+        nextId += 1
+        onId(id)
+        val envelope = Envelope.newBuilder().setId(id).setReplyTo(0)
+        body(envelope)
+        output.write(FrameCodec.encode(envelope.build()))
+        output.flush()
+    }
 }
 
 /**

@@ -1,10 +1,19 @@
 package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.GuestCapability
+import io.apkrun.guest.protocol.GuestFailure
+import io.apkrun.guest.protocol.v1.ActivateNotification
 import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.ClearPolicy
+import io.apkrun.guest.protocol.v1.ClipData
+import io.apkrun.guest.protocol.v1.CollectDiagnostics
+import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
+import io.apkrun.guest.protocol.v1.DismissNotification
+import io.apkrun.guest.protocol.v1.ExportStart
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.ImePolicy
+import io.apkrun.guest.protocol.v1.ImportFiles
+import io.apkrun.guest.protocol.v1.ImportResult
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchOutcome
 import io.apkrun.guest.protocol.v1.LaunchResult
@@ -16,11 +25,16 @@ import io.apkrun.guest.protocol.v1.PackageSummary
 import io.apkrun.guest.protocol.v1.Ping
 import io.apkrun.guest.protocol.v1.QueryPackage
 import io.apkrun.guest.protocol.v1.Request
+import io.apkrun.guest.protocol.v1.ResolveExport
+import io.apkrun.guest.protocol.v1.ResolveUrl
 import io.apkrun.guest.protocol.v1.Response
 import io.apkrun.guest.protocol.v1.SetClockFormat
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.SetLocale
+import io.apkrun.guest.protocol.v1.SetNotificationForwarding
+import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
 import io.apkrun.guest.protocol.v1.SetTimeZone
+import io.apkrun.guest.protocol.v1.SetUrlRedirect
 import io.apkrun.guest.protocol.v1.Shutdown
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
@@ -54,6 +68,7 @@ private class FakeOperations : AgentOperations {
     var timeZoneRequest: SetTimeZone? = null
     var clockFormatRequest: SetClockFormat? = null
     var syncTimeRequest: SyncTime? = null
+    var lastClipboard: ClipData? = null
     /**
      * Released by the first operation that starts. Tests that need an op to be in flight wait on
      * it.
@@ -125,6 +140,38 @@ private class FakeOperations : AgentOperations {
     override fun syncTime(request: SyncTime) {
         syncTimeRequest = request
     }
+
+    override fun setClipboard(request: ClipData) {
+        enter()
+        lastClipboard = request
+    }
+
+    override fun activateNotification(request: ActivateNotification) = enter()
+
+    override fun dismissNotification(request: DismissNotification) = enter()
+
+    override fun setNotificationForwarding(request: SetNotificationForwarding) = enter()
+
+    override fun setUrlRedirect(request: SetUrlRedirect) = enter()
+
+    override fun resolveUrl(request: ResolveUrl) = enter()
+
+    override fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult {
+        enter()
+        return CollectDiagnosticsResult.getDefaultInstance()
+    }
+
+    override fun importFiles(request: ImportFiles): ImportResult {
+        enter()
+        return ImportResult.getDefaultInstance()
+    }
+
+    override fun resolveExport(request: ResolveExport): ExportStart {
+        enter()
+        return ExportStart.getDefaultInstance()
+    }
+
+    override fun setSharedFolderAccess(request: SetSharedFolderAccess) = enter()
 }
 
 class DispatcherTest {

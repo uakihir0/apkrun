@@ -8,13 +8,27 @@ OPTIONS:
 
 SUBCOMMANDS:
   version                 Show APKRun version information.
+  setup                   Provision APKRun on this Mac (first-run setup).
   runtime                 Inspect and control the Android runtime.
   logs                    Read APKRun host logs.
   install                 Inspect and install one APK or a set of APK splits.
+  inspect                 Inspect an APK, split set, or container without
+                          installing.
+  uninstall               Remove an installed Android app.
+  rollback                Roll an app back to its previous version.
+  repair                  Reinstall a broken app from APKRun's retained APKs.
   list                    List installed Android apps.
   info                    Show runtime status or details for one Android app.
+  adopt                   Adopt an Android app installed outside APKRun.
   launch                  Launch an installed Android app.
   stop                    Stop an Android app session.
+  integrations            Inspect desktop integrations of an Android app.
+  update                  Check for, list, and manage Android app updates.
   operations              Inspect or cancel long-running APKRun operations.
+  wrap                    Install an APK and create its Mac app, or wrap an
+                          installed app.
+  wrapper                 Inspect the Mac apps APKRun created.
+  settings                Show or change the settings of one Android app.
+  config                  Read and write daemon settings.
 
   See 'apkrun help <subcommand>' for detailed help.

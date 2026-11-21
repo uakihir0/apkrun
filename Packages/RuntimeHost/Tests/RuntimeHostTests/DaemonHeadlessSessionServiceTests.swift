@@ -462,6 +462,16 @@ private final class FakeHeadlessScanoutController: ScanoutController, @unchecked
         makePool(scanout)
     }
 
+    func presentStatistics(
+        for scanout: ScanoutID
+    ) -> (statistics: PresentStatistics, durationsUs: [UInt64])? {
+        nil
+    }
+
+    func graphicsCounters() -> GraphicsCounters {
+        GraphicsCounters()
+    }
+
     func detachPool(_ scanout: ScanoutID, generation: UInt64?) {}
 
     func sendFrame(scanout: Int, sequence: UInt64) {

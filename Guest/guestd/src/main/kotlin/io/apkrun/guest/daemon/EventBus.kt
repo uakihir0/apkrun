@@ -1,5 +1,6 @@
 package io.apkrun.guest.daemon
 
+import io.apkrun.guest.protocol.FrameWriter
 import io.apkrun.guest.protocol.v1.Event
 
 /**

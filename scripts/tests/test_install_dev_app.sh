@@ -5,6 +5,9 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 installer="$repo_root/scripts/dev/install-dev-app.sh"
 temporary_root="$(mktemp -d)"
+# The installer canonicalizes HOME (cd -P), so compare against the physical
+# path: macOS temp directories live under the /var -> /private/var symlink.
+temporary_root="$(cd -P "$temporary_root" && pwd -P)"
 trap 'rm -rf "$temporary_root"' EXIT
 
 make_debug_app() {

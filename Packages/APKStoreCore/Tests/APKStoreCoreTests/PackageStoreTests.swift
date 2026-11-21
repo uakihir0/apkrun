@@ -266,7 +266,8 @@ private actor CompletionFlag {
 
     let store = PackageStore(
         packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
     )
     try await store.open()
     let preview = try await store.importPackage(files: [input])
@@ -375,7 +376,11 @@ private actor CompletionFlag {
     try Data("base apk bytes".utf8).write(to: input)
     let packages = temporary.appendingPathComponent("Packages", isDirectory: true)
 
-    let store = PackageStore(packagesDirectory: packages, inspector: { _ in facts() })
+    let store = PackageStore(
+        packagesDirectory: packages, inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
+    )
     try await store.open()
     let preview = try await store.importPackage(files: [input])
     let ticketDirectory =
@@ -455,7 +460,9 @@ private actor CompletionFlag {
                 targetSDK: 35,
                 nativeABIs: []
             )
-        }
+        },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
 
@@ -514,7 +521,9 @@ private actor CompletionFlag {
     let firstStore = PackageStore(
         packagesDirectory: packagesDirectory,
         runtimeAccess: runtime,
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await firstStore.open()
     let preview = try await firstStore.importPackage(files: [input])
@@ -522,7 +531,9 @@ private actor CompletionFlag {
 
     let secondStore = PackageStore(
         packagesDirectory: packagesDirectory,
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await secondStore.open()
     let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
@@ -533,7 +544,9 @@ private actor CompletionFlag {
 
     let reopened = PackageStore(
         packagesDirectory: packagesDirectory,
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await reopened.open()
     #expect(await reopened.journalIssue == nil)
@@ -561,7 +574,9 @@ private actor CompletionFlag {
     let store = PackageStore(
         packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
         runtimeAccess: runtime,
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
     let preview = try await store.importPackage(files: [input])
@@ -589,7 +604,9 @@ private actor CompletionFlag {
     let store = PackageStore(
         packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
         runtimeAccess: runtime,
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
     let preview = try await store.importPackage(files: [input])
@@ -624,7 +641,9 @@ private actor CompletionFlag {
                     if kind == "forget", step == forgetCrashStep {
                         throw InjectedStoreCrash()
                     }
-                }
+                },
+                importVerifier: PackageStore.legacyImportVerifier
+
             )
             try await forgettingStore.open()
             let crashingStore = PackageStore(
@@ -635,7 +654,9 @@ private actor CompletionFlag {
                     if kind == "uninstall", step == "guestUninstallRequested" {
                         throw InjectedStoreCrash()
                     }
-                }
+                },
+                importVerifier: PackageStore.legacyImportVerifier
+
             )
             try await crashingStore.open()
             let preview = try await crashingStore.importPackage(files: [input])
@@ -650,7 +671,9 @@ private actor CompletionFlag {
             let recoveredStore = PackageStore(
                 packagesDirectory: packages,
                 runtimeAccess: runtime,
-                inspector: { _ in facts() }
+                inspector: { _ in facts() },
+                importVerifier: PackageStore.legacyImportVerifier
+
             )
             try await recoveredStore.open()
             try await recoveredStore.recoverPendingTransactions()
@@ -695,7 +718,9 @@ private actor CompletionFlag {
 
             let finalStore = PackageStore(
                 packagesDirectory: packages,
-                inspector: { _ in facts() }
+                inspector: { _ in facts() },
+                importVerifier: PackageStore.legacyImportVerifier
+
             )
             try await finalStore.open()
             #expect(try await finalStore.listManagedPackages().isEmpty)
@@ -746,7 +771,9 @@ private actor CompletionFlag {
     let firstStore = PackageStore(
         packagesDirectory: packagesDirectory,
         runtimeAccess: runtime,
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await firstStore.open()
     let preview = try await firstStore.importPackage(files: [input])
@@ -755,7 +782,9 @@ private actor CompletionFlag {
     let secondStore = PackageStore(
         packagesDirectory: packagesDirectory,
         runtimeAccess: runtime,
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await secondStore.open()
     await channel.pauseUninstall()
@@ -794,7 +823,9 @@ private actor CompletionFlag {
         packagesDirectory: packages,
         runtimeAccess: runtime,
         inspector: { _ in facts() },
-        clock: { createdAt }
+        clock: { createdAt },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
     let preview = try await store.importPackage(files: [input], origin: .cli)
@@ -819,7 +850,9 @@ private actor CompletionFlag {
         packagesDirectory: packages,
         runtimeAccess: runtime,
         inspector: { _ in facts() },
-        clock: { expiredAt }
+        clock: { expiredAt },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await recoveredStore.open()
     try await recoveredStore.recoverPendingTransactions()
@@ -864,7 +897,9 @@ private actor CompletionFlag {
     let store = PackageStore(
         packagesDirectory: packages,
         runtimeAccess: runtime,
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
     let preview = try await store.importPackage(files: [input])
@@ -910,7 +945,9 @@ private actor CompletionFlag {
             if kind == "firstInstall", step == "filesPromoted" {
                 throw InjectedStoreCrash()
             }
-        }
+        },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await crashingStore.open()
     let preview = try await crashingStore.importPackage(files: [input])
@@ -925,7 +962,9 @@ private actor CompletionFlag {
         packagesDirectory: packages,
         runtimeAccess: runtime,
         inspector: { _ in facts() },
-        clock: { expiredAt }
+        clock: { expiredAt },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await recoveredStore.open()
     try await recoveredStore.recoverPendingTransactions()
@@ -954,7 +993,9 @@ private actor CompletionFlag {
     let store = PackageStore(
         packagesDirectory: packages,
         inspector: { _ in facts() },
-        hostFreeSpace: { _ in 64 }
+        hostFreeSpace: { _ in 64 },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
 
@@ -988,7 +1029,9 @@ private actor CompletionFlag {
     let store = PackageStore(
         packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
         inspector: { _ in facts() },
-        hostFreeSpace: { _ in required }
+        hostFreeSpace: { _ in required },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
 
@@ -1006,7 +1049,9 @@ private actor CompletionFlag {
     let store = PackageStore(
         packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
         runtimeAccess: runtime,
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
 
@@ -1064,7 +1109,9 @@ private actor CompletionFlag {
         faultInjector: { kind, step in
             guard kind == "uninstall", step == "trashCleanup" else { return }
             throw SimulatedGuestFailure.installFailedBeforeCommit
-        }
+        },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
     let input = temporary.appendingPathComponent("HelloText.apk")
@@ -1090,7 +1137,9 @@ private actor CompletionFlag {
     let store = PackageStore(
         packagesDirectory: packagesDirectory,
         runtimeAccess: FakeStoreRuntime(channel: channel),
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
     let input = temporary.appendingPathComponent("HelloText.apk")
@@ -1136,7 +1185,9 @@ private actor CompletionFlag {
     let store = PackageStore(
         packagesDirectory: packagesDirectory,
         runtimeAccess: FakeStoreRuntime(channel: channel),
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
     let input = temporary.appendingPathComponent("HelloText.apk")
@@ -1191,7 +1242,9 @@ private actor CompletionFlag {
     let store = PackageStore(
         packagesDirectory: packagesDirectory,
         runtimeAccess: FakeStoreRuntime(channel: channel, acquisitionGate: acquisitionGate),
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
     let input = temporary.appendingPathComponent("HelloText.apk")
@@ -1235,7 +1288,9 @@ private actor CompletionFlag {
     let store = PackageStore(
         packagesDirectory: packagesDirectory,
         runtimeAccess: FakeStoreRuntime(channel: channel),
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
     let input = temporary.appendingPathComponent("HelloText.apk")
@@ -1285,7 +1340,9 @@ private actor CompletionFlag {
     let store = PackageStore(
         packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
         runtimeAccess: FakeStoreRuntime(channel: channel),
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
     let input = temporary.appendingPathComponent("HelloText.apk")
@@ -1330,7 +1387,9 @@ private actor CompletionFlag {
     let store = PackageStore(
         packagesDirectory: packagesDirectory,
         runtimeAccess: FakeStoreRuntime(channel: channel),
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
     let input = temporary.appendingPathComponent("HelloText.apk")
@@ -1392,7 +1451,9 @@ private actor CompletionFlag {
         inspector: { apk in
             let versionCode = try #require(Int64(String(contentsOf: apk, encoding: .utf8)))
             return facts(versionCode: versionCode)
-        }
+        },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
 
@@ -1434,7 +1495,9 @@ private actor CompletionFlag {
         inspector: { apk in
             let versionCode = try #require(Int64(String(contentsOf: apk, encoding: .utf8)))
             return facts(versionCode: versionCode)
-        }
+        },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
 
@@ -1463,7 +1526,9 @@ private actor CompletionFlag {
     let firstStore = PackageStore(
         packagesDirectory: packages,
         runtimeAccess: runtime,
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await firstStore.open()
 
@@ -1483,7 +1548,9 @@ private actor CompletionFlag {
             guard kind == "reinstall", step == "commit" else { return }
             try FileManager.default.removeItem(at: trash)
             try Data("blocks directory cleanup".utf8).write(to: trash)
-        }
+        },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await replacementStore.open()
     let replacementPreview = try await replacementStore.importPackage(files: [version8])
@@ -1513,7 +1580,9 @@ private actor CompletionFlag {
             if kind == "firstInstall", step == "guestInstalled" {
                 throw InjectedStoreCrash()
             }
-        }
+        },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await crashingStore.open()
     let preview = try await crashingStore.importPackage(files: [input])
@@ -1527,7 +1596,9 @@ private actor CompletionFlag {
     let recoveredStore = PackageStore(
         packagesDirectory: packages,
         runtimeAccess: runtime,
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await recoveredStore.open()
     try await recoveredStore.recoverPendingTransactions()
@@ -1560,7 +1631,9 @@ private actor CompletionFlag {
             if kind == "firstInstall", step == "begin" {
                 throw InjectedStoreCrash()
             }
-        }
+        },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await store.open()
     let preview = try await store.importPackage(files: [input])
@@ -1580,7 +1653,9 @@ private actor CompletionFlag {
     let reopened = PackageStore(
         packagesDirectory: packages,
         runtimeAccess: runtime,
-        inspector: { _ in facts() }
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
     )
     try await reopened.open()
     #expect(await reopened.journalIssue != nil)
@@ -1597,7 +1672,11 @@ private actor CompletionFlag {
     let corruptJournal = Data("{invalid}\n{\"seq\":2}\n".utf8)
     try corruptJournal.write(to: journal)
 
-    let store = PackageStore(packagesDirectory: packages, inspector: { _ in facts() })
+    let store = PackageStore(
+        packagesDirectory: packages, inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
+    )
     try await store.open()
 
     #expect(await store.journalIssue == "invalid journal line")
@@ -1621,11 +1700,19 @@ private actor CompletionFlag {
     let input = temporary.appendingPathComponent("HelloText.apk")
     try Data("base apk bytes".utf8).write(to: input)
     let packages = temporary.appendingPathComponent("Packages", isDirectory: true)
-    let originalStore = PackageStore(packagesDirectory: packages, inspector: { _ in facts() })
+    let originalStore = PackageStore(
+        packagesDirectory: packages, inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
+    )
     try await originalStore.open()
     let preview = try await originalStore.importPackage(files: [input])
 
-    let restartedStore = PackageStore(packagesDirectory: packages, inspector: { _ in facts() })
+    let restartedStore = PackageStore(
+        packagesDirectory: packages, inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
+    )
     try await restartedStore.open()
     do {
         _ = try await restartedStore.installImported(ticket: preview.ticket)
@@ -1672,4 +1759,109 @@ private func makeTemporaryDirectory() throws -> URL {
         .appendingPathComponent("PackageStoreTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     return directory
+}
+
+// MARK: - Reset Android reconciliation (runtime-daemon.md §9.5)
+
+@Test func packageStoreMarksManagedInstalledPackagesForUserdataReset() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+
+    let channel = FakeStoreChannel()
+    let runtime = FakeStoreRuntime(channel: channel)
+    let store = PackageStore(
+        packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
+        runtimeAccess: runtime,
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+
+    )
+    try await store.open()
+    let preview = try await store.importPackage(files: [input])
+    let installed = try await store.installImported(ticket: preview.ticket)
+
+    let marked = try await store.markForUserdataReset()
+
+    #expect(marked == [installed.packageId])
+    let record = try #require(
+        await store.listManagedPackages().first { $0.packageId == installed.packageId })
+    #expect(record.state == .needsReinstall(.userdataReset))
+}
+
+// MARK: - Adoption (package-store.md §9.3)
+
+@Test func packageStoreAdoptsAnUnmanagedAndroidPackage() async throws {
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let packageID = PackageID(rawValue: "com.example.sideloaded")!
+    let digest = SHA256Digest(data: Data("signer".utf8))
+    let channel = FakeStoreChannel()
+    await channel.seed(
+        StorePackageInfo(
+            packageID: packageID,
+            displayName: "Sideloaded",
+            versionCode: 7,
+            versionName: "2.1",
+            enabled: true,
+            installerPackage: PackageID(rawValue: "com.android.shell"),
+            firstInstallTime: Date(timeIntervalSince1970: 100),
+            lastUpdateTime: Date(timeIntervalSince1970: 200),
+            targetSDK: 35,
+            minSDK: 24,
+            signingDigests: [digest]
+        )
+    )
+    let store = PackageStore(
+        packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
+        runtimeAccess: FakeStoreRuntime(channel: channel),
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+    )
+    try await store.open()
+
+    let record = try await store.adoptPackage(packageID: packageID)
+    #expect(record.packageId == packageID)
+    #expect(record.installer == .external)
+    #expect(record.updateAuthority == .external)
+    #expect(record.source.kind == .adopted)
+    #expect(record.artifacts.current == nil)
+    #expect(record.signingCertificates == [digest])
+    #expect(record.versionCode == 7)
+    #expect(record.lastOperation?.kind == .adopt)
+    #expect(record.state == .installed)
+
+    // Adopting again is refused; the package is already managed.
+    await #expect(throws: PackageStoreFailure.packageAlreadyManaged) {
+        try await store.adoptPackage(packageID: packageID)
+    }
+
+    // A package Android does not report cannot be adopted.
+    await #expect(throws: PackageStoreFailure.packageNotFound) {
+        try await store.adoptPackage(packageID: PackageID(rawValue: "com.example.missing")!)
+    }
+}
+
+@Test func packageStoreInstallsAfterTheImportSourceWasDeleted() async throws {
+    // #49 (package-store.md §4.1): nothing after importPackage reads the
+    // source path — the private incoming copy is all the store needs.
+    let temporary = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let channel = FakeStoreChannel()
+    let runtime = FakeStoreRuntime(channel: channel)
+    let input = temporary.appendingPathComponent("HelloText.apk")
+    try Data("base apk bytes".utf8).write(to: input)
+    let store = PackageStore(
+        packagesDirectory: temporary.appendingPathComponent("Packages", isDirectory: true),
+        runtimeAccess: runtime,
+        inspector: { _ in facts() },
+        importVerifier: PackageStore.legacyImportVerifier
+    )
+    try await store.open()
+    let preview = try await store.importPackage(files: [input])
+    try FileManager.default.removeItem(at: input)
+
+    let installed = try await store.installImported(ticket: preview.ticket)
+    #expect(installed.packageId == preview.packageID)
 }

@@ -123,7 +123,7 @@
                 pointSize: pointSize
             )
             Task { @MainActor in
-                session.startPump()
+                await session.startPump()
             }
             return session
         }
@@ -131,7 +131,7 @@
         /// Schedules a newly created native window's pump on the AppKit main actor.
         func startPumpWhenReady() {
             Task { @MainActor in
-                startPump()
+                await startPump()
             }
         }
 
@@ -175,7 +175,7 @@
                 DisplayApplication.stop()
             }
             Task { @MainActor in
-                session.startPump()
+                await session.startPump()
             }
             MainActor.assumeIsolated {
                 DisplayApplication.run()
@@ -184,14 +184,17 @@
 
         /// Starts the pump that makes the window when the display is attached. It runs on the main actor.
         @MainActor
-        private func startPump() {
+        private func startPump() async {
             guard earlyFailureWindow == nil else {
                 return
             }
+            let editorStates = await inputRoute.editorStates
             let pump = DisplayPump(
                 display: display,
                 showStatistics: showStatistics,
                 inputSink: inputSink,
+                imeTextSink: inputSink,
+                editorStates: editorStates,
                 onFocusChanged: { [inputSink] focused in
                     inputSink.focusChanged(focused)
                 },

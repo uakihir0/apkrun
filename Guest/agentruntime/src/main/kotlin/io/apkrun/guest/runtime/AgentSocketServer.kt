@@ -17,6 +17,8 @@ class SocketNameInUse(val name: String) : IOException("the socket $name is alrea
 class AgentSocketServer(
     /** The abstract socket name, such as `apkrun-guestd-control`. It is shown as `@name`. */
     val name: String,
+    /** The peer uids that may connect. The default is the development rule of [PeerCheck]. */
+    private val allowedPeer: (Int) -> Boolean = PeerCheck::isAllowed,
     private val onPeer: (LocalSocket, Int) -> Unit,
 ) {
     private var server: LocalServerSocket? = null
@@ -67,7 +69,7 @@ class AgentSocketServer(
                     socket.close()
                     continue
                 }
-            if (!PeerCheck.isAllowed(uid)) {
+            if (!allowedPeer(uid)) {
                 AgentLog.warning("refused a connection to @$name from uid $uid")
                 socket.close()
                 continue

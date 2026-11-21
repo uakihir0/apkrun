@@ -2,6 +2,4 @@ import Testing
 
 @testable import UpdateCore
 
-@Test func placeholderCanBeConstructed() {
-    _ = UpdateCorePlaceholder()
-}
+// T0 tests for UpdateCore live in LocalProviderTests.swift and friends.

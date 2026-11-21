@@ -775,6 +775,19 @@ public actor DisplayPool {
         return lease
     }
 
+    /// The present statistics of the presenter on `scanout`, or `nil`
+    /// (diagnostics.md §9.3 `frameStatistics`).
+    public func presentStatistics(
+        _ scanout: ScanoutID
+    ) -> (statistics: PresentStatistics, durationsUs: [UInt64])? {
+        scanouts.presentStatistics(for: scanout)
+    }
+
+    /// The device-wide GPU counters (`hostReadbacks`, `cpuPixelCopies`).
+    public func graphicsCounters() -> GraphicsCounters {
+        scanouts.graphicsCounters()
+    }
+
     private func slotIndex(for lease: DisplayLease) -> Int? {
         slotIndex(for: lease, allowingUncertainReconfiguration: false)
     }

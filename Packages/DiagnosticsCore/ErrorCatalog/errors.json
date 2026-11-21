@@ -2550,7 +2550,7 @@
         "case": "stopped",
         "when": "Android is stopped while the agent is starting, so the start ends without a connection",
         "raisedBy": "DevelopmentGuestAgent",
-        "ref": "[../02-design/guest-components.md](../02-design/guest-components.md) \u00a73.3"
+        "ref": "[../02-design/guest-components.md](../02-design/guest-components.md) §3.3"
       }
     },
     {
@@ -2606,9 +2606,9 @@
       "cliExit": 1,
       "doc": {
         "case": "requiredAgentUnavailable(agent:)",
-          "when": "a required agent misses its 30 s readiness deadline after boot or remains unavailable for more than 30 s while ready, its restart budget is exhausted, or repeated protocol violations stop reconnection",
+        "when": "a required agent misses its 30 s readiness deadline after boot or remains unavailable for more than 30 s while ready, its restart budget is exhausted, or repeated protocol violations stop reconnection",
         "raisedBy": "agent supervisor",
-          "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2, §4.3; [../02-design/guest-components.md](../02-design/guest-components.md) §3.3; [../02-design/guest-protocol.md](../02-design/guest-protocol.md) §12.2"
+        "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2, §4.3; [../02-design/guest-components.md](../02-design/guest-components.md) §3.3; [../02-design/guest-protocol.md](../02-design/guest-protocol.md) §12.2"
       }
     },
     {
@@ -2665,6 +2665,2497 @@
         "when": "after Android is ready, the window's input cannot be bound to the Guest Agent's input channel because the channel fails. The binding is tried again, and the boot goes on without input until it succeeds",
         "raisedBy": "RuntimeHost, `apkrun dev boot --window`, `apkrun dev launch`",
         "ref": "[../02-design/input.md](../02-design/input.md) §7.1, §11"
+      }
+    },
+    {
+      "code": "integration.clipboardTooLarge",
+      "parameters": [
+        "bytes",
+        "limit"
+      ],
+      "message": {
+        "en": "The copied item is too large for Android ({bytes}; the limit is {limit}).",
+        "ja": "コピーした項目は Android には大きすぎます（{bytes}、上限は {limit}）。"
+      },
+      "remediation": {
+        "en": "Copy a smaller item.",
+        "ja": "小さい項目をコピーしてください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "integration",
+        "case": "clipboardTooLarge(bytes:limit:)",
+        "when": "an image or HTML clip above its limit. Long text is truncated instead",
+        "raisedBy": "ClipboardCoordinator",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §4.4"
+      }
+    },
+    {
+      "code": "integration.disabled",
+      "parameters": [
+        "integration",
+        "app"
+      ],
+      "message": {
+        "en": "{integration} is turned off for {app}.",
+        "ja": "{app} の {integration} はオフになっています。"
+      },
+      "remediation": {
+        "en": "Turn it on in the app's settings in APKRun.",
+        "ja": "APKRun のアプリ設定でオンにしてください。"
+      },
+      "action": "none",
+      "cliExit": 5,
+      "doc": {
+        "table": "integration",
+        "case": "disabled(IntegrationKind, IntegrationDenial)",
+        "when": "`IntegrationPolicy` denies the request. Shown for a refused drop and in `apkrun integrations status`",
+        "raisedBy": "IntegrationPolicy",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §2.3"
+      },
+      "variants": {
+        "globallyOff": {
+          "message": {
+            "en": "{integration} is turned off for all apps.",
+            "ja": "{integration} はすべてのアプリでオフになっています。"
+          },
+          "remediation": {
+            "en": "Turn it on in Settings → Privacy.",
+            "ja": "設定 → プライバシーでオンにしてください。"
+          },
+          "action": "openPrivacySettings",
+          "doc": {
+            "when": "the global switch `integrations.enabled.<name>` is off",
+            "raisedBy": "IntegrationPolicy",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §2.2"
+          }
+        },
+        "notFocused": {
+          "message": {
+            "en": "{app} can use {integration} only while you use its window.",
+            "ja": "{app} が {integration} を使えるのは、そのウィンドウを使用中だけです。"
+          },
+          "remediation": {
+            "en": "Click the app's window, then try again.",
+            "ja": "アプリのウィンドウをクリックしてから、もう一度お試しください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the app's window is not key, or had no user input in the last 5 s (links)",
+            "raisedBy": "IntegrationPolicy",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §4.1, §7.2"
+          }
+        },
+        "noSession": {
+          "message": {
+            "en": "{app} isn't open.",
+            "ja": "{app} は開いていません。"
+          },
+          "remediation": {
+            "en": "Open {app}, then try again.",
+            "ja": "{app} を開いてから、もう一度お試しください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the package has no session",
+            "raisedBy": "IntegrationPolicy",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §2.3"
+          }
+        },
+        "notSupported": {
+          "message": {
+            "en": "This version of Android doesn't support {integration}.",
+            "ja": "このバージョンの Android は {integration} に対応していません。"
+          },
+          "remediation": {
+            "en": "Update Android.",
+            "ja": "Android を更新してください。"
+          },
+          "action": "updateAndroid",
+          "doc": {
+            "when": "the running image lacks the capability",
+            "raisedBy": "IntegrationPolicy",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §2.4"
+          }
+        },
+        "rateLimited": {
+          "message": {
+            "en": "{app} is doing this too often.",
+            "ja": "{app} の実行が頻繁すぎます。"
+          },
+          "remediation": {
+            "en": "Wait a moment, then try again.",
+            "ja": "しばらく待ってから、もう一度お試しください。"
+          },
+          "action": "retry",
+          "doc": {
+            "when": "a rate limit, for example more than 3 links in 10 s",
+            "raisedBy": "IntegrationPolicy",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.2"
+          }
+        }
+      }
+    },
+    {
+      "code": "integration.fileTooLarge",
+      "parameters": [
+        "file",
+        "bytes"
+      ],
+      "message": {
+        "en": "{file} is too large to drop into Android ({bytes}).",
+        "ja": "{file} は Android にドロップするには大きすぎます（{bytes}）。"
+      },
+      "remediation": {
+        "en": "Drop files of up to 2 GB each and 4 GB in total.",
+        "ja": "1 ファイル 2 GB まで、合計 4 GB までのファイルをドロップしてください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "integration",
+        "case": "fileTooLarge(name:bytes:)",
+        "when": "a dropped file above 2 GiB, or a drop above 4 GiB in total",
+        "raisedBy": "DropTarget, FileTransferService",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.2"
+      }
+    },
+    {
+      "code": "integration.folderRefused",
+      "parameters": [
+        "file"
+      ],
+      "message": {
+        "en": "APKRun doesn't share {file}.",
+        "ja": "APKRun は {file} を共有しません。"
+      },
+      "action": "none",
+      "cliExit": 5,
+      "doc": {
+        "table": "integration",
+        "case": "folderRefused(FolderRefusal)",
+        "when": "addSharedFolder names a folder that can't be shared",
+        "raisedBy": "SharedFolderService",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+      },
+      "variants": {
+        "volumeRoot": {
+          "message": {
+            "en": "APKRun doesn't share a whole disk.",
+            "ja": "ディスク全体は共有できません。"
+          },
+          "remediation": {
+            "en": "Choose a folder on the disk instead.",
+            "ja": "ディスク内のフォルダを選んでください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the folder is the root of a volume",
+            "raisedBy": "SharedFolderService",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        },
+        "homeFolder": {
+          "message": {
+            "en": "APKRun doesn't share your whole home folder.",
+            "ja": "ホームフォルダ全体は共有できません。"
+          },
+          "remediation": {
+            "en": "Choose a folder inside it, such as Documents or Downloads.",
+            "ja": "Documents や Downloads など、その中のフォルダを選んでください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the folder is the home folder",
+            "raisedBy": "SharedFolderService",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        },
+        "insideLibrary": {
+          "message": {
+            "en": "APKRun doesn't share folders in your Library.",
+            "ja": "Library 内のフォルダは共有できません。"
+          },
+          "remediation": {
+            "en": "Choose a folder outside ~/Library.",
+            "ja": "~/Library の外にあるフォルダを選んでください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the folder is ~/Library or inside it",
+            "raisedBy": "SharedFolderService",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        },
+        "hidden": {
+          "message": {
+            "en": "APKRun doesn't share hidden folders.",
+            "ja": "隠しフォルダは共有できません。"
+          },
+          "remediation": {
+            "en": "Choose a folder that isn't hidden.",
+            "ja": "隠しフォルダでないフォルダを選んでください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the folder, or a folder that contains it, is hidden",
+            "raisedBy": "SharedFolderService",
+            "ref": "[../02-design/desktop-integration.md](/02-design/desktop-integration.md) §6.4"
+          }
+        },
+        "limitReached": {
+          "message": {
+            "en": "You can share at most 32 folders.",
+            "ja": "共有できるのは 32 フォルダまでです。"
+          },
+          "remediation": {
+            "en": "Remove a shared folder in Settings → Files first.",
+            "ja": "先に設定 → ファイルで共有フォルダを削除してください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "32 folders are already added",
+            "raisedBy": "SharedFolderService",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        }
+      }
+    },
+    {
+      "code": "integration.folderUnavailable",
+      "parameters": [
+        "file"
+      ],
+      "message": {
+        "en": "APKRun can't access the shared folder {file}.",
+        "ja": "共有フォルダ {file} にアクセスできません。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "integration",
+        "case": "folderUnavailable(FolderProblem)",
+        "when": "a root can't be used",
+        "raisedBy": "SharedFolderService",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+      },
+      "variants": {
+        "missing": {
+          "message": {
+            "en": "The shared folder {file} doesn't exist any more.",
+            "ja": "共有フォルダ {file} はもう存在しません。"
+          },
+          "remediation": {
+            "en": "Put the folder back, or remove it in Settings → Files.",
+            "ja": "フォルダを戻すか、設定 → ファイルで削除してください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the folder no longer exists",
+            "raisedBy": "SharedFolderService",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        },
+        "privacyDenied": {
+          "message": {
+            "en": "macOS doesn't allow APKRun to access the shared folder {file}.",
+            "ja": "macOS は APKRun の共有フォルダ {file} へのアクセスを許可していません。"
+          },
+          "remediation": {
+            "en": "Allow APKRun in System Settings → Privacy & Security → Files and Folders.",
+            "ja": "システム設定 → プライバシーとセキュリティ → ファイルとフォルダで APKRun を許可してください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "macOS privacy controls deny access",
+            "raisedBy": "SharedFolderService",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        },
+        "offline": {
+          "message": {
+            "en": "The shared folder {file} isn't available right now.",
+            "ja": "共有フォルダ {file} は現在利用できません。"
+          },
+          "remediation": {
+            "en": "Connect the drive or network volume that contains it.",
+            "ja": "そのフォルダを含むドライブやネットワークボリュームを接続してください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the volume is not mounted",
+            "raisedBy": "SharedFolderService",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        }
+      }
+    },
+    {
+      "code": "integration.guestUnavailable",
+      "parameters": [],
+      "message": {
+        "en": "The Guest Agent in Android isn't connected.",
+        "ja": "Android 内のゲストエージェントが接続されていません。"
+      },
+      "remediation": {
+        "en": "APKRun reconnects automatically. Try again in a moment.",
+        "ja": "APKRun は自動的に再接続します。しばらくしてからもう一度お試しください。"
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "table": "integration",
+        "case": "guestUnavailable",
+        "when": "the Guest Agent is not connected. The operation is not queued",
+        "raisedBy": "IntegrationChannel",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §12"
+      }
+    },
+    {
+      "code": "integration.notificationAccessMissing",
+      "parameters": [],
+      "message": {
+        "en": "Android lost access to its notifications.",
+        "ja": "Android が通知へのアクセスを失いました。"
+      },
+      "remediation": {
+        "en": "The Guest Agent restores the access automatically; restart Android if the warning stays.",
+        "ja": "ゲストエージェントが自動的にアクセスを復元します。警告が消えない場合は Android を再起動してください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "integration",
+        "case": "listenerDisabled",
+        "when": "the health check `integrations.notificationListener` reads a snapshot whose listener access flag is off",
+        "raisedBy": "NotificationListenerCheck",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §5.1"
+      }
+    },
+    {
+      "code": "integration.notSupportedOnImage",
+      "parameters": [
+        "capability"
+      ],
+      "message": {
+        "en": "This version of Android doesn't support this ({capability}).",
+        "ja": "このバージョンの Android はこれに対応していません（{capability}）。"
+      },
+      "remediation": {
+        "en": "Update Android.",
+        "ja": "Android を更新してください。"
+      },
+      "action": "updateAndroid",
+      "cliExit": 1,
+      "doc": {
+        "table": "integration",
+        "case": "notSupportedOnImage(capability:)",
+        "when": "an operation needs a Guest Agent capability that the running image does not report",
+        "raisedBy": "IntegrationChannel",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §2.4, §13"
+      }
+    },
+    {
+      "code": "integration.pathRejected",
+      "parameters": [],
+      "message": {
+        "en": "Android asked for a file that APKRun doesn't share.",
+        "ja": "APKRun が共有しないファイルを Android が要求しました。"
+      },
+      "action": "none",
+      "cliExit": 5,
+      "doc": {
+        "table": "integration",
+        "case": "pathRejected(PathProblem)",
+        "when": "an Android request names a path outside the root, a hidden item, or an item that is not a regular file or folder",
+        "raisedBy": "SharedFolderService",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+      },
+      "variants": {
+        "outsideRoot": {
+          "doc": {
+            "when": "the path escapes the root (`..` or absolute)",
+            "raisedBy": "SharedFolderService",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        },
+        "hidden": {
+          "doc": {
+            "when": "the path names a hidden item or a package that looks like one file",
+            "raisedBy": "SharedFolderService",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        },
+        "notRegularFile": {
+          "doc": {
+            "when": "the path names a symlink, device, socket, or other non-file",
+            "raisedBy": "SharedFolderService",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+          }
+        }
+      }
+    },
+    {
+      "code": "integration.promptTimedOut",
+      "parameters": [
+        "app"
+      ],
+      "message": {
+        "en": "The link from {app} was cancelled because the question wasn't answered.",
+        "ja": "{app} からのリンクは、質問への回答がなかったためキャンセルされました。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "integration",
+        "case": "promptTimedOut",
+        "when": "the link prompt got no answer in 60 s and was cancelled, or `resolveLinkPrompt` names an expired or unknown prompt. Logged only",
+        "raisedBy": "LinkForwarder",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.2"
+      }
+    },
+    {
+      "code": "integration.readOnly",
+      "parameters": [
+        "app"
+      ],
+      "message": {
+        "en": "{app} can only read files in the shared folders.",
+        "ja": "{app} が共有フォルダでできるのは読み取りだけです。"
+      },
+      "remediation": {
+        "en": "To allow changes, set Shared folders to Read and write in the app's settings, and give the folder Read and write access in Settings → Files.",
+        "ja": "変更を許可するには、アプリの設定で共有フォルダを「読み書き」にし、設定 → ファイルでフォルダに「読み書き」アクセスを与えてください。"
+      },
+      "action": "none",
+      "cliExit": 5,
+      "doc": {
+        "table": "integration",
+        "case": "readOnly",
+        "when": "a write, create, delete, or rename in a read-only root, or with read-only package access",
+        "raisedBy": "SharedFolderService",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.4"
+      }
+    },
+    {
+      "code": "integration.tooManyFiles",
+      "parameters": [
+        "count",
+        "limit"
+      ],
+      "message": {
+        "en": "Too many files at once ({count}).",
+        "ja": "一度にドロップするファイルが多すぎます（{count}）。"
+      },
+      "remediation": {
+        "en": "Drop at most 20 files at a time.",
+        "ja": "一度にドロップするのは 20 ファイルまでです。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "integration",
+        "case": "tooManyFiles(count:limit:)",
+        "when": "a drop of more than 20 files",
+        "raisedBy": "DropTarget, FileTransferService",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.2"
+      }
+    },
+    {
+      "code": "integration.transferFailed",
+      "parameters": [
+        "detail"
+      ],
+      "message": {
+        "en": "The file transfer didn't finish.",
+        "ja": "ファイル転送が完了しませんでした。"
+      },
+      "remediation": {
+        "en": "Try again.",
+        "ja": "もう一度お試しください。"
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "table": "integration",
+        "case": "transferFailed(String)",
+        "when": "a bulk transfer aborts, the SHA-256 of BulkEnd differs, or a file system error occurs in SharedFolderService",
+        "raisedBy": "FileTransferService, SharedFolderService",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §6.2, §6.3"
+      }
+    },
+    {
+      "code": "integration.linkRejected",
+      "parameters": [
+        "app"
+      ],
+      "message": {
+        "en": "APKRun didn't open a link from {app}.",
+        "ja": "{app} からのリンクを APKRun は開きませんでした。"
+      },
+      "action": "none",
+      "cliExit": 5,
+      "doc": {
+        "table": "integration",
+        "case": "linkRejected(app:LinkRejection)",
+        "when": "`LinkForwarder` drops a link (`ResolveUrl(DROP)`). Counted and logged only",
+        "raisedBy": "LinkForwarder",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.2"
+      },
+      "variants": {
+        "scheme": {
+          "message": {
+            "en": "APKRun opens only web and mail links from Android apps.",
+            "ja": "APKRun が Android アプリから開くのは Web とメールのリンクだけです。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the scheme is not `http`, `https`, or `mailto`, or an `http(s)` link has no host",
+            "raisedBy": "LinkForwarder",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.2"
+          }
+        },
+        "tooLong": {
+          "message": {
+            "en": "The link from {app} is too long to open.",
+            "ja": "{app} からのリンクは長すぎて開けません。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "longer than 8 KiB",
+            "raisedBy": "LinkForwarder",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.2"
+          }
+        },
+        "notFocused": {
+          "message": {
+            "en": "APKRun opens links from {app} only while you use its window.",
+            "ja": "{app} からのリンクを開けるのは、そのウィンドウを使用中だけです。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the window is not key and had no input in the last 5 s",
+            "raisedBy": "LinkForwarder",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.2"
+          }
+        },
+        "rateLimited": {
+          "message": {
+            "en": "{app} opened too many links at once.",
+            "ja": "{app} が一度に開いたリンクが多すぎます。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "more than 3 links in 10 s",
+            "raisedBy": "LinkForwarder",
+            "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §7.2"
+          }
+        }
+      }
+    },
+    {
+      "code": "runtime.busy",
+      "parameters": [],
+      "message": {
+        "en": "APKRun's background service is busy."
+      },
+      "remediation": {
+        "en": "Wait a moment and try again."
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "case": "busy",
+        "when": "a rate-limited operation arrives faster than its limit, for example more than five wrapper approval requests per minute (wrapper.md §7.3 step 3)",
+        "raisedBy": "RuntimeHost",
+        "ref": "wrapper.md §7.3 step 3"
+      }
+    },
+    {
+      "code": "runtime.developerModeRequired",
+      "parameters": [],
+      "message": {
+        "en": "This request needs developer mode."
+      },
+      "remediation": {
+        "en": "Turn on Developer mode in Settings → Advanced, or run: apkrun config set developer.enabled true"
+      },
+      "action": "none",
+      "cliExit": 5,
+      "doc": {
+        "case": "developerModeRequired",
+        "when": "perfStatistics or frameStatistics while `developer.enabled` is off",
+        "raisedBy": "RuntimeHost",
+        "ref": "[../02-design/diagnostics.md](../02-design/diagnostics.md) §9.3, [configuration.md](configuration.md)"
+      }
+    },
+    {
+      "code": "runtime.hostRequirementsNotMet",
+      "parameters": [
+        "items",
+        "needed"
+      ],
+      "message": {
+        "en": "APKRun can't run on this Mac.",
+        "ja": "この Mac では APKRun を実行できません。"
+      },
+      "remediation": {
+        "en": "Follow the instructions for each reported requirement.",
+        "ja": "表示された各要件の指示に従ってください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "hostRequirementsNotMet([HostRequirement])",
+        "when": "HostRequirementsCheck finds one or more failed requirements. One item per failure; item texts are localized per §7.5",
+        "raisedBy": "HostRequirementsCheck",
+        "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §9.1"
+      },
+      "variants": {
+        "appleSilicon": {
+          "message": {
+            "en": "APKRun needs a Mac with Apple silicon.",
+            "ja": "APKRun には Apple silicon 搭載の Mac が必要です。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the host is not an Apple silicon Mac"
+          }
+        },
+        "macOSVersion": {
+          "message": {
+            "en": "APKRun needs macOS 27 or later. Update macOS.",
+            "ja": "APKRun には macOS 27 以降が必要です。macOS をアップデートしてください。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the host runs macOS older than 27"
+          }
+        },
+        "virtualization": {
+          "message": {
+            "en": "Virtualization is not available on this Mac (APKRun can't run inside a virtual machine).",
+            "ja": "この Mac では仮想化を利用できません（APKRun は仮想マシン内では実行できません）。"
+          },
+          "action": "none",
+          "doc": {
+            "when": "the hypervisor entitlement or hardware support is missing"
+          }
+        },
+        "apfsVolume": {
+          "message": {
+            "en": "Move APKRun's data to an APFS volume.",
+            "ja": "APKRun のデータを APFS ボリュームに移動してください。"
+          },
+          "action": "openStorageSettings",
+          "doc": {
+            "when": "APKRun's data volume is not APFS"
+          }
+        },
+        "freeDiskSpace": {
+          "message": {
+            "en": "Free up {needed}.",
+            "ja": "{needed} の空き容量を確保してください。"
+          },
+          "action": "openStorageSettings",
+          "doc": {
+            "when": "the data volume has less free space than provisioning needs"
+          }
+        }
+      }
+    },
+    {
+      "code": "runtime.invalidConfigValue",
+      "parameters": [
+        "key",
+        "value"
+      ],
+      "message": {
+        "en": "{value} is not a valid value for {key}."
+      },
+      "remediation": {
+        "en": "Check the accepted values for the setting in the configuration reference."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "invalidConfigValue(key, value)",
+        "when": "`apkrun config set` gets a value outside the key's allowed set",
+        "raisedBy": "apkrund",
+        "ref": "[../03-reference/configuration.md](../03-reference/configuration.md) §2.7"
+      }
+    },
+    {
+      "code": "runtime.notProvisioned",
+      "parameters": [],
+      "message": {
+        "en": "APKRun needs to finish setup.",
+        "ja": "APKRun のセットアップを完了する必要があります。"
+      },
+      "remediation": {
+        "en": "Open APKRun to finish setup, or run: apkrun setup",
+        "ja": "APKRun を開いてセットアップを完了するか、apkrun setup を実行してください。"
+      },
+      "action": "none",
+      "cliExit": 69,
+      "doc": {
+        "case": "notProvisioned",
+        "when": "Android is not set up yet: first-run provisioning is incomplete",
+        "raisedBy": "RuntimeSupervisor",
+        "ref": "[../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 step 0, §9.2"
+      }
+    },
+    {
+      "code": "runtime.unknownConfigKey",
+      "parameters": [
+        "key"
+      ],
+      "message": {
+        "en": "Unknown setting {key}."
+      },
+      "remediation": {
+        "en": "Run `apkrun config get` to list the settings keys."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "unknownConfigKey(key)",
+        "when": "`apkrun config get|set` names a key that is not a known setting",
+        "raisedBy": "apkrund",
+        "ref": "[../03-reference/configuration.md](../03-reference/configuration.md) §2.7"
+      }
+    },
+    {
+      "code": "runtime.unknownResult",
+      "parameters": [
+        "operationID"
+      ],
+      "message": {
+        "en": "The operation ended without a result."
+      },
+      "remediation": {
+        "en": "Try again. Report the operation ID if it keeps happening."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "case": "unknownResult(operationID)",
+        "when": "a tracked operation ends without reporting its result",
+        "raisedBy": "apkrund",
+        "ref": "[runtime-api.md](runtime-api.md)"
+      }
+    },
+    {
+      "code": "store.alreadyInstalled",
+      "parameters": [
+        "app",
+        "version"
+      ],
+      "message": {
+        "en": "{app} {version} is already installed.",
+        "ja": "{app} {version} はすでにインストールされています。"
+      },
+      "action": "none",
+      "cliExit": 0,
+      "doc": {
+        "table": "storeImport",
+        "case": "alreadyInstalled(VersionCode)",
+        "when": "ImportRelation.sameAsInstalled",
+        "raisedBy": "PackageStore",
+        "ref": "package-store.md §4.7"
+      },
+      "remediation": {
+        "en": "No action is needed.",
+        "ja": "対応は不要です。"
+      }
+    },
+    {
+      "code": "store.archiveLimitExceeded",
+      "parameters": [
+        "limit"
+      ],
+      "message": {
+        "en": "This file contains more than APKRun can safely unpack.",
+        "ja": "このファイルには APKRun が安全に展開できる量を超える内容が含まれています。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "archiveLimitExceeded(ArchiveLimit)",
+        "when": "an extraction limit is violated (zip-bomb and path safety)",
+        "raisedBy": "ContainerReader",
+        "ref": "package-store.md §4.2"
+      },
+      "variants": {
+        "entryCount": {
+          "message": {
+            "en": "This file contains more than 512 entries.",
+            "ja": "このファイルには 512 を超えるエントリが含まれています。"
+          },
+          "remediation": {
+            "en": "Download the app again from its developer.",
+            "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+          },
+          "doc": {
+            "when": "more than 512 entries",
+            "ref": "package-store.md §4.2"
+          }
+        },
+        "apkCount": {
+          "message": {
+            "en": "This file contains more than 256 APKs.",
+            "ja": "このファイルには 256 を超える APK が含まれています。"
+          },
+          "remediation": {
+            "en": "Download the app again from its developer.",
+            "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+          },
+          "doc": {
+            "when": "more than 256 APKs",
+            "ref": "package-store.md §4.2"
+          }
+        },
+        "fileSize": {
+          "message": {
+            "en": "A file inside is larger than 2 GB.",
+            "ja": "内部のファイルが 2 GB を超えています。"
+          },
+          "remediation": {
+            "en": "Download the app again from its developer.",
+            "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+          },
+          "doc": {
+            "when": "an extracted file above 2 GiB",
+            "ref": "package-store.md §4.2"
+          }
+        },
+        "totalSize": {
+          "message": {
+            "en": "The files inside are larger than 8 GB in total.",
+            "ja": "内部のファイルの合計が 8 GB を超えています。"
+          },
+          "remediation": {
+            "en": "Download the app again from its developer.",
+            "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+          },
+          "doc": {
+            "when": "extracted files above 8 GiB in total",
+            "ref": "package-store.md §4.2"
+          }
+        },
+        "compressionRatio": {
+          "message": {
+            "en": "This file is compressed in a way that isn't safe to unpack.",
+            "ja": "このファイルは安全に展開できない方法で圧縮されています。"
+          },
+          "remediation": {
+            "en": "Download the app again from its developer.",
+            "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+          },
+          "doc": {
+            "when": "an entry above 100:1",
+            "ref": "package-store.md §4.2"
+          }
+        },
+        "unsafeName": {
+          "message": {
+            "en": "This file contains entries with unsafe names.",
+            "ja": "このファイルには安全でない名前のエントリが含まれています。"
+          },
+          "remediation": {
+            "en": "Download the app again from its developer.",
+            "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+          },
+          "doc": {
+            "when": "a name that is not UTF-8 or relative, contains .., or is a symlink or device entry",
+            "ref": "package-store.md §4.2"
+          }
+        }
+      }
+    },
+    {
+      "code": "store.downgradeRefused",
+      "parameters": [
+        "installed",
+        "candidate"
+      ],
+      "message": {
+        "en": "Version {candidate} is older than installed version {installed}.",
+        "ja": "バージョン {candidate} はインストール済みのバージョン {installed} より古いです。"
+      },
+      "action": "none",
+      "cliExit": 5,
+      "doc": {
+        "table": "storeImport",
+        "case": "downgradeRefused(installed:candidate:)",
+        "when": "the candidate is below the live PackageManager version or the managed-record fallback",
+        "raisedBy": "PackageStore",
+        "ref": "package-store.md §4.7"
+      },
+      "remediation": {
+        "en": "Choose a newer APK, or uninstall the app first.",
+        "ja": "より新しい APK を選択するか、先にアプリをアンインストールしてください。"
+      }
+    },
+    {
+      "code": "store.duplicateSplit",
+      "parameters": [
+        "split"
+      ],
+      "message": {
+        "en": "The split {split} appears more than once.",
+        "ja": "スプリット {split} が複数回現れています。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "duplicateSplit(name:)",
+        "when": "a split name appears twice",
+        "raisedBy": "ArtifactVerifier",
+        "ref": "package-store.md §4.6"
+      },
+      "remediation": {
+        "en": "Add each split APK only once.",
+        "ja": "各スプリット APK は 1 回だけ追加してください。"
+      }
+    },
+    {
+      "code": "store.expansionFilesNotSupported",
+      "parameters": [],
+      "message": {
+        "en": "This file includes expansion files (OBB), which APKRun doesn't support yet.",
+        "ja": "このファイルには APKRun がまだサポートしていない拡張ファイル（OBB）が含まれています。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "expansionFilesNotSupported",
+        "when": "an .xapk with expansions (OBB)",
+        "raisedBy": "ContainerReader",
+        "ref": "package-store.md §4.2"
+      },
+      "remediation": {
+        "en": "Get a build of the app without expansion files.",
+        "ja": "拡張ファイルのないアプリのビルドを入手してください。"
+      }
+    },
+    {
+      "code": "store.incompleteSplitSet",
+      "parameters": [
+        "split"
+      ],
+      "message": {
+        "en": "This set is missing parts that the app needs: {split}.",
+        "ja": "このセットにはアプリが必要とする部分がありません: {split}。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "incompleteSplitSet(missing:)",
+        "when": "requiredSplitTypes or isSplitRequired is not satisfied",
+        "raisedBy": "SplitSelector",
+        "ref": "package-store.md §4.4"
+      },
+      "remediation": {
+        "en": "Use the complete .apks, .xapk, or .apkm file of the app.",
+        "ja": "アプリの完全な .apks、.xapk、.apkm ファイルを使用してください。"
+      }
+    },
+    {
+      "code": "store.inconsistentSplits",
+      "parameters": [
+        "field",
+        "file"
+      ],
+      "message": {
+        "en": "The APKs in this set don't belong together.",
+        "ja": "このセットの APK は同一のアプリではありません。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "inconsistentSplits(InconsistentField, file:)",
+        "when": "the APKs differ in package, version, or signer",
+        "raisedBy": "ArtifactVerifier",
+        "ref": "package-store.md §4.6"
+      },
+      "remediation": {
+        "en": "Add the APKs of one app version from one source.",
+        "ja": "1 つの提供元の、1 つのアプリバージョンの APK を追加してください。"
+      },
+      "variants": {
+        "package": {
+          "message": {
+            "en": "{file} belongs to another app.",
+            "ja": "{file} は別のアプリのものです。"
+          },
+          "remediation": {
+            "en": "Add the APKs of one app version from one source.",
+            "ja": "1 つの提供元の、1 つのアプリバージョンの APK を追加してください。"
+          },
+          "doc": {
+            "when": "a file of another package",
+            "ref": "package-store.md §4.6"
+          }
+        },
+        "versionCode": {
+          "message": {
+            "en": "{file} is from another version of the app.",
+            "ja": "{file} は別バージョンのアプリのものです。"
+          },
+          "remediation": {
+            "en": "Add the APKs of one app version from one source.",
+            "ja": "1 つの提供元の、1 つのアプリバージョンの APK を追加してください。"
+          },
+          "doc": {
+            "when": "a file of another VersionCode",
+            "ref": "package-store.md §4.6"
+          }
+        },
+        "signer": {
+          "message": {
+            "en": "{file} is signed by a different developer.",
+            "ja": "{file} は別の開発者によって署名されています。"
+          },
+          "remediation": {
+            "en": "Add the APKs of one app version from one source.",
+            "ja": "1 つの提供元の、1 つのアプリバージョンの APK を追加してください。"
+          },
+          "doc": {
+            "when": "a file with another signer set",
+            "ref": "package-store.md §4.6"
+          }
+        }
+      }
+    },
+    {
+      "code": "store.invalidSettingValue",
+      "parameters": [
+        "key",
+        "allowed"
+      ],
+      "message": {
+        "en": "{key} can't be set to that value.",
+        "ja": "{key} にはその値を設定できません。"
+      },
+      "action": "none",
+      "cliExit": 64,
+      "doc": {
+        "table": "storeSettings",
+        "case": "invalidSettingValue(String, String)",
+        "when": "a settings patch value fails §3.1 validation",
+        "raisedBy": "PackageStore",
+        "ref": "package-metadata-json.md §3.1"
+      },
+      "remediation": {
+        "en": "Allowed values: {allowed}.",
+        "ja": "設定できる値: {allowed}"
+      }
+    },
+    {
+      "code": "store.invalidSignature",
+      "parameters": [
+        "file",
+        "reason"
+      ],
+      "message": {
+        "en": "The signature of {file} isn't valid.",
+        "ja": "{file} の署名が正しくありません。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "invalidSignature(file:reason:)",
+        "when": "a digest or signature does not verify",
+        "raisedBy": "APKSignatureVerifier",
+        "ref": "package-store.md §4.5"
+      },
+      "remediation": {
+        "en": "The file may have been changed after signing. Download it again from the app's developer.",
+        "ja": "署名後にファイルが変更された可能性があります。開発者からもう一度ダウンロードしてください。"
+      }
+    },
+    {
+      "code": "store.legacySignatureNotAllowed",
+      "parameters": [
+        "target"
+      ],
+      "message": {
+        "en": "This app uses an old signature format that Android doesn't accept for apps that target API {target}.",
+        "ja": "このアプリは Android が API {target} を対象とするアプリに受け付けない古い署名形式を使用しています。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "legacySignatureNotAllowed(targetSdk:)",
+        "when": "v1 signature only, and targetSdk >= 30",
+        "raisedBy": "APKSignatureVerifier",
+        "ref": "package-store.md §4.5"
+      },
+      "remediation": {
+        "en": "Get a newer build of the app from its developer.",
+        "ja": "開発者からアプリの新しいビルドを入手してください。"
+      }
+    },
+    {
+      "code": "store.minSdkTooHigh",
+      "parameters": [
+        "required",
+        "guest"
+      ],
+      "message": {
+        "en": "This app needs Android API {required} or later. Android in APKRun has API {guest}.",
+        "ja": "このアプリは Android API {required} 以降が必要です。APKRun の Android は API {guest} です。"
+      },
+      "action": "updateAndroid",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "minSdkTooHigh(required:guest:)",
+        "when": "minSdkVersion above the guest SDK",
+        "raisedBy": "ArtifactVerifier",
+        "ref": "package-store.md §4.6"
+      },
+      "remediation": {
+        "en": "Update Android, or get an older build of the app.",
+        "ja": "Android を更新するか、古いビルドのアプリを入手してください。"
+      }
+    },
+    {
+      "code": "store.missingBase",
+      "parameters": [],
+      "message": {
+        "en": "The base APK is missing from this set.",
+        "ja": "このセットにベース APK がありません。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "missingBase",
+        "when": "no base APK",
+        "raisedBy": "ArtifactVerifier",
+        "ref": "package-store.md §4.4, §4.6"
+      },
+      "remediation": {
+        "en": "Add the base APK too, or use the complete .apks, .xapk, or .apkm file.",
+        "ja": "ベース APK も追加するか、完全な .apks、.xapk、.apkm ファイルを使用してください。"
+      }
+    },
+    {
+      "code": "store.multipleBases",
+      "parameters": [],
+      "message": {
+        "en": "This set contains more than one base APK.",
+        "ja": "このセットには複数のベース APK が含まれています。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "multipleBases",
+        "when": "more than one base",
+        "raisedBy": "ArtifactVerifier",
+        "ref": "package-store.md §4.6"
+      },
+      "remediation": {
+        "en": "Add the APKs of one app version only.",
+        "ja": "1 つのアプリバージョンの APK のみを追加してください。"
+      }
+    },
+    {
+      "code": "store.notAnAPK",
+      "parameters": [
+        "file"
+      ],
+      "message": {
+        "en": "{file} isn't an Android app (APK).",
+        "ja": "{file} は Android アプリ（APK）ではありません。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "notAnAPK(file:)",
+        "when": "a file has no AndroidManifest.xml",
+        "raisedBy": "APKInspector",
+        "ref": "package-store.md §4.6"
+      },
+      "remediation": {
+        "en": "Choose the app's .apk, .apks, .xapk, or .apkm file.",
+        "ja": "アプリの .apk、.apks、.xapk、.apkm ファイルを選択してください。"
+      }
+    },
+    {
+      "code": "store.notRepairable",
+      "parameters": [],
+      "message": {
+        "en": "APKRun can only repair a package marked broken, and it needs the retained APK files.",
+        "ja": "修復できるのは破損として記録されたパッケージだけです。保持されている APK ファイルも必要です。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storePackage",
+        "case": "notRepairable",
+        "when": "`apkrun repair` runs on a package that is not broken or whose retained APKs are gone",
+        "raisedBy": "RuntimeHost",
+        "ref": "package-store.md §11.1"
+      },
+      "remediation": {
+        "en": "Uninstall the package, then install it again from a new APK file.",
+        "ja": "パッケージをアンインストールしてから、新しい APK ファイルで再インストールしてください。"
+      }
+    },
+    {
+      "code": "store.packageAlreadyManaged",
+      "parameters": [],
+      "message": {
+        "en": "This package is already managed by APKRun.",
+        "ja": "このパッケージはすでに APKRun の管理下にあります。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "packageAlreadyManaged",
+        "when": "adoptPackage on a managed package",
+        "raisedBy": "PackageStore",
+        "ref": "package-store.md §9.3"
+      },
+      "remediation": {
+        "en": "The package needs no adoption. See it with `apkrun list`.",
+        "ja": "このパッケージは引き取り不要です。`apkrun list` で確認できます。"
+      }
+    },
+    {
+      "code": "store.packageInUse",
+      "parameters": [
+        "app"
+      ],
+      "message": {
+        "en": "{app} is in use.",
+        "ja": "{app} は使用中です。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeUpdate",
+        "case": "packageInUse(PackageID)",
+        "when": "an update install starts while the package has an open session",
+        "raisedBy": "PackageStore",
+        "ref": "package-store.md §5.2"
+      },
+      "remediation": {
+        "en": "Close the app's windows and try the update again.",
+        "ja": "アプリのウインドウを閉じてから、もう一度更新をお試しください。"
+      }
+    },
+    {
+      "code": "store.packageNotFound",
+      "parameters": [],
+      "message": {
+        "en": "The package is not managed by APKRun.",
+        "ja": "このパッケージは APKRun の管理下にありません。"
+      },
+      "action": "none",
+      "cliExit": 4,
+      "doc": {
+        "table": "storeSettings",
+        "case": "packageNotFound",
+        "when": "any operation on a package with no record",
+        "raisedBy": "PackageStore",
+        "ref": "package-metadata-json.md §6.3"
+      },
+      "remediation": {
+        "en": "Use `apkrun list` to see managed packages.",
+        "ja": "`apkrun list` で管理対象を確認できます。"
+      }
+    },
+    {
+      "code": "store.reservedPackage",
+      "parameters": [
+        "package"
+      ],
+      "message": {
+        "en": "{package} is part of Android or APKRun and can't be added as an app.",
+        "ja": "{package} は Android または APKRun の一部であり、アプリとして追加できません。"
+      },
+      "action": "none",
+      "cliExit": 5,
+      "doc": {
+        "table": "storeImport",
+        "case": "reservedPackage(PackageID)",
+        "when": "io.apkrun.guest, io.apkrun.store, or a platform package of the image",
+        "raisedBy": "ArtifactVerifier",
+        "ref": "package-store.md §4.6"
+      },
+      "remediation": {
+        "en": "No action is needed.",
+        "ja": "対応は不要です。"
+      }
+    },
+    {
+      "code": "store.resourcesArscNotAligned",
+      "parameters": [
+        "file"
+      ],
+      "message": {
+        "en": "{file} isn't packaged the way Android requires for apps that target API 30 or later.",
+        "ja": "{file} は API 30 以降を対象とするアプリに Android が要求する形式でパッケージ化されていません。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "resourcesArscNotAligned(file:)",
+        "when": "targetSdk >= 30, and resources.arsc is compressed or not 4-byte aligned",
+        "raisedBy": "ArtifactVerifier",
+        "ref": "package-store.md §4.6"
+      },
+      "remediation": {
+        "en": "Get a build of the app made with current Android build tools from its developer.",
+        "ja": "開発者から現行の Android ビルドツールで作成されたアプリのビルドを入手してください。"
+      }
+    },
+    {
+      "code": "store.rollbackUnavailable",
+      "parameters": [],
+      "message": {
+        "en": "The previous version cannot be restored automatically.",
+        "ja": "前のバージョンを自動で復元できません。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeUpdate",
+        "case": "rollbackUnavailable(reason:)",
+        "when": "a rollback is requested but no mechanism applies, or no previous set is retained",
+        "raisedBy": "PackageStore",
+        "ref": "package-store.md §7.3"
+      },
+      "remediation": {
+        "en": "Rollback is possible only after an update. On images without rollback support, retry with `apkrun rollback <package> --allow-data-loss` (the app's data is deleted).",
+        "ja": "ロールバックは更新後にのみ可能です。ロールバック非対応のイメージでは `apkrun rollback <package> --allow-data-loss` で再試行してください（アプリデータは削除されます）。"
+      }
+    },
+    {
+      "code": "store.signerMismatch",
+      "parameters": [
+        "app"
+      ],
+      "message": {
+        "en": "This file is signed by a different developer than the installed app.",
+        "ja": "このファイルはインストール済みアプリとは別の開発者によって署名されています。"
+      },
+      "action": "none",
+      "cliExit": 5,
+      "doc": {
+        "table": "storeImport",
+        "case": "signerMismatch",
+        "when": "ImportRelation.otherSigner",
+        "raisedBy": "PackageStore",
+        "ref": "package-store.md §4.7"
+      },
+      "remediation": {
+        "en": "Install updates of {app} from its original developer, or uninstall {app} first.",
+        "ja": "{app} の更新は元の開発者からインストールするか、先に {app} をアンインストールしてください。"
+      }
+    },
+    {
+      "code": "store.stagedUpdateMissing",
+      "parameters": [],
+      "message": {
+        "en": "No verified update is staged for this package.",
+        "ja": "このパッケージにはステージ済みの更新がありません。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeUpdate",
+        "case": "stagedUpdateMissing",
+        "when": "an update install is requested but the package has no staged set",
+        "raisedBy": "PackageStore",
+        "ref": "package-store.md §5.2"
+      },
+      "remediation": {
+        "en": "Run `apkrun update check` to download and stage an update first.",
+        "ja": "先に `apkrun update check` で更新をダウンロードしてステージしてください。"
+      }
+    },
+    {
+      "code": "store.targetSdkTooLow",
+      "parameters": [
+        "target",
+        "floor"
+      ],
+      "message": {
+        "en": "This app targets API {target}. Android in APKRun installs only apps that target API {floor} or later.",
+        "ja": "このアプリは API {target} を対象としています。APKRun の Android は API {floor} 以降を対象とするアプリのみインストールできます。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "targetSdkTooLow(target:floor:)",
+        "when": "targetSdkVersion below the install floor",
+        "raisedBy": "ArtifactVerifier",
+        "ref": "package-store.md §4.6"
+      },
+      "remediation": {
+        "en": "Get a newer build of the app from its developer.",
+        "ja": "開発者からアプリの新しいビルドを入手してください。"
+      }
+    },
+    {
+      "code": "store.tooLarge",
+      "parameters": [
+        "bytes",
+        "limit"
+      ],
+      "message": {
+        "en": "This app is too large ({bytes}; the limit is {limit}).",
+        "ja": "このアプリは大きすぎます（{bytes}、上限は {limit}）。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "tooLarge(bytes:limit:)",
+        "when": "a file above 2 GiB, or the set above 8 GiB",
+        "raisedBy": "ArtifactVerifier",
+        "ref": "package-store.md §4.6"
+      },
+      "remediation": {
+        "en": "Get a smaller build of the app, for example one for fewer device types.",
+        "ja": "より小さいビルド（例: 対象デバイスが少ないもの）を入手してください。"
+      }
+    },
+    {
+      "code": "store.unknownSetting",
+      "parameters": [
+        "key"
+      ],
+      "message": {
+        "en": "There is no app setting named {key}.",
+        "ja": "{key} という設定はありません。"
+      },
+      "action": "none",
+      "cliExit": 4,
+      "doc": {
+        "table": "storeSettings",
+        "case": "unknownSettingKey(String)",
+        "when": "a settings patch names an unknown key",
+        "raisedBy": "PackageStore",
+        "ref": "package-metadata-json.md §3.1"
+      },
+      "remediation": {
+        "en": "List the app's settings with: apkrun settings <package> list",
+        "ja": "`apkrun settings <package> list` で設定名を確認できます。"
+      }
+    },
+    {
+      "code": "store.unreadableArchive",
+      "parameters": [
+        "detail"
+      ],
+      "message": {
+        "en": "This file couldn't be read. It may be damaged or incomplete.",
+        "ja": "このファイルを読み取れませんでした。破損しているか不完全な可能性があります。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "unreadableArchive(detail:)",
+        "when": "the ZIP structure can't be read",
+        "raisedBy": "ContainerReader",
+        "ref": "package-store.md §4.2"
+      },
+      "remediation": {
+        "en": "Download the file again.",
+        "ja": "もう一度ファイルをダウンロードしてください。"
+      }
+    },
+    {
+      "code": "store.unsignedAPK",
+      "parameters": [
+        "file"
+      ],
+      "message": {
+        "en": "{file} isn't signed.",
+        "ja": "{file} は署名されていません。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "unsignedAPK(file:)",
+        "when": "no signature",
+        "raisedBy": "APKSignatureVerifier",
+        "ref": "package-store.md §4.5"
+      },
+      "remediation": {
+        "en": "Android installs only signed apps. Get a signed copy from the app's developer.",
+        "ja": "Android は署名済みアプリのみインストールします。開発者から署名済みのものを入手してください。"
+      }
+    },
+    {
+      "code": "store.unsupportedABI",
+      "parameters": [
+        "found",
+        "supported"
+      ],
+      "message": {
+        "en": "This app is built only for {found}, but Android in APKRun needs {supported}.",
+        "ja": "このアプリは {found} 向けにのみビルドされていますが、APKRun の Android は {supported} が必要です。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "unsupportedABI(found:supported:)",
+        "when": "native code for no guest ABI",
+        "raisedBy": "ArtifactVerifier",
+        "ref": "package-store.md §4.6"
+      },
+      "remediation": {
+        "en": "Get a build of the app for {supported}.",
+        "ja": "{supported} 向けのアプリのビルドを入手してください。"
+      }
+    },
+    {
+      "code": "store.unsupportedContainer",
+      "parameters": [
+        "kind"
+      ],
+      "message": {
+        "en": "APKRun can't add this kind of file.",
+        "ja": "この種類のファイルは APKRun に追加できません。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "storeImport",
+        "case": "unsupportedContainer(ContainerKind)",
+        "when": "the content is not a supported container (.unknown)",
+        "raisedBy": "ContainerReader",
+        "ref": "package-store.md §4.2"
+      },
+      "remediation": {
+        "en": "APKRun can add .apk, .apks, .xapk, and .apkm files, and .zip files that contain only APKs.",
+        "ja": "APKRun には .apk、.apks、.xapk、.apkm、そして APK のみを含む .zip を追加できます。"
+      },
+      "variants": {
+        "appBundle": {
+          "message": {
+            "en": "This file is an Android App Bundle (.aab), which can't be installed directly.",
+            "ja": "このファイルは Android App Bundle (.aab) であり、直接インストールできません。"
+          },
+          "remediation": {
+            "en": "Get an .apk or .apks file from the app's developer. Converting a bundle would change its signature and break updates.",
+            "ja": "アプリの開発者から .apk または .apks ファイルを入手してください。バンドルを変換すると署名が変わり、更新が壊れます。"
+          },
+          "doc": {
+            "when": "an .aab (ZIP with BundleConfig.pb)",
+            "ref": "package-store.md §4.2"
+          }
+        },
+        "encryptedAPKM": {
+          "message": {
+            "en": "This .apkm file is encrypted.",
+            "ja": "この .apkm ファイルは暗号化されています。"
+          },
+          "remediation": {
+            "en": "Download the app as an unencrypted file, for example an .apk.",
+            "ja": "暗号化されていない形式（例: .apk）でアプリをダウンロードしてください。"
+          },
+          "doc": {
+            "when": "an encrypted or non-ZIP .apkm",
+            "ref": "package-store.md §4.2"
+          }
+        }
+      }
+    },
+    {
+      "code": "update.ambiguousAsset",
+      "parameters": [
+        "detail"
+      ],
+      "message": {
+        "en": "The update provider offers more than one matching asset: {detail}.",
+        "ja": "更新プロバイダに一致するアセットが複数あります: {detail}。"
+      },
+      "remediation": {
+        "en": "Narrow the provider's asset pattern.",
+        "ja": "プロバイダのアセットパターンを絞り込んでください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "ambiguousAsset(detail:)",
+        "when": "the asset pattern matches several artifacts",
+        "raisedBy": "UpdateProvider",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §4"
+      }
+    },
+    {
+      "code": "update.authorityDoesNotAllowUpdates",
+      "parameters": [],
+      "message": {
+        "en": "This package's update authority does not allow APKRun updates.",
+        "ja": "このパッケージの更新権限では APKRun による更新が許可されていません。"
+      },
+      "remediation": {
+        "en": "Update the app with its own update authority.",
+        "ja": "アプリ自身の更新権限で更新してください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "authorityDoesNotAllowUpdates",
+        "when": "authority is googlePlay or external",
+        "raisedBy": "UpdateCoordinator",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §2.1"
+      }
+    },
+    {
+      "code": "update.cancelled",
+      "parameters": [],
+      "message": {
+        "en": "The update was cancelled.",
+        "ja": "更新はキャンセルされました。"
+      },
+      "remediation": {
+        "en": "Retry the update.",
+        "ja": "更新をやり直してください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "cancelled",
+        "when": "the user or a newer run cancels the update",
+        "raisedBy": "UpdateCoordinator",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §6"
+      }
+    },
+    {
+      "code": "update.downloadFailed",
+      "parameters": [
+        "reason"
+      ],
+      "message": {
+        "en": "The update download failed: {reason}.",
+        "ja": "更新のダウンロードに失敗しました: {reason}。"
+      },
+      "remediation": {
+        "en": "Check the network connection and try again.",
+        "ja": "ネットワーク接続を確認してやり直してください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "downloadFailed(reason:)",
+        "when": "an artifact download fails",
+        "raisedBy": "UpdateCoordinator",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §6"
+      }
+    },
+    {
+      "code": "update.hashMismatch",
+      "parameters": [
+        "artifact"
+      ],
+      "message": {
+        "en": "The downloaded artifact {artifact} does not match its declared hash.",
+        "ja": "ダウンロードしたアーティファクト {artifact} が宣言されたハッシュと一致しません。"
+      },
+      "remediation": {
+        "en": "Do not install this update.",
+        "ja": "この更新はインストールしないでください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "hashMismatch(artifact:)",
+        "when": "a downloaded artifact's digest differs from the manifest",
+        "raisedBy": "UpdateCoordinator",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §6"
+      }
+    },
+    {
+      "code": "update.healthCheckFailed",
+      "parameters": [
+        "detail"
+      ],
+      "message": {
+        "en": "The updated app failed its health check: {detail}.",
+        "ja": "更新されたアプリがヘルスチェックに失敗しました: {detail}。"
+      },
+      "remediation": {
+        "en": "The update is rolled back automatically.",
+        "ja": "更新は自動的にロールバックされます。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "healthCheckFailed(detail:)",
+        "when": "the post-install health check fails",
+        "raisedBy": "UpdateCoordinator",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §8"
+      }
+    },
+    {
+      "code": "update.installFailed",
+      "parameters": [
+        "detail"
+      ],
+      "message": {
+        "en": "The update install failed: {detail}.",
+        "ja": "更新のインストールに失敗しました: {detail}。"
+      },
+      "remediation": {
+        "en": "Check `apkrun update history` for details.",
+        "ja": "詳細は `apkrun update history` を確認してください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "installFailed(detail:)",
+        "when": "the PackageInstaller transaction fails",
+        "raisedBy": "UpdateCoordinator",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §7"
+      }
+    },
+    {
+      "code": "update.noCompatibleArtifact",
+      "parameters": [
+        "reason"
+      ],
+      "message": {
+        "en": "The update provider has no compatible artifact ({reason}).",
+        "ja": "更新プロバイダに互換性のあるアーティファクトがありません（{reason}）。"
+      },
+      "remediation": {
+        "en": "Check that the provider offers a build for this app.",
+        "ja": "このアプリ向けのビルドをプロバイダが提供しているか確認してください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "noCompatibleArtifact(NoCompatibleArtifactReason)",
+        "when": "no artifact passes signer, ABI, SDK, or version filters",
+        "raisedBy": "UpdateProvider",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §4.5"
+      }
+    },
+    {
+      "code": "update.providerHTTPStatus",
+      "parameters": [
+        "status"
+      ],
+      "message": {
+        "en": "The update provider answered HTTP {status}.",
+        "ja": "更新プロバイダが HTTP {status} を返しました。"
+      },
+      "remediation": {
+        "en": "Retry later; if the status persists, check the provider.",
+        "ja": "しばらくしてからやり直してください。続く場合はプロバイダを確認してください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "providerHTTPStatus(Int)",
+        "when": "the provider answers an error status",
+        "raisedBy": "UpdateProvider",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §4"
+      }
+    },
+    {
+      "code": "update.providerMetadataInvalid",
+      "parameters": [
+        "detail"
+      ],
+      "message": {
+        "en": "The update provider metadata is invalid: {detail}.",
+        "ja": "更新プロバイダのメタデータが無効です: {detail}。"
+      },
+      "remediation": {
+        "en": "Check the provider configuration.",
+        "ja": "プロバイダ設定を確認してください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "providerMetadataInvalid(detail:)",
+        "when": "the provider's index or spec cannot be parsed",
+        "raisedBy": "UpdateProvider",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §4"
+      }
+    },
+    {
+      "code": "update.providerNotConfigured",
+      "parameters": [],
+      "message": {
+        "en": "No update provider is configured for this package.",
+        "ja": "このパッケージには更新プロバイダが設定されていません。"
+      },
+      "remediation": {
+        "en": "Attach a provider with `apkrun update policy <package> --provider <spec>`.",
+        "ja": "`apkrun update policy <package> --provider <spec>` でプロバイダを設定してください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "providerNotConfigured",
+        "when": "a package has no update provider",
+        "raisedBy": "UpdateCoordinator",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §2.3"
+      }
+    },
+    {
+      "code": "update.providerRateLimited",
+      "parameters": [],
+      "message": {
+        "en": "The update provider is rate-limiting requests.",
+        "ja": "更新プロバイダがリクエストをレート制限しています。"
+      },
+      "remediation": {
+        "en": "Wait for the next scheduled check.",
+        "ja": "次回の定期チェックをお待ちください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "providerRateLimited",
+        "when": "the provider returns HTTP 429",
+        "raisedBy": "UpdateProvider",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §4"
+      }
+    },
+    {
+      "code": "update.providerSignatureInvalid",
+      "parameters": [
+        "detail"
+      ],
+      "message": {
+        "en": "The update signature check failed: {detail}.",
+        "ja": "更新の署名チェックに失敗しました: {detail}。"
+      },
+      "remediation": {
+        "en": "Do not install this update.",
+        "ja": "この更新はインストールしないでください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "providerSignatureInvalid(detail:)",
+        "when": "the provider signature does not verify",
+        "raisedBy": "UpdateProvider",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §4"
+      }
+    },
+    {
+      "code": "update.providerUnreachable",
+      "parameters": [
+        "reason"
+      ],
+      "message": {
+        "en": "The update provider cannot be reached: {reason}.",
+        "ja": "更新プロバイダに接続できません: {reason}。"
+      },
+      "remediation": {
+        "en": "Check the network connection and try again.",
+        "ja": "ネットワーク接続を確認してやり直してください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "providerUnreachable(reason:)",
+        "when": "the provider host or folder cannot be reached",
+        "raisedBy": "UpdateProvider",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §4"
+      }
+    },
+    {
+      "code": "update.rollbackFailed",
+      "parameters": [
+        "detail"
+      ],
+      "message": {
+        "en": "The update rollback failed: {detail}.",
+        "ja": "更新のロールバックに失敗しました: {detail}。"
+      },
+      "remediation": {
+        "en": "Reinstall the app to recover.",
+        "ja": "復旧するにはアプリを再インストールしてください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "rollbackFailed(detail:)",
+        "when": "restoring the previous set fails",
+        "raisedBy": "UpdateCoordinator",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §8"
+      }
+    },
+    {
+      "code": "update.tooLarge",
+      "parameters": [
+        "bytes",
+        "limit"
+      ],
+      "message": {
+        "en": "The update is {bytes} bytes, above the {limit}-byte limit.",
+        "ja": "更新サイズは {bytes} バイトで、上限 {limit} バイトを超えています。"
+      },
+      "remediation": {
+        "en": "Free disk space or use a provider with smaller artifacts.",
+        "ja": "ディスク容量を確保するか、より小さいアーティファクトのプロバイダを使用してください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "tooLarge(bytes:limit:)",
+        "when": "the download exceeds the size limit",
+        "raisedBy": "UpdateCoordinator",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §6"
+      }
+    },
+    {
+      "code": "update.validation",
+      "parameters": [
+        "detail"
+      ],
+      "message": {
+        "en": "The update did not pass validation: {detail}.",
+        "ja": "更新が検証を通過しませんでした: {detail}。"
+      },
+      "remediation": {
+        "en": "Do not install this update.",
+        "ja": "この更新はインストールしないでください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "update",
+        "case": "validation(detail:)",
+        "when": "the staged set fails a validation check",
+        "raisedBy": "UpdateCoordinator",
+        "ref": "[../02-design/update-system.md](../02-design/update-system.md) §6"
+      }
+    },
+    {
+      "code": "wrapper.approvalDenied",
+      "parameters": [
+        "app"
+      ],
+      "message": {
+        "en": "APKRun did not allow {app} to open."
+      },
+      "remediation": {
+        "en": "To allow it, remove it from Mac apps you didn't allow in Settings → Privacy, then open {app} again."
+      },
+      "action": "openPrivacySettings",
+      "cliExit": 5,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "approvalDenied",
+        "when": "the user chose Don't Allow, or a denial for the same cdhash has not expired (24 h)",
+        "raisedBy": "WrapperApprovalService, APKRunLauncher",
+        "ref": "wrapper.md §7.3 step 5"
+      }
+    },
+    {
+      "code": "wrapper.approvalNotFound",
+      "parameters": [],
+      "message": {
+        "en": "This request to open a Mac app was already answered or has expired."
+      },
+      "remediation": {
+        "en": "No action is needed. To ask again, open the Mac app again."
+      },
+      "action": "none",
+      "cliExit": 4,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "approvalNotFound",
+        "when": "decideApproval for an approval that is unknown, already answered, or expired",
+        "raisedBy": "WrapperApprovalService",
+        "ref": "wrapper.md §7.3 step 5"
+      }
+    },
+    {
+      "code": "wrapper.approvalTimedOut",
+      "parameters": [
+        "app"
+      ],
+      "message": {
+        "en": "APKRun did not allow {app} to open."
+      },
+      "remediation": {
+        "en": "The request wasn't answered within 10 minutes. Open {app} again to ask again."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "approvalTimedOut",
+        "when": "no answer within 10 minutes",
+        "raisedBy": "WrapperApprovalService, APKRunLauncher",
+        "ref": "wrapper.md §7.3 step 5"
+      }
+    },
+    {
+      "code": "wrapper.bundleInvalid",
+      "parameters": [
+        "file"
+      ],
+      "message": {
+        "en": "{file} isn't a valid APKRun Mac app."
+      },
+      "remediation": {
+        "en": "Get a new copy from where it came from, or create the Mac app again in APKRun."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "bundleInvalid(URL, reason:)",
+        "when": "a static check of wrapper.md §7.3 step 1 fails (approval or verifyWrapper)",
+        "raisedBy": "WrapperApprovalService, WrapperValidator",
+        "ref": "wrapper.md §7.3 step 1"
+      }
+    },
+    {
+      "code": "wrapper.customIconInvalid",
+      "parameters": [],
+      "message": {
+        "en": "This image can't be used as an icon."
+      },
+      "remediation": {
+        "en": "Choose a PNG, JPEG, HEIC, or .icns file of at least 512 × 512 pixels."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "customIconInvalid(IconInputProblem)",
+        "when": "a chosen icon file fails the input rules of wrapper.md §8.2",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §8.2"
+      }
+    },
+    {
+      "code": "wrapper.destinationNotAccessible",
+      "parameters": [
+        "file",
+        "stagingToken"
+      ],
+      "message": {
+        "en": "APKRun's background service can't access the folder {file}."
+      },
+      "remediation": {
+        "en": "Choose Another Location… and select the folder, so APKRun can save the Mac app there."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "destinationNotAccessible(URL, stagingToken:)",
+        "when": "the probe gets EPERM from macOS privacy controls; the bundle waits in staging",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §6.3; host-ui.md §6.2"
+      }
+    },
+    {
+      "code": "wrapper.destinationNotWritable",
+      "parameters": [
+        "file"
+      ],
+      "message": {
+        "en": "APKRun can't save the Mac app in the folder {file}."
+      },
+      "remediation": {
+        "en": "Choose another location, for example Applications (for me)."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "destinationNotWritable(URL)",
+        "when": "the destination can't be written, for example /Applications for a user who is not an administrator",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §6.3"
+      }
+    },
+    {
+      "code": "wrapper.iconConversionFailed",
+      "parameters": [],
+      "message": {
+        "en": "APKRun couldn't create the icon of the Mac app."
+      },
+      "remediation": {
+        "en": "Try again. If it fails again, choose another icon or report the problem."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "iconConversionFailed(String)",
+        "when": "iconutil fails; its status and message are logged",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §8.3"
+      }
+    },
+    {
+      "code": "wrapper.invalidName",
+      "parameters": [],
+      "message": {
+        "en": "This name can't be used for a Mac app."
+      },
+      "remediation": {
+        "en": "Choose a name that contains letters or digits."
+      },
+      "action": "none",
+      "cliExit": 64,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "invalidName(String)",
+        "when": "a user-chosen name is empty after the rules of wrapper.md §4.3",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §4.3, §6.2 step 1"
+      }
+    },
+    {
+      "code": "wrapper.launchServicesMissing",
+      "parameters": [],
+      "message": {
+        "en": "LaunchServices no longer knows one or more APKRun Mac apps."
+      },
+      "remediation": {
+        "en": "Open each Mac app once from its folder so macOS registers it again."
+      },
+      "action": "retry",
+      "cliExit": 0,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "(health)",
+        "when": "the wrappers.registration health check finds a registered wrapper LaunchServices forgot",
+        "raisedBy": "WrapperHealthChecks",
+        "ref": "wrapper.md §14"
+      }
+    },
+    {
+      "code": "wrapper.launcherTemplateInvalid",
+      "parameters": [],
+      "message": {
+        "en": "APKRun's template for Mac apps is damaged."
+      },
+      "remediation": {
+        "en": "Download APKRun again and replace it in the Applications folder."
+      },
+      "action": "openDownloadsPage",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "launcherTemplateInvalid(String)",
+        "when": "the generic launcher in APKRun.app is missing, is not arm64, or has an invalid signature (health wrappers.template)",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §6.2 step 1, §14"
+      }
+    },
+    {
+      "code": "wrapper.nameConflict",
+      "parameters": [
+        "file"
+      ],
+      "message": {
+        "en": "An item named {file} already exists there."
+      },
+      "remediation": {
+        "en": "Choose another name or location. APKRun never replaces it."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "nameConflict(URL, existing:)",
+        "when": "an item of the same name exists at the destination and is never replaced",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §6.4"
+      }
+    },
+    {
+      "code": "wrapper.packageNotInstalled",
+      "parameters": [
+        "app"
+      ],
+      "message": {
+        "en": "{app} isn't installed in APKRun."
+      },
+      "remediation": {
+        "en": "Install {app} first. apkrun wrap installs it too when you add --install."
+      },
+      "action": "none",
+      "cliExit": 4,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "packageNotInstalled(PackageID)",
+        "when": "createWrapper for a package that is not installed, or apkrun wrap <file> without --install and without a terminal for the question",
+        "raisedBy": "AppWrapperGenerator, CLI",
+        "ref": "wrapper.md §6.2, §12.2"
+      }
+    },
+    {
+      "code": "wrapper.refreshBlocked",
+      "parameters": [
+        "path",
+        "stagingToken"
+      ],
+      "message": {
+        "en": "macOS didn't allow APKRun to update the Mac app."
+      },
+      "remediation": {
+        "en": "Allow APKRun in System Settings > Privacy & Security > App Management, then try again."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "refreshBlocked(String, stagingToken: String?)",
+        "when": "the Contents swap of a refresh is denied by macOS App Management",
+        "raisedBy": "RuntimeHost",
+        "ref": "wrapper.md §9.3"
+      }
+    },
+    {
+      "code": "wrapper.registrationFailed",
+      "parameters": [],
+      "message": {
+        "en": "The Mac app was created, but macOS hasn't registered it yet."
+      },
+      "remediation": {
+        "en": "Finder registers it when it shows the folder. To register it now, run: apkrun doctor --fix"
+      },
+      "action": "none",
+      "cliExit": 0,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "registrationFailed(OSStatus)",
+        "when": "LSRegisterURL returns an error; a warning: the wrapper was created",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §6.2"
+      }
+    },
+    {
+      "code": "wrapper.registryUnavailable",
+      "parameters": [],
+      "message": {
+        "en": "APKRun can't read its list of Mac apps, so they can't open."
+      },
+      "remediation": {
+        "en": "Choose Re-register Mac Apps on the APKRun home screen."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "registryUnavailable",
+        "when": "registry.json can't be read; it is kept as registry.json.corrupt-<time>, and no wrapper is authorized",
+        "raisedBy": "WrapperRegistry",
+        "ref": "wrapper.md §7.2"
+      }
+    },
+    {
+      "code": "wrapper.signingFailed",
+      "parameters": [
+        "reason",
+        "status"
+      ],
+      "message": {
+        "en": "APKRun couldn't sign the Mac app."
+      },
+      "remediation": {
+        "en": "Try again. If it fails again, create a diagnostics report."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "signingFailed(status:message:)",
+        "when": "codesign returns a non-zero status during ad-hoc signing",
+        "raisedBy": "WrapperSigner",
+        "ref": "wrapper.md §7.1"
+      }
+    },
+    {
+      "code": "wrapper.stagingExpired",
+      "parameters": [],
+      "message": {
+        "en": "The prepared Mac app is no longer available."
+      },
+      "remediation": {
+        "en": "Create or update the Mac app again."
+      },
+      "action": "none",
+      "cliExit": 4,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "stagingExpired",
+        "when": "placeStagedWrapper with a staging token that is unknown, older than 60 minutes, or from before apkrund restarted",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §6.3, §9.3; runtime-api.md §10.3"
+      }
+    },
+    {
+      "code": "wrapper.verificationFailed",
+      "parameters": [],
+      "message": {
+        "en": "The new Mac app didn't pass its signature check."
+      },
+      "remediation": {
+        "en": "Try again. If it fails again, report the problem."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "verificationFailed(String)",
+        "when": "the strict verification after signing fails",
+        "raisedBy": "WrapperSigner",
+        "ref": "wrapper.md §7.1"
+      }
+    },
+    {
+      "code": "wrapper.wrapperExists",
+      "parameters": [
+        "app",
+        "file",
+        "package"
+      ],
+      "message": {
+        "en": "{app} already has a Mac app ({file})."
+      },
+      "remediation": {
+        "en": "Use Update Mac App, or run: apkrun wrap {package} --replace"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "wrapperExists(PackageID, URL)",
+        "when": "a valid registered wrapper exists, and replace == .never",
+        "raisedBy": "AppWrapperGenerator",
+        "ref": "wrapper.md §6.2 step 2, §6.4"
+      }
+    },
+    {
+      "code": "wrapper.wrapperNotFound",
+      "parameters": [
+        "app"
+      ],
+      "message": {
+        "en": "{app} has no Mac app."
+      },
+      "remediation": {
+        "en": "Create one with Create Mac App."
+      },
+      "action": "createMacApp",
+      "cliExit": 4,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "wrapperNotFound(PackageID)",
+        "when": "wrapperInfo, refreshWrapper, or removeWrapper for a package without a registry entry",
+        "raisedBy": "WrapperRegistry",
+        "ref": "wrapper.md §12.1"
+      }
+    },
+    {
+      "code": "wrapper.wrapperRunning",
+      "parameters": [
+        "packageID"
+      ],
+      "message": {
+        "en": "{packageID} is open, so its Mac app cannot be replaced."
+      },
+      "remediation": {
+        "en": "Quit the Mac app, then try again."
+      },
+      "action": "retry",
+      "cliExit": 75,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "wrapperRunning(String)",
+        "when": "refreshWrapper while the wrapper's app is running and closeRunningApp was not allowed",
+        "raisedBy": "RuntimeHost",
+        "ref": "wrapper.md §9.3"
+      }
+    },
+    {
+      "code": "wrapper.bootstrapInvalid",
+      "parameters": [
+        "reason"
+      ],
+      "message": {
+        "en": "The portable Mac app's bundled app failed a check ({reason})."
+      },
+      "remediation": {
+        "en": "The file may be damaged. Get a fresh copy of the Mac app."
+      },
+      "action": "none",
+      "cliExit": 4,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "bootstrapInvalid(BootstrapProblem)",
+        "when": "importBootstrap fails a payload check (wrapper-json.md §3.4 B3–B7): bad JSON, unknown formatVersion, packageId or signer mismatch, size or digest mismatch",
+        "raisedBy": "PackageStore",
+        "ref": "wrapper-json.md §3.4"
+      }
+    },
+    {
+      "code": "wrapper.bootstrapNotAllowed",
+      "parameters": [
+        "reason"
+      ],
+      "message": {
+        "en": "This Mac app cannot install the app right now ({reason})."
+      },
+      "remediation": {
+        "en": "Approve the Mac app first, or uninstall the app before reinstalling it from this bundle."
+      },
+      "action": "none",
+      "cliExit": 4,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "bootstrapNotAllowed(BootstrapRefusal)",
+        "when": "importBootstrap before the payload is read (§3.4 B1–B2): the wrapper is not approved, or the package is already installed",
+        "raisedBy": "PackageStore",
+        "ref": "wrapper-json.md §3.4"
       }
     }
   ]

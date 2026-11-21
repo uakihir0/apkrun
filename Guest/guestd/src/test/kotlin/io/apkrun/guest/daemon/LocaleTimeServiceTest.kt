@@ -1,5 +1,6 @@
 package io.apkrun.guest.daemon
 
+import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.ClockFormat
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.SetClockFormat

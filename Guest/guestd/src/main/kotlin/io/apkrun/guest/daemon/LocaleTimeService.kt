@@ -7,6 +7,7 @@ import android.content.res.Configuration
 import android.os.LocaleList
 import android.os.Process
 import android.provider.Settings
+import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.ClockFormat
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.SetClockFormat

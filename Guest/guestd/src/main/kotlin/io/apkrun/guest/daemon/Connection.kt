@@ -4,6 +4,8 @@ import android.net.LocalSocket
 import android.os.Build
 import io.apkrun.guest.BuildConfig
 import io.apkrun.guest.protocol.AgentHandshake
+import io.apkrun.guest.protocol.FrameReader
+import io.apkrun.guest.protocol.FrameWriter
 import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.GuestProtocolFailure
 import io.apkrun.guest.protocol.ProtocolVersion
@@ -97,10 +99,20 @@ class Connection(
             return
         }
         daemon.sessions.track(socket)
+        if (channel == ChannelKind.CHANNEL_KIND_GUEST_BULK) {
+            // Diagnostics and file payloads leave on this connection, and shared-folder
+            // requests return on it (guest-protocol.md §10, §12).
+            daemon.bulkTransfers.attach(writer)
+            daemon.hostFileClient.attach(writer)
+        }
         try {
             secondaryLoop(negotiated.enabled)
         } finally {
             daemon.sessions.untrack(socket)
+            if (channel == ChannelKind.CHANNEL_KIND_GUEST_BULK) {
+                daemon.bulkTransfers.detach(writer)
+                daemon.hostFileClient.detach(writer)
+            }
             if (channel == ChannelKind.CHANNEL_KIND_GUEST_INPUT) {
                 // A closed input stream releases the gestures it left open (input.md §7.3).
                 daemon.input.streamClosed(this)
@@ -126,7 +138,8 @@ class Connection(
                 "the first frame from the host is not HelloAck"
             )
         }
-        val accepted = AgentHandshake.evaluate(ack.helloAck, ProtocolVersion.HOST, IMPLEMENTED)
+        val accepted =
+            AgentHandshake.evaluate(ack.helloAck, ProtocolVersion.HOST, daemon.implemented)
         val enabled =
             GuestCapability.entries.filter { it.wireName in accepted.enabledCapabilities }.toSet()
         return Negotiated(enabled, accepted.sessionToken)
@@ -200,9 +213,20 @@ class Connection(
                             "the body is not allowed on the input channel"
                         )
                     }
-                // The bulk channel carries transfers, which arrive with #71 and #81. Until then
-                // its frames are read and dropped.
-                ChannelKind.CHANNEL_KIND_GUEST_BULK -> Unit
+                // The bulk channel carries inbound transfers (guest-protocol.md §10); a
+                // SetClipboard names the transfer that carries its image.
+                ChannelKind.CHANNEL_KIND_GUEST_BULK ->
+                    when (envelope.bodyCase) {
+                        Envelope.BodyCase.BULK -> daemon.inboundTransfers.accept(envelope.bulk)
+                        // Answers to the agent's Host* file requests land here; the client
+                        // hands them to the waiting caller (guest-protocol.md §12).
+                        Envelope.BodyCase.RESPONSE ->
+                            daemon.hostFileClient.accept(envelope.response, envelope.replyTo)
+                        else ->
+                            throw GuestProtocolFailure.MalformedFrame(
+                                "the body is not allowed on the bulk channel"
+                            )
+                    }
                 else ->
                     throw GuestProtocolFailure.MalformedFrame(
                         "the channel ${channel.name} is not served here"
@@ -245,13 +269,17 @@ class Connection(
                     .setBuildFingerprint(Build.FINGERPRINT)
                     .setBuildType(Build.TYPE)
             )
-            .addAllCapabilities(IMPLEMENTED.map { it.wireName })
+            .addAllCapabilities(daemon.implemented.map { it.wireName })
             .setChannel(channel)
             .setMode(AgentMode.AGENT_MODE_DEVELOPMENT_SHELL)
             .build()
 
     companion object {
-        /** The capabilities that this build implements (guest-protocol.md §5.3). */
+        /**
+         * The capabilities that this build implements (guest-protocol.md §5.3). `url.v1` is in the
+         * set; the daemon drops it in development, where its UrlRedirectActivity stays disabled and
+         * no intercept can run (issue #82, TODO(#36)).
+         */
         val IMPLEMENTED: Set<GuestCapability> =
             setOf(
                 GuestCapability.CORE,
@@ -261,6 +289,13 @@ class Connection(
                 GuestCapability.INPUT_ACK_TRACE,
                 GuestCapability.PACKAGES,
                 GuestCapability.LOCALE,
+                GuestCapability.DIAGNOSTICS,
+                GuestCapability.CLIPBOARD_TEXT,
+                GuestCapability.CLIPBOARD_IMAGE,
+                GuestCapability.NOTIFICATIONS,
+                GuestCapability.URL,
+                GuestCapability.FILES,
+                GuestCapability.FILES_SHARED,
             )
     }
 }

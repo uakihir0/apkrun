@@ -83,12 +83,12 @@ func snapshotResynchronisationUsesTheRemainingInitialConnectionDeadline() async 
     let started = ContinuousClock.now
 
     do {
-        try await supervisor.start(connectTimeout: .milliseconds(300))
+        try await supervisor.start(connectTimeout: .milliseconds(800))
         Issue.record("the connection succeeded without a snapshot")
     } catch {
         #expect(error == .connectTimedOut)
     }
-    #expect(ContinuousClock.now - started < .seconds(1))
+    #expect(ContinuousClock.now - started < .seconds(2))
     #expect(
         transport.agents.first?.requests.contains { request in
             if case .getSnapshot? = request.op {

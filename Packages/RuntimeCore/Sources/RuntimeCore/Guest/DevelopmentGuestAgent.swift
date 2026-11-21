@@ -54,6 +54,14 @@ public enum GuestAgentTimeZoneUpdate: Equatable, Sendable {
     case notFound
 }
 
+/// A notification lifecycle event relayed from the Guest Agent (desktop-integration.md §5.3).
+public enum DevelopmentNotificationEvent: Equatable, Sendable {
+    /// The Guest Agent reported a forwarded notification.
+    case posted(GPNotification)
+    /// The Guest Agent reported a notification that has gone.
+    case removed(GPNotificationRemoved)
+}
+
 /// The development Guest Agent of one boot (guest-components.md §3, §6.1): it installs and starts the agent, keeps
 /// the control connection, restarts a dead agent within the restart budget, and removes its forwards when it stops.
 public actor DevelopmentGuestAgent {
@@ -66,6 +74,15 @@ public actor DevelopmentGuestAgent {
     public nonisolated let taskEvents: AsyncStream<DevelopmentGuestTaskEvent>
     /// Display lifecycle changes from the same sequenced Guest Agent event relay.
     public nonisolated let displayEvents: AsyncStream<GuestDisplayEvent>
+    /// `clipboard_changed` events from the guest (desktop-integration.md §4.3).
+    public nonisolated let clipboardEvents: AsyncStream<GPClipData>
+    /// `notification_posted`/`notification_removed` events (desktop-integration.md §5.3).
+    public nonisolated let notificationEvents: AsyncStream<DevelopmentNotificationEvent>
+    /// `open_url_on_host` events (desktop-integration.md §7.2).
+    public nonisolated let urlEvents: AsyncStream<GPOpenUrlOnHost>
+    /// The guest's Save-to-Mac offers (integration.proto event 44,
+    /// desktop-integration.md §6.3).
+    public nonisolated let exportOfferedEvents: AsyncStream<GPExportFileOffered>
     /// Android reboot notifications inferred from consecutive supervisor snapshots.
     public nonisolated var androidRestartEvents: AsyncStream<GuestAndroidRestart> {
         supervisor.androidRestartEvents
@@ -75,10 +92,10 @@ public actor DevelopmentGuestAgent {
     private let provisioner: GuestAgentProvisioner
     private let logger: APKLogger
     private let clock: @Sendable () -> ContinuousClock.Instant
-    /// The transport of the control connection, which the input connection shares.
-    private let transport: any GuestTransport
-    private let hostVersion: String
-    private let logSink: (any LogSink)?
+    /// The transport of the control connection, which the secondary connections share.
+    let transport: any GuestTransport
+    let hostVersion: String
+    let logSink: (any LogSink)?
     private var budget = GuestAgentRestartBudget()
     private var restartsRefused = false
     /// Counts the stops, so that a start in flight can tell that the boot that asked for it has ended.
@@ -86,8 +103,15 @@ public actor DevelopmentGuestAgent {
     /// The input connection, and the control session token that it presents (input.md §8, decision D11).
     private var inputConnection: GuestConnection?
     private var inputConnectionToken: Data?
+    /// The development IME connection, opened on demand by ``imeChannel()`` (input.md §5.1).
+    private var imeConnection: GuestConnection?
+    private var imeConnectionToken: Data?
     private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
     private let displayEventContinuation: AsyncStream<GuestDisplayEvent>.Continuation
+    private let clipboardEventContinuation: AsyncStream<GPClipData>.Continuation
+    private let notificationEventContinuation: AsyncStream<DevelopmentNotificationEvent>.Continuation
+    private let urlEventContinuation: AsyncStream<GPOpenUrlOnHost>.Continuation
+    private let exportOfferedContinuation: AsyncStream<GPExportFileOffered>.Continuation
     private var taskEventRelay: Task<Void, Never>?
 
     /// Creates the coordinator for `bundle`, reached through `adb`.
@@ -125,6 +149,28 @@ public actor DevelopmentGuestAgent {
         )
         self.displayEvents = displayEvents
         self.displayEventContinuation = displayEventContinuation
+        let (clipboardEvents, clipboardEventContinuation) = AsyncStream.makeStream(
+            of: GPClipData.self,
+            bufferingPolicy: .bufferingNewest(256)
+        )
+        self.clipboardEvents = clipboardEvents
+        self.clipboardEventContinuation = clipboardEventContinuation
+        let (notificationEvents, notificationEventContinuation) = AsyncStream.makeStream(
+            of: DevelopmentNotificationEvent.self,
+            bufferingPolicy: .bufferingNewest(512)
+        )
+        self.notificationEvents = notificationEvents
+        self.notificationEventContinuation = notificationEventContinuation
+        let (exportOfferedEvents, exportOfferedContinuation) = AsyncStream.makeStream(
+            of: GPExportFileOffered.self)
+        self.exportOfferedEvents = exportOfferedEvents
+        self.exportOfferedContinuation = exportOfferedContinuation
+        let (urlEvents, urlEventContinuation) = AsyncStream.makeStream(
+            of: GPOpenUrlOnHost.self,
+            bufferingPolicy: .bufferingNewest(128)
+        )
+        self.urlEvents = urlEvents
+        self.urlEventContinuation = urlEventContinuation
         relay.set { [weak self] loss in
             guard let self else {
                 return false
@@ -250,10 +296,16 @@ public actor DevelopmentGuestAgent {
         taskEventRelay = nil
         taskEventContinuation.finish()
         displayEventContinuation.finish()
-        // The input connection belongs to the control session, so it ends with it.
+        clipboardEventContinuation.finish()
+        urlEventContinuation.finish()
+        exportOfferedContinuation.finish()
+        // The input and IME connections belong to the control session, so they end with it.
         await inputConnection?.close()
         inputConnection = nil
         inputConnectionToken = nil
+        await imeConnection?.close()
+        imeConnection = nil
+        imeConnectionToken = nil
         try? await removeForwards()
     }
 
@@ -308,6 +360,55 @@ public actor DevelopmentGuestAgent {
         return GuestInputChannel(connection: connection)
     }
 
+    /// The development IME channel (input.md §5.1). It opens on the first call with the control
+    /// session's token, and is reused while it is usable, exactly like ``inputChannel()``.
+    public func imeChannel() async throws(GuestAgentFailure) -> GuestImeChannel {
+        try requireAvailable()
+        guard await supervisor.statusSnapshot().state == .ready else {
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
+        guard let token = await supervisor.session?.sessionToken else {
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
+        if let connection = await reusableImeConnection(token: token) {
+            return GuestImeChannel(connection: connection)
+        }
+        let connection = GuestConnection(
+            endpoint: .developmentIME,
+            transport: transport,
+            presentedToken: token,
+            hostVersion: hostVersion,
+            logSink: logSink
+        )
+        do throws(GuestProtocolFailure) {
+            _ = try await connection.open()
+        } catch {
+            throw Self.inputFailure(error)
+        }
+        guard await supervisor.statusSnapshot().state == .ready,
+            await supervisor.session?.sessionToken == token
+        else {
+            await connection.close()
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
+        if let kept = await reusableImeConnection(token: token) {
+            await connection.close()
+            return GuestImeChannel(connection: kept)
+        }
+        await imeConnection?.close()
+        imeConnection = connection
+        imeConnectionToken = token
+        return GuestImeChannel(connection: connection)
+    }
+
+    /// The IME connection, when it is usable and presents `token`.
+    private func reusableImeConnection(token: Data) async -> GuestConnection? {
+        guard let connection = imeConnection, imeConnectionToken == token, await connection.isUsable else {
+            return nil
+        }
+        return connection
+    }
+
     /// The input connection, when it is usable and presents `token`.
     private func reusableInputConnection(token: Data) async -> GuestConnection? {
         guard let connection = inputConnection, inputConnectionToken == token, await connection.isUsable else {
@@ -334,6 +435,10 @@ public actor DevelopmentGuestAgent {
         let updates = supervisor.updates
         let continuation = taskEventContinuation
         let displayContinuation = displayEventContinuation
+        let clipboardContinuation = clipboardEventContinuation
+        let notificationContinuation = notificationEventContinuation
+        let urlContinuation = urlEventContinuation
+        let exportOfferedContinuation = exportOfferedContinuation
         taskEventRelay = Task {
             for await event in updates {
                 guard let kind = event.kind else {
@@ -352,6 +457,16 @@ public actor DevelopmentGuestAgent {
                     displayContinuation.yield(.removed(displayID: display.displayID))
                 case .tasksCleared(let tasks):
                     displayContinuation.yield(.tasksCleared(displayID: tasks.displayID))
+                case .clipboardChanged(let clip):
+                    clipboardContinuation.yield(clip)
+                case .notificationPosted(let notification):
+                    notificationContinuation.yield(.posted(notification))
+                case .notificationRemoved(let removal):
+                    notificationContinuation.yield(.removed(removal))
+                case .openURLOnHost(let event):
+                    urlContinuation.yield(event)
+                case .exportFileOffered(let offer):
+                    exportOfferedContinuation.yield(offer)
                 default:
                     break
                 }
@@ -580,6 +695,13 @@ public actor DevelopmentGuestAgent {
             try? await Task.sleep(for: .milliseconds(50))
         }
         return !(await supervisor.snapshot.tasks.values.contains { $0.package == package })
+    }
+
+    /// Live Android tasks of `package` from the latest guest snapshot —
+    /// the stock-image `ListTasks` surface (guest-protocol.md §7.1 op 17),
+    /// used as the gentle-update GU5 fallback.
+    public func tasks(forPackage package: String) async -> [GPTaskInfo] {
+        await supervisor.snapshot.tasks.values.filter { $0.package == package }
     }
 
     /// Throws `requiredAgentUnavailable` once the restart budget is spent, and the agent stays down.

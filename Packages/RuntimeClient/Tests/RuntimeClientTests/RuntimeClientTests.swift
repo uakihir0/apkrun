@@ -298,7 +298,7 @@ import Testing
 @Test func eventSinkAcknowledgesMalformedBatchesAndSignalsResync() async {
     let hub = RuntimeEventStreamHub()
     let stream = hub.makeStream(for: .operations, onTermination: { _ in }).stream
-    let receiver = RuntimeEventSinkReceiver(streamHub: hub)
+    let receiver = RuntimeEventSinkReceiver(streamHub: hub, notificationStreamHub: RuntimeNotificationStreamHub())
     await withCheckedContinuation { continuation in
         receiver.deliver(Data("not-json".utf8)) {
             continuation.resume()
@@ -1373,6 +1373,39 @@ private struct BrokerErrorEnvelope: Encodable {
     let error: RuntimeControlError
 }
 
+@Test func perfAndFrameStatisticsRoundTrip() async throws {
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "running"
+    )
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .cli,
+        claimedIdentity: "io.apkrun.cli.dev",
+        buildIdentity: .development,
+        clientVersion: "0.1.0",
+        clientBuild: 1
+    )
+    let transport = try MockRuntimeTransport(hello: hello, status: nil)
+    let client = RuntimeControlClient(configuration: configuration, connectionFactory: transport)
+
+    let statistics = try await client.perfStatistics(reset: true)
+    #expect(statistics.markers.first?.name == "firstFrameDisplayed")
+    #expect(statistics.markers.first?.p95Us == 1_500_000)
+    #expect(statistics.input.first?.segment == "input.route")
+
+    let request = try JSONDecoder().decode(
+        RuntimePerfStatisticsControlRequest.self,
+        from: transport.perfStatisticsRequestsValue.first ?? Data())
+    #expect(request.reset)
+
+    let sessions = try await client.frameStatistics()
+    #expect(sessions.count == 1)
+    #expect(sessions.first?.packageID.rawValue == "io.apkrun.fixture.hellotext")
+    #expect(sessions.first?.hostReadbacks == 0)
+}
+
 private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBrokerChannel, RuntimeControlChannel,
     @unchecked Sendable
 {
@@ -1421,6 +1454,8 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var launchRequestsValue: [Data] = []
     private var terminateRequestsValue: [Data] = []
     private var resetRequestsValue: [Data] = []
+    var perfStatisticsRequestsValue: [Data] = []
+    var frameStatisticsRequestsValue: [Data] = []
     private var brokerConnectionsValue = 0
     private var controlConnectionsValue = 0
     private var brokerInvalidationsValue = 0
@@ -1691,6 +1726,16 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return packageInfoData
     }
 
+    func listSessions(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        let reply = RuntimeListSessionsControlReply(sessions: [])
+        return (try? JSONEncoder().encode(reply)) ?? Data()
+    }
+
+    func packageIcon(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        let reply = RuntimePackageIconControlReply()
+        return (try? JSONEncoder().encode(reply)) ?? Data()
+    }
+
     func importPackage(
         _ request: Data,
         files: [FileHandle]
@@ -1712,6 +1757,35 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
             throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
         }
         return installImportedData
+    }
+
+    func importBootstrap(
+        _ request: Data,
+        files: [FileHandle]
+    ) async throws(RuntimeControlClientError) -> Data {
+        let reply = RuntimeImportBootstrapControlReply(
+            result: OperationHandle(operationID: OperationID(), kind: .bootstrapImport)
+        )
+        return (try? JSONEncoder().encode(reply)) ?? Data()
+    }
+
+    func discardImport(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        let reply = RuntimeDiscardImportControlReply()
+        return (try? JSONEncoder().encode(reply)) ?? Data()
+    }
+
+    func adoptPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        guard let decoded = try? JSONDecoder().decode(RuntimeAdoptPackageControlRequest.self, from: request)
+        else {
+            let reply = RuntimeAdoptPackageControlReply(
+                error: .runtime("malformedRequest", message: "malformed request"))
+            return (try? JSONEncoder().encode(reply)) ?? Data()
+        }
+        let reply = RuntimeAdoptPackageControlReply(
+            summary: RuntimePackageSummary(
+                packageID: decoded.request.packageID, displayName: "Adopted", versionCode: 1)
+        )
+        return (try? JSONEncoder().encode(reply)) ?? Data()
     }
 
     func beginInstallImported(_ request: Data) async throws(RuntimeControlClientError) -> Data {
@@ -1736,6 +1810,37 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
             throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
         }
         return beginUninstallPackageData
+    }
+
+    func setup(
+        _ request: Data,
+        files: [FileHandle]
+    ) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { resetRequestsValue.append(request) }
+        do {
+            return try JSONEncoder().encode(
+                RuntimeSetupControlReply(
+                    result: OperationHandle(
+                        operationID: OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032")!,
+                        kind: .setup
+                    )))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func resetAndroid(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { resetRequestsValue.append(request) }
+        do {
+            return try JSONEncoder().encode(
+                RuntimeResetAndroidControlReply(
+                    result: OperationHandle(
+                        operationID: OperationID(wire: "b4a90e78-5e1f-4d5a-9ba1-0b691f180032")!,
+                        kind: .resetAndroid
+                    )))
+        } catch {
+            throw .encodingFailure
+        }
     }
 
     func operationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
@@ -1779,6 +1884,70 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         }
     }
 
+    func notificationRelay(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func notificationRelayResponse(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func hostNotifications(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func hostNotificationResponse(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func closeStream(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func checkForUpdates(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func listUpdates(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func updateHistory(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func setUpdatePolicy(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func setUpdateAuthority(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func rollbackPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func beginRepairPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func updateSkipped(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func updatePackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func getConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func setConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void) {
         lock.withLock { connectionEventHandlerValue = handler }
     }
@@ -1815,6 +1984,235 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
             throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
         }
         return terminateData
+    }
+
+    func verifyWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func createWrapper(
+        _ request: Data,
+        icon: FileHandle?
+    ) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func placeStagedWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func wrapperInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func listWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func removeWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func rescanWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func refreshWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func refreshAllWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func pendingApprovals(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func decideApproval(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func deniedWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func clearWrapperDenial(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func requestApproval(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func perfStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { perfStatisticsRequestsValue.append(request) }
+        do {
+            return try JSONEncoder().encode(
+                RuntimePerfStatisticsControlReply(
+                    result: WirePerfStatistics(
+                        since: Date(timeIntervalSince1970: 1_700_000_000),
+                        markers: [
+                            WireMarkerStatistics(
+                                name: "firstFrameDisplayed",
+                                count: 2, p50Us: 800_000, p95Us: 1_500_000, maxUs: 2_000_000)
+                        ],
+                        input: [
+                            WireInputHistogram(
+                                segment: "input.route", boundsUs: [4_000, 8_000, 16_000],
+                                counts: [10, 4, 1])
+                        ],
+                        sessions: [],
+                        metrics: nil
+                    )))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func frameStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { frameStatisticsRequestsValue.append(request) }
+        do {
+            return try JSONEncoder().encode(
+                RuntimeFrameStatisticsControlReply(
+                    sessions: [
+                        SessionGraphicsStatistics(
+                            packageID: RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext")!,
+                            displayID: 7, fps: 59.4, droppedFrames: 2, hostReadbacks: 0,
+                            cpuPixelCopies: 0, presentGPUTimeP50Us: 3_000, presentGPUTimeP95Us: 8_000)
+                    ]))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func pushClipboard(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimePushClipboardControlReply(ack: ClipAck(seq: 1)))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func clipboardWritten(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(RuntimeClipboardWrittenControlReply())
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func focusChanged(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(RuntimeFocusChangedControlReply())
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func resolveLinkPrompt(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimeResolveLinkPromptControlReply(result: RuntimeEmpty()))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func importFiles(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError)
+        -> Data
+    {
+        do {
+            return try JSONEncoder().encode(
+                RuntimeImportFilesSessionReply(
+                    result: ImportResult(contentURIs: [], disposition: "shared")))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func acceptExport(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError)
+        -> Data
+    {
+        do {
+            return try JSONEncoder().encode(
+                RuntimeAcceptExportSessionReply(result: RuntimeEmpty()))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func sharedFolders(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(RuntimeSharedFoldersControlReply(result: []))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func addSharedFolder(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimeSharedFolderControlReply(
+                    result: SharedFolder(
+                        id: "t", name: "t", path: "/tmp", access: "readOnly",
+                        builtIn: false, availability: "available")))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func removeSharedFolder(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimeRemoveSharedFolderControlReply(result: RuntimeEmpty()))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func setSharedFolderAccess(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimeSharedFolderControlReply(
+                    result: SharedFolder(
+                        id: "t", name: "t", path: "/tmp", access: "readOnly",
+                        builtIn: false, availability: "available")))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func packageSettings(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimePackageSettingsControlReply(
+                    result: PackageSettingsWire(groups: [:], recommended: [:], entries: [])))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func updatePackageSettings(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimePackageSettingsControlReply(
+                    result: PackageSettingsWire(groups: [:], recommended: [:], entries: [])))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func integrationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimeIntegrationStatusControlReply(
+                    status: IntegrationStatus(
+                        packageID: RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext")!, items: [])))
+        } catch {
+            throw .encodingFailure
+        }
     }
 
     func snapshot() -> Snapshot {

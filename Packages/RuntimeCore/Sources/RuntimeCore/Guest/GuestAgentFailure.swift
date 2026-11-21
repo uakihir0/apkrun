@@ -84,6 +84,7 @@ extension GuestProtocolFailure {
         case .timeout(let operation): "timeout.\(operation)"
         case .remote(let code, _, let operation): "remote.\(operation).\(code)"
         case .frameTooLarge: "frameTooLarge"
+        case .transferIOFailed: "transferIOFailed"
         case .malformedFrame: "malformedFrame"
         case .capabilityMissing(let capability): "capabilityMissing.\(capability)"
         case .agentUnavailable(let kind): "agentUnavailable.\(kind)"

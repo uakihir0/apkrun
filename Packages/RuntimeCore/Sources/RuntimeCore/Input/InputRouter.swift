@@ -468,9 +468,20 @@ public actor InputRouter {
     /// Routes a batch of events from `session`, in order (runtime-api.md §7.3). Dropped events are counted, and nothing
     /// is returned to the caller.
     public nonisolated func route(_ events: [InputEvent], from session: SessionID) async {
+        let started = ContinuousClock.now
         await Perf.interval("input.route") {
             await self.routeBatch(events, from: session)
         }
+        InputLatencyRecorder.shared.record(
+            segment: "input.route",
+            microseconds: Self.microseconds(since: started)
+        )
+    }
+
+    /// Elapsed microseconds of `route`, for the `input.route` histogram (diagnostics.md §9.3).
+    private static func microseconds(since started: ContinuousClock.Instant) -> Int64 {
+        let components = (ContinuousClock.now - started).components
+        return components.seconds * 1_000_000 + components.attoseconds / 1_000_000_000_000
     }
 
     /// Routes one batch. `route` measures it with the `input.route` signpost interval.

@@ -1,5 +1,6 @@
 package io.apkrun.guest.daemon
 
+import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.DeviceProductInfo
 import io.apkrun.guest.protocol.v1.DisplayInfo
 import io.apkrun.guest.protocol.v1.DisplayMode

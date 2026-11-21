@@ -3,8 +3,8 @@ import Testing
 
 @testable import RuntimeAPI
 
-@Test func globalConfigurationControlAdvancesAPIMinorVersion() {
-    #expect(APIVersion.current == APIVersion(major: 1, minor: 12))
+@Test func apiVersionIsCurrent() {
+    #expect(APIVersion.current == APIVersion(major: 1, minor: 30))
 }
 
 @Test func runtimeRestartRequestRoundTripsVersionedHeader() throws {

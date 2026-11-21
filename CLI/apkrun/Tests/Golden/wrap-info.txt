@@ -1,0 +1,6 @@
+Mac app: /Applications/HelloText.app
+Bundle ID: io.apkrun.android.io.apkrun.fixture.hellotext
+Package: io.apkrun.fixture.hellotext
+Name: HelloText
+Kind: local
+Launcher: 1

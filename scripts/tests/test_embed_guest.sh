@@ -40,6 +40,8 @@ fi
 [[ -f "$guest_destination/apkrun-guest.apk" ]]
 printf 'PASS missing Guest Agent artifact diagnostic\n'
 
+# The symlink refusal runs after artifact verification, so restore a complete source.
+printf '{"packageName":"io.apkrun.guest"}\n' > "$guest_source/apkrun-guest.json"
 external_destination="$temporary_root/external"
 mkdir -p "$external_destination"
 printf 'preserve\n' > "$external_destination/marker"

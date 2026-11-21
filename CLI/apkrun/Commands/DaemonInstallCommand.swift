@@ -170,16 +170,26 @@
                         Output.write(WrapCommandSupport.resultText(wrapperInfo))
                     }
                 } catch {
+                    // The install succeeded, so a JSON caller still gets
+                    // the package result (partial success, cli.md §3.3).
+                    if json {
+                        try DaemonInstallSupport.writeJSON(
+                            InstallWrapResult(package: result, wrapper: nil))
+                    }
                     Output.writeLogLine(
                         ErrorOutput.render(error, json: json), toStandardError: true)
                     throw ExitCode(2)
                 }
             }
-            // --json prints one document: the install summary plus the
-            // wrapper record when --wrap ran (cli.md §3.1).
+            // --json prints one document: the plain install summary without
+            // --wrap (backward compatible), or the wrap document with it.
             if json {
-                try DaemonInstallSupport.writeJSON(
-                    InstallWrapResult(package: result, wrapper: wrapperInfo))
+                if wrap {
+                    try DaemonInstallSupport.writeJSON(
+                        InstallWrapResult(package: result, wrapper: wrapperInfo))
+                } else {
+                    try DaemonInstallSupport.writeJSON(result)
+                }
             }
         }
     }

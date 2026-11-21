@@ -88,8 +88,13 @@
                 throw await RuntimeStatusOutput.commandFailure(error)
             }
 
-            var packageID: RuntimePackageID
-            var didInstall = false
+            // The CLI resolves --output with the user's own file access;
+            // apkrund never does (cli.md §4.4, wrapper.md §12.2). Validate it
+            // before any install so a bad path fails before the APK lands.
+            let destination = try WrapCommandSupport.destination(for: output)
+
+            let packageID: RuntimePackageID
+            var installedByThisRun = false
             if isFile {
                 let preview = try await WrapCommandSupport.importFile(at: inputURL, client: client)
                 switch WrapCommandSupport.filePlan(relation: preview.relation, install: install) {
@@ -115,7 +120,7 @@
                         json: json,
                         client: client
                     )
-                    didInstall = true
+                    installedByThisRun = true
                 case .installAndWrap:
                     DaemonInstallSupport.writePreview(preview)
                     packageID = try await WrapCommandSupport.installPreview(
@@ -124,7 +129,7 @@
                         json: json,
                         client: client
                     )
-                    didInstall = true
+                    installedByThisRun = true
                 case .wrapInstalled(let note):
                     try rejectUpdateFlags()
                     Output.writeLogLine(note.text, toStandardError: true)
@@ -142,10 +147,6 @@
                 try rejectUpdateFlags()
                 packageID = id
             }
-
-            // The CLI resolves --output with the user's own file access;
-            // apkrund never does (cli.md §4.4, wrapper.md §12.2).
-            let destination = try WrapCommandSupport.destination(for: output)
 
             // --icon is a PNG the user's process reads; the daemon never
             // opens the path (cli.md §4.4).
@@ -179,7 +180,7 @@
             } catch {
                 // cli.md §3: installed but the Mac app could not be created
                 // is a partial success, exit code 2.
-                if didInstall {
+                if installedByThisRun {
                     ErrorOutput.write(error, json: json)
                     throw ExitCode(Int32(ExitCodes.partial))
                 }
@@ -498,8 +499,14 @@
             do {
                 info = try wrapperInfo(from: snapshot, expectedPackageID: packageID)
             } catch let failure as RuntimeWireError {
+                // wrapper.md §6.3: when the daemon's probe hit EPERM the
+                // bundle waits in staging and the client — this process,
+                // which the user can grant folder access — moves it and
+                // calls placeStagedWrapper to finish.
                 info = try await placeStaged(
-                    after: failure, destination: destination, client: client)
+                    after: failure, destination: destination,
+                    replace: replace == .sameWrapper,
+                    client: client)
             }
             return info
         }
@@ -510,6 +517,7 @@
         static func placeStaged(
             after failure: RuntimeWireError,
             destination: WireWrapperDestination?,
+            replace: Bool,
             client: RuntimeControlClient
         ) async throws -> WrapperInfo {
             guard failure.code == "wrapper.destinationNotAccessible",
@@ -538,7 +546,50 @@
             let finalURL = directory.appendingPathComponent(
                 stagedBundle.lastPathComponent, isDirectory: true)
             do {
-                try FileManager.default.moveItem(at: stagedBundle, to: finalURL)
+                // The daemon skipped the conflict check on the deferred path;
+                // honor it here the way place() does (wrapper.md §6.4):
+                // --replace swaps only this package's own wrapper, never an
+                // item that belongs to anything else.
+                let destinationExists = FileManager.default.fileExists(
+                    atPath: finalURL.path)
+                if destinationExists {
+                    let existingPackage = plistPackageID(of: finalURL)
+                    guard replace, existingPackage != nil,
+                        existingPackage == plistPackageID(of: stagedBundle)
+                    else {
+                        throw RuntimeWireError(
+                            domain: "wrapper",
+                            code: "wrapper.nameConflict",
+                            message: "An item named \(finalURL.lastPathComponent) "
+                                + "already exists there.",
+                            remediation: "Choose another name or location. "
+                                + "APKRun never replaces it.",
+                            parameters: ["file": finalURL.lastPathComponent])
+                    }
+                }
+                // Move via a temp name in the destination folder, the same
+                // path moveIntoPlace takes: it survives a different volume
+                // (replaceItemAt requires one) and keeps the existing wrapper
+                // in place until the swap.
+                try FileManager.default.createDirectory(
+                    at: directory, withIntermediateDirectories: true)
+                let temp = directory.appendingPathComponent(
+                    ".\(finalURL.lastPathComponent).apkrun-\(UUID().uuidString)",
+                    isDirectory: true)
+                try FileManager.default.moveItem(at: stagedBundle, to: temp)
+                do {
+                    if destinationExists {
+                        _ = try FileManager.default.replaceItemAt(
+                            finalURL, withItemAt: temp)
+                    } else {
+                        try FileManager.default.moveItem(at: temp, to: finalURL)
+                    }
+                } catch {
+                    try? FileManager.default.removeItem(at: temp)
+                    throw error
+                }
+            } catch let moveError as RuntimeWireError {
+                throw moveError
             } catch {
                 throw failure
             }
@@ -563,6 +614,17 @@
             process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
             process.arguments = [bundleURL.path]
             try? process.run()
+        }
+
+        /// Reads `APKRunPackageID` from a bundle's Info.plist; nil means the
+        /// item is not an APKRun wrapper (or is unreadable).
+        static func plistPackageID(of bundle: URL) -> String? {
+            let plistURL = bundle.appendingPathComponent("Contents/Info.plist")
+            guard let data = try? Data(contentsOf: plistURL),
+                let plist = try? PropertyListSerialization.propertyList(
+                    from: data, format: nil) as? [String: Any]
+            else { return nil }
+            return plist["APKRunPackageID"] as? String
         }
 
         /// The `wrapper` output of a finished `wrapperCreate` operation.

@@ -392,7 +392,8 @@ func embeddedPackageServiceModeOnlyReinstallKeepsAuthorityAndProvider() async th
                 nativeABIs: []
             )
         },
-        importVerifier: PackageStore.legacyImportVerifier
+        importVerifier: PackageStore.legacyImportVerifier,
+        runtimeAccess: FakeInstalledRuntimeAccess()
     )
     try await service.open()
 
@@ -791,4 +792,49 @@ func embeddedPackageServiceFailsClosedWhenHostSpaceCannotBeRead() async throws {
 
     let stagingRoot = paths.packagesDirectory.appendingPathComponent(".client-imports", isDirectory: true)
     #expect(try FileManager.default.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil).isEmpty)
+}
+
+/// A Store Agent stand-in that accepts every install and remembers the last
+/// installed package so reinstall flows can query it back.
+private struct FakeInstalledRuntimeAccess: StoreRuntimeAccess {
+    private let channel = FakeInstalledStoreAgentChannel()
+
+    func withStoreAgent<T: Sendable>(
+        _ operation: UUID,
+        _ body: @Sendable (any StoreAgentChannel) async throws -> T
+    ) async throws -> T {
+        try await body(channel)
+    }
+
+    func userdataGeneration() async -> UUID? { nil }
+}
+
+private final class FakeInstalledStoreAgentChannel: StoreAgentChannel, @unchecked Sendable {
+    let capabilities: StoreCapabilities = [.install, .metadata]
+    private var installed: StorePackageInfo?
+
+    func install(_ request: StoreInstallRequest, files: [URL]) async throws -> StorePackageInfo {
+        let info = StorePackageInfo(
+            packageID: request.packageID,
+            displayName: "Hello Text",
+            versionCode: request.versionCode,
+            versionName: "1.2",
+            enabled: true,
+            targetSDK: 35,
+            minSDK: 23,
+            signingDigests: request.signerDigests
+        )
+        installed = info
+        return info
+    }
+
+    func uninstall(_ package: PackageID, keepData: Bool) async throws {
+        installed = nil
+    }
+
+    func packageInfo(_ package: PackageID) async throws -> StorePackageInfo? {
+        installed?.packageID == package ? installed : nil
+    }
+
+    func listPackages(_ filter: StorePackageFilter) async throws -> [StorePackageSummary] { [] }
 }

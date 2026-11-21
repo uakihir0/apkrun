@@ -62,13 +62,15 @@ public actor EmbeddedPackageService: RuntimeService {
         inspector: @escaping PackageStore.Inspector = { apk in try await APKInspector().inspect(apk) },
         hostFreeSpace: (@Sendable (URL) -> Int64)? = nil,
         sessionService: (any RuntimeSessionService)? = nil,
-        importVerifier: @escaping PackageStore.ImportVerifier = PackageStore.strictImportVerifier
+        importVerifier: @escaping PackageStore.ImportVerifier = PackageStore.strictImportVerifier,
+        runtimeAccess: (any StoreRuntimeAccess)? = nil
     ) {
         self.paths = paths
         self.inspector = inspector
         self.hostFreeSpace = hostFreeSpace ?? Self.availableHostSpace
         self.sessionService = sessionService ?? EmbeddedRuntimeService()
-        let runtimeAccess = AttachedStoreRuntimeAccess()
+        self.runtimeAttached = runtimeAccess != nil
+        let runtimeAccess = AttachedStoreRuntimeAccess(initial: runtimeAccess)
         self.runtimeAccess = runtimeAccess
         store = PackageStore(
             packagesDirectory: paths.packagesDirectory,
@@ -1588,6 +1590,10 @@ private enum EmbeddedPackageServiceFailure: Error {
 
 private actor AttachedStoreRuntimeAccess: StoreRuntimeAccess {
     private var access: (any StoreRuntimeAccess)?
+
+    init(initial access: (any StoreRuntimeAccess)? = nil) {
+        self.access = access
+    }
 
     func attach(_ access: any StoreRuntimeAccess) {
         self.access = access

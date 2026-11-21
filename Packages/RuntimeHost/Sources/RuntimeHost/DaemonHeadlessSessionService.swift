@@ -785,13 +785,14 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
 
     /// §7.3 Update Now: close the live session with the updating reason;
     /// the Android process may keep running — only the session ends.
-    func endSessionForUpdate(packageID: RuntimePackageID) async {
+    /// `reason` is `.runtimeUpdating` for an image migration (§12.3).
+    func endSessionForUpdate(packageID: RuntimePackageID, reason: SessionEndReason = .updating) async {
         guard let current = await registry.session(packageID: packageID.rawValue) else { return }
         if current.state != .closing, !Self.isEnded(current.state) {
             _ = try? await registry.transition(current.id, to: .closing)
         }
         await stopDrainingFrames(for: current.id)
-        _ = try? await registry.transition(current.id, to: .ended(.updating))
+        _ = try? await registry.transition(current.id, to: .ended(reason))
         forgetSession(packageID: packageID.rawValue, sessionID: current.id, reason: "updating")
     }
 

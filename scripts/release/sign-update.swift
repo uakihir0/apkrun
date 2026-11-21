@@ -1,5 +1,4 @@
-#!/usr/bin/env swift  // Signs a file with the Sparkle EdDSA private key, the way `sign_update`  // does (runtime-maintenance.md §3.3): the signature is the base64 of the
-// Ed25519 signature over the raw file bytes.
+#!/usr/bin/env swift  // Signs a file with the Sparkle EdDSA private key, the way `sign_update`  // does (runtime-maintenance.md §3.3): the signature is the base64 of the  // Ed25519 signature over the raw file bytes.
 //
 // Usage:
 //   sign-update.swift <file>                 signs with $APKRUN_SPARKLE_ED_PRIVATE_KEY

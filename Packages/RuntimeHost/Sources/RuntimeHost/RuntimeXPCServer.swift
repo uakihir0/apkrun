@@ -1,5 +1,6 @@
 import DiagnosticsCore
 @preconcurrency import Foundation
+import ImageCore
 import RuntimeAPI
 import RuntimeCore
 
@@ -1246,6 +1247,14 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             argumentIndex: 1,
             ofReply: false
         )
+        // `installImage` carries the `.aar` FileHandle (runtime-maintenance.md
+        // §4.7); same whitelist as `importPackage`.
+        controlInterface.setClasses(
+            fileHandleClasses,
+            for: #selector(RuntimeControlXPC.installImage(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
         connection.remoteObjectInterface = NSXPCInterface(with: RuntimeEventSink.self)
         let eventHub = host.eventHub
         let remoteSink =
@@ -1419,6 +1428,11 @@ enum RuntimeControlOperation {
     case hostNotifications
     case hostNotificationResponse
     case closeStream
+    case installImage
+    case imageStatus
+    case applyImage
+    case rollbackImage
+    case deleteImageRecoveryPoint
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1538,7 +1552,9 @@ enum RuntimeControlOperation {
         case .checkForUpdates, .listUpdates, .updateHistory, .setUpdatePolicy,
             .setUpdateAuthority, .rollbackPackage, .beginRepairPackage,
             .updateSkipped, .updatePackage, .getConfig, .setConfig,
-            .packageSettings, .updatePackageSettings:
+            .packageSettings, .updatePackageSettings, .installImage,
+            .imageStatus, .applyImage, .rollbackImage,
+            .deleteImageRecoveryPoint:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -2888,6 +2904,165 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 host.streamCenter.closeStream(decoded.streamID, from: connectionID)
             }
             response.send(Self.encode(RuntimeStreamControlReply()))
+        }
+    }
+
+    func installImage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireImageInstallReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .installImage,
+                as: WireImageInstallRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireImageInstallReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard files.count == 1 else {
+                response.send(
+                    Self.encode(WireImageInstallReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let version = try await host.installImage(from: files[0])
+                response.send(Self.encode(WireImageInstallReply(version: version.description)))
+            } catch {
+                response.send(Self.encode(WireImageInstallReply(error: Self.imageWireError(error))))
+            }
+        }
+    }
+
+    func imageStatus(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireImageStatusReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .imageStatus,
+                as: WireImageStatusRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireImageStatusReply(error: Self.wireError(for: failure))))
+                return
+            }
+            response.send(Self.encode(WireImageStatusReply(status: await host.imageStatus())))
+        }
+    }
+
+    func applyImage(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireImageApplyReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .applyImage,
+                as: WireImageApplyRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireImageApplyReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    WireImageApplyRequest.self, from: request)
+            else {
+                response.send(Self.encode(WireImageApplyReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.applyImage(decoded.version)
+                response.send(Self.encode(WireImageApplyReply(result: "Applied.")))
+            } catch {
+                response.send(Self.encode(WireImageApplyReply(error: Self.imageWireError(error))))
+            }
+        }
+    }
+
+    func rollbackImage(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireImageApplyReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .rollbackImage,
+                as: WireImageRollbackRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireImageApplyReply(error: Self.wireError(for: failure))))
+                return
+            }
+            do {
+                let result = try await host.rollbackImage()
+                response.send(Self.encode(WireImageApplyReply(result: result)))
+            } catch {
+                response.send(Self.encode(WireImageApplyReply(error: Self.imageWireError(error))))
+            }
+        }
+    }
+
+    func deleteImageRecoveryPoint(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireImageApplyReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .deleteImageRecoveryPoint,
+                as: WireImageRecoveryPointDeleteRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireImageApplyReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    WireImageRecoveryPointDeleteRequest.self, from: request)
+            else {
+                response.send(Self.encode(WireImageApplyReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.deleteImageRecoveryPoint(named: decoded.name)
+                response.send(Self.encode(WireImageApplyReply(result: "Deleted.")))
+            } catch {
+                response.send(Self.encode(WireImageApplyReply(error: Self.imageWireError(error))))
+            }
         }
     }
 
@@ -4851,6 +5026,24 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         return RuntimeControlError(code: code, message: safeMessage(for: code))
     }
 
+    private static func imageWireError(_ error: any Error) -> RuntimeWireError {
+        if let wire = error as? RuntimeWireError {
+            return wire
+        }
+        if let failure = error as? ImageFailure {
+            let code = "image.\(failure.code)"
+            let entry = ErrorCatalog.entry(for: code)
+            return RuntimeWireError(
+                domain: "image",
+                code: code,
+                message: entry?.message?["en"] ?? failure.code,
+                remediation: entry?.remediation?["en"],
+                parameters: failure.parameters.mapValues { "\($0)" }
+            )
+        }
+        return .runtime("internal", message: safeMessage(for: "runtime.internal"))
+    }
+
     private static func configurationWireError(for error: any Error) -> RuntimeWireError {
         if let hostError = error as? RuntimeHostError {
             switch hostError {
@@ -5195,6 +5388,11 @@ private func safeMessage(for code: String) -> String {
     }
 }
 extension CheckSelfUpdateRequest: VersionedControlRequest {}
+extension WireImageInstallRequest: VersionedControlRequest {}
+extension WireImageStatusRequest: VersionedControlRequest {}
+extension WireImageApplyRequest: VersionedControlRequest {}
+extension WireImageRollbackRequest: VersionedControlRequest {}
+extension WireImageRecoveryPointDeleteRequest: VersionedControlRequest {}
 extension SelfUpdateNote: VersionedControlRequest {}
 extension MaintenanceControlRequest: VersionedControlRequest {}
 

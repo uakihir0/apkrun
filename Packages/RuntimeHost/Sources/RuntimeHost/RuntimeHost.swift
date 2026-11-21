@@ -4,6 +4,7 @@ import CoreGraphics
 import CryptoKit
 import DiagnosticsCore
 import Foundation
+import GuestProtocol
 import ImageCore
 import ImageIO
 import IntegrationCore
@@ -86,8 +87,8 @@ public actor RuntimeHost {
     /// completes (runtime-daemon.md §9.2). The daemon enforces it; dev and test hosts do not.
     private let enforceProvisioning: Bool
     private var provisioningState: WireProvisioningState = .notStarted
-    private var imageStore: ImageStore?
-    private var diagnostics: DiagnosticsContext?
+    var imageStore: ImageStore?
+    var diagnostics: DiagnosticsContext?
     /// The health-check registry, for checks hosted outside this file
     /// (`updates.waiting` in RuntimeHostUpdates.swift).
     var healthCheckRegistry: HealthCheckRegistry? {
@@ -98,12 +99,12 @@ public actor RuntimeHost {
     var hostLogSink: (any LogSink)? {
         diagnostics?.logSink
     }
-    private var logger: APKLogger?
+    var logger: APKLogger?
     private var instanceLock: InstanceLock?
     private var stateStore: DaemonStateStore?
     private var startupAssessment: DaemonStartupAssessment?
-    private var image: InstalledImage?
-    private var instanceStore: InstanceStore?
+    var image: InstalledImage?
+    var instanceStore: InstanceStore?
     var supervisor: RuntimeSupervisor?
     private var supervisorEventsTask: Task<Void, Never>?
     private var packageQueryService: EmbeddedPackageService?
@@ -118,7 +119,7 @@ public actor RuntimeHost {
     private var runtimeSessionGeneration: UInt64 = 0
     private var bootProgressEstimator: BootProgressEstimator?
     private var bootStartedAt: ContinuousClock.Instant?
-    private var bootPurpose: RuntimeAPI.BootPurpose?
+    var bootPurpose: RuntimeAPI.BootPurpose?
     private var bootProgressGeneration: UInt64 = 0
     private var runtimeStateSnapshotRevision: UInt64 = 0
     private var runtimeStateEventRevision: UInt64 = 0
@@ -190,6 +191,7 @@ public actor RuntimeHost {
     var apkrunAppReported = false
     /// Whether an image migration is in progress (#59 reports it here).
     var imageMigrating = false
+    var _imageUpdateCoordinator: ImageUpdateCoordinator?
     /// `restartForUpdate` set this; the daemon exits at the next idle check.
     var restartExitRequested = false
 
@@ -468,6 +470,9 @@ public actor RuntimeHost {
             } catch {
                 recordDegradedStartup(step: 5, code: error.qualifiedCode)
             }
+            // #59: a daemon restart may leave a migration half-applied;
+            // reconcile update-state.json against what is actually installed.
+            await reconcileImageUpdate()
         }
 
         // Startup step 7: the provisioning record feeds status and the notProvisioned gate.
@@ -528,7 +533,7 @@ public actor RuntimeHost {
         case .normal, .unknown:
             break
         }
-        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, !imageMigrating else {
             throw .invalidTransition
         }
         activeRuntimeStarts += 1
@@ -662,6 +667,27 @@ public actor RuntimeHost {
                 bootPurpose = nil
             }
         }
+        // §4.10: an image whose manifest no longer covers this host never
+        // boots; Android stays stopped and the boot fails as an image error.
+        do {
+            let wanted = image.manifest.requirements
+            if compareVersions(buildIdentity.marketingVersion, wanted.minimumRuntimeVersion) < 0 {
+                throw .image(
+                    .incompatibleRuntime(
+                        minimum: wanted.minimumRuntimeVersion,
+                        found: buildIdentity.marketingVersion))
+            }
+            let range = wanted.guestProtocol
+            if range.max < Int(ProtocolVersion.supportedMajors.lowerBound)
+                || range.min > Int(ProtocolVersion.supportedMajors.upperBound)
+            {
+                throw .image(
+                    .incompatibleProtocol(
+                        minimum: range.min, maximum: range.max,
+                        hostMinimum: Int(ProtocolVersion.supportedMajors.lowerBound),
+                        hostMaximum: Int(ProtocolVersion.supportedMajors.upperBound)))
+            }
+        }
         do {
             try await supervisor.ensureReady(reason)
         } catch {
@@ -752,6 +778,9 @@ public actor RuntimeHost {
             activePackageMutations == 0
         else {
             throw .invalidTransition
+        }
+        guard !imageMigrating else {
+            throw RuntimeHostError.invalidTransition
         }
         isRuntimeResetting = true
         defer { isRuntimeResetting = false }
@@ -4308,6 +4337,23 @@ public actor RuntimeHost {
             && !updateDueSoon
     }
 
+    /// Drops the supervisor and its event subscription — the events task holds
+    /// the old supervisor's stream alive otherwise (image update replaces it).
+    func dropSupervisor() {
+        supervisorEventsTask?.cancel()
+        supervisorEventsTask = nil
+        supervisor = nil
+    }
+
+    /// Detaches services holding the old supervisor's Guest Agent and display
+    /// pool so the next launch recreates them on the new supervisor.
+    func dropRuntimeAttachedServices() async {
+        headlessSessionService = nil
+        if let packageQueryService {
+            await packageQueryService.detachRuntime()
+        }
+    }
+
     private func observeSupervisorEvents(from supervisor: RuntimeSupervisor) {
         guard supervisorEventsTask == nil else { return }
         let events = supervisor.events
@@ -4494,7 +4540,7 @@ public actor RuntimeHost {
         logger?.notice("Daemon control endpoint is ready")
     }
 
-    private func beginLifecycleOperation(
+    func beginLifecycleOperation(
         allowingReservedPackageMutation: Bool = false
     ) throws(RuntimeHostError) {
         guard hasStarted else {
@@ -4506,7 +4552,7 @@ public actor RuntimeHost {
         activeLifecycleOperations += 1
     }
 
-    private func finishLifecycleOperation() {
+    func finishLifecycleOperation() {
         activeLifecycleOperations -= 1
         guard activeLifecycleOperations == 0 else { return }
         let waiters = lifecycleWaiters
@@ -4517,7 +4563,7 @@ public actor RuntimeHost {
     }
 
     func beginPackageMutation() throws(RuntimeHostError) {
-        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, !imageMigrating else {
             throw .invalidTransition
         }
         try beginLifecycleOperation()
@@ -4536,7 +4582,7 @@ public actor RuntimeHost {
         finishLifecycleOperation()
     }
 
-    private func waitForPackageMutations() async {
+    func waitForPackageMutations() async {
         guard activePackageMutations > 0 else { return }
         await withCheckedContinuation { continuation in
             packageMutationWaiters.append(continuation)
@@ -5471,15 +5517,64 @@ public actor RuntimeHost {
                     throw fail(.installingImage, error)
                 }
                 setProvisioningState(.installingImage(fraction: 1))
-            case .feed, .archive, .unknown:
-                // The release feed and .aar archives arrive with #59; setup needs a local image
-                // bundle until then (apkrun setup --image <dir>).
+            case .archive(let fileIndex):
+                // `apkrun setup --image <file.aar>` installs the archive
+                // (runtime-maintenance.md §4.7); `.feed` arrives with the
+                // distribution task (#88). The `.aar` travels as a FileHandle;
+                // stage a copy so the extractor sees a filesystem path. The
+                // user's file is only read, never moved or deleted.
+                guard fileIndex >= 0, fileIndex < files.count else {
+                    throw ProvisioningStepFailure(
+                        step: .installingImage,
+                        wireError: .runtime(
+                            "malformedRequest",
+                            message: "The image archive couldn't be read."
+                        )
+                    )
+                }
+                let staging = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("apkrun-image-\(UUID().uuidString).aar")
+                FileManager.default.createFile(atPath: staging.path, contents: nil)
+                defer { try? FileManager.default.removeItem(at: staging) }
+                do {
+                    let source = files[fileIndex]
+                    let out = try FileHandle(forWritingTo: staging)
+                    try source.seek(toOffset: 0)
+                    while let chunk = try source.read(upToCount: 1 << 20), !chunk.isEmpty {
+                        try out.write(contentsOf: chunk)
+                    }
+                    try out.synchronize()
+                    try out.close()
+                } catch {
+                    throw fail(.installingImage, error)
+                }
+                let images =
+                    imageStore
+                    ?? ImageStore(
+                        paths: paths,
+                        trust: .standard(),
+                        diagnostics: diagnostics ?? .live(paths: paths)
+                    )
+                imageStore = images
+                do {
+                    let installed = try await images.install(from: .archive(staging))
+                    image = installed
+                    if instanceStore == nil, let diagnostics {
+                        instanceStore = InstanceStore(paths: paths, diagnostics: diagnostics)
+                    }
+                } catch {
+                    throw fail(.installingImage, error)
+                }
+                setProvisioningState(.installingImage(fraction: 1))
+            case .feed, .unknown:
+                // The release feed arrives with #88; setup needs a local image
+                // bundle or .aar until then (apkrun setup --image <path>).
                 throw ProvisioningStepFailure(
                     step: .installingImage,
                     wireError: .runtime(
                         "serviceUnavailable",
                         message: "Image downloads are not available yet.",
-                        remediation: "Install a local image bundle with `apkrun setup --image <folder>`."
+                        remediation: "Install a local image with `apkrun setup --image <folder-or-aar>`."
                     )
                 )
             }
@@ -5574,6 +5669,9 @@ public actor RuntimeHost {
         }
         // Reject new starts and package mutations for the whole reset, then let in-flight work
         // finish before the disks are erased.
+        guard !imageMigrating else {
+            throw RuntimeHostError.invalidTransition
+        }
         isRuntimeResetting = true
         defer { isRuntimeResetting = false }
         if let runtimeStartTask {
@@ -5778,7 +5876,7 @@ public actor RuntimeHost {
 
     /// The runtime supervisor, creating it when provisioning installed the first image after
     /// the daemon started without one.
-    private func supervisorInstance() throws -> RuntimeSupervisor {
+    func supervisorInstance() throws -> RuntimeSupervisor {
         if let supervisor {
             return supervisor
         }

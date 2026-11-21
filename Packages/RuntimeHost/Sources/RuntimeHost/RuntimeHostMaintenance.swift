@@ -315,7 +315,7 @@ extension RuntimeHost {
         MaintenanceControlReply(error: error)
     }
 
-    private func maintenanceSessionPackageIDs() async -> [RuntimePackageID] {
+    func maintenanceSessionPackageIDs() async -> [RuntimePackageID] {
         guard let service = sessionServiceForIntegrations() else { return [] }
         return await service.maintenanceSessionPackageIDs()
     }

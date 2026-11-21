@@ -1,5 +1,6 @@
 import Foundation
 import RuntimeAPI
+import RuntimeCore
 
 /// Dispatches package-session requests to the window that owns that package in an embedded multi-window run (#31).
 ///
@@ -60,8 +61,8 @@ public actor EmbeddedMultiSessionService: RuntimeSessionService, PackageMutation
         await sessions[packageID.rawValue]?.lastSessionEnd(packageID: packageID)
     }
 
-    func endSessionForUpdate(packageID: RuntimePackageID) async {
-        await sessions[packageID.rawValue]?.endSessionForUpdate(packageID: packageID)
+    func endSessionForUpdate(packageID: RuntimePackageID, reason: SessionEndReason = .updating) async {
+        await sessions[packageID.rawValue]?.endSessionForUpdate(packageID: packageID, reason: reason)
     }
 
     func reopenPackageSession(packageID: RuntimePackageID) async throws {

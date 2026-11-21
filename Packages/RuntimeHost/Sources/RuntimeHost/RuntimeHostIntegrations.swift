@@ -945,6 +945,56 @@ extension RuntimeHost {
                 message: "The link was dropped (\(reason.rawValue)).",
                 remediation: nil
             )
+        case .tooManyFiles(let count, let limit):
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.tooManyFiles",
+                message: "Too many files at once (\(count)).",
+                remediation: "Drop at most \(limit) files at a time."
+            )
+        case .fileTooLarge(let name, let bytes):
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.fileTooLarge",
+                message: "\(name) is too large to drop into Android (\(bytes) bytes).",
+                remediation: "Drop files of up to 2 GB each and 4 GB in total."
+            )
+        case .transferFailed(let detail):
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.transferFailed",
+                message: "The file transfer didn't finish (\(detail)).",
+                remediation: "Try again."
+            )
+        case .folderUnavailable(let problem):
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.folderUnavailable",
+                message: "A shared folder can't be used (\(problem.rawValue)).",
+                remediation: nil
+            )
+        case .pathRejected(let problem):
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.pathRejected",
+                message: "The file request was refused (\(problem.rawValue)).",
+                remediation: nil
+            )
+        case .folderRefused(let reason):
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.folderRefused",
+                message: "The folder can't be shared (\(reason.rawValue)).",
+                remediation: nil
+            )
+        case .readOnly:
+            return RuntimeWireError(
+                domain: "integration",
+                code: "integration.readOnly",
+                message: "The app can only read files in the shared folders.",
+                remediation:
+                    "To allow changes, set Shared folders to Read and write in the app's settings, and give the folder Read and write access in Settings → Files."
+            )
         }
     }
 }

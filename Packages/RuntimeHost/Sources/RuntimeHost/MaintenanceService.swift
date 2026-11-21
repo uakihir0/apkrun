@@ -56,19 +56,30 @@ actor MaintenanceService {
         self.endSessions = endSessions
         self.idleAndExit = idleAndExit
         // A marker left on disk means a host update was in flight when the
-        // daemon last exited (§3.5). Resume `updating` so the gate keeps
-        // refusing work; a stale marker older than a day is dropped instead.
+        // daemon last exited (§3.6). An older bundle stays `updating` and
+        // watches the marker until it disappears or reaches 10 minutes; an
+        // older marker is dropped. A bundle at or past `targetBuild` is the
+        // new build: it keeps `updating` for at most 60 seconds while it
+        // waits for `completeHostUpdate` from the new APKRun.app.
         if let marker = Self.readMarker(at: markerURL) {
-            if Date().timeIntervalSince(marker.createdAt) < Self.markerMaxAge {
-                hostState = .updating(targetBuild: marker.targetBuild)
+            if build < marker.targetBuild {
+                if Date().timeIntervalSince(marker.createdAt) < Self.abandonedMarkerAge {
+                    hostState = .updating(targetBuild: marker.targetBuild)
+                    Task { await self.watchAbandonedMarker() }
+                } else {
+                    try? FileManager.default.removeItem(at: markerURL)
+                }
             } else {
-                try? FileManager.default.removeItem(at: markerURL)
+                hostState = .updating(targetBuild: marker.targetBuild)
+                Task { await self.expireFinishingMarker() }
             }
         }
     }
 
-    /// A marker older than this is treated as abandoned and removed at startup.
-    private static let markerMaxAge: TimeInterval = 24 * 60 * 60
+    /// §3.6: how long a surviving marker holds an older bundle in `updating`.
+    private static let abandonedMarkerAge: TimeInterval = 10 * 60
+    /// §3.6: how long the new build waits for `completeHostUpdate`.
+    private static let finishingMarkerAge: TimeInterval = 60
 
     /// The current host state.
     var state: HostState { hostState }
@@ -176,6 +187,36 @@ actor MaintenanceService {
     }
 
     // MARK: - Marker file
+
+    /// §3.6 wait loop of an older bundle: poll the marker every 2 seconds.
+    /// A removed marker (aborted or completed) or a 10-minute-old one lets
+    /// the daemon exit; the next start is `normal`.
+    private func watchAbandonedMarker() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(2))
+            guard let marker = readMarker() else {
+                idleAndExit()
+                return
+            }
+            if Date().timeIntervalSince(marker.createdAt) >= Self.abandonedMarkerAge {
+                removeMarker()
+                hostState = .normal
+                publish(.hostStateChanged(hostState))
+                idleAndExit()
+                return
+            }
+        }
+    }
+
+    /// §3.6 finishing wait of the new build: past 60 seconds without a
+    /// `completeHostUpdate`, drop the marker and resume `normal` work.
+    private func expireFinishingMarker() async {
+        try? await Task.sleep(for: .seconds(Self.finishingMarkerAge))
+        guard readMarker() != nil, case .updating = hostState else { return }
+        removeMarker()
+        hostState = .normal
+        publish(.hostStateChanged(hostState))
+    }
 
     private func readMarker() -> HostUpdateMarker? {
         Self.readMarker(at: markerURL)

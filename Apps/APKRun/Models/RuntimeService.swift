@@ -32,9 +32,13 @@ protocol RuntimeService: Sendable {
     func importPackage(
         _ request: RuntimeImportPackageRequest, files: [FileHandle]
     ) async throws -> RuntimeImportPreview
-    func installImported(
-        _ request: RuntimeInstallImportedRequest
-    ) async throws -> RuntimePackageSummary
+    /// The tracked install operation; the operation center shows it (§6.2).
+    func beginInstallImported(
+        _ request: RuntimeInstallImportedRequest, operationID: OperationID
+    ) async throws -> OperationHandle
+    func operationStatus(_ operationID: OperationID) async throws -> OperationSnapshot
+    /// Creates a wrapper with the review sheet's name and location (§6.1).
+    func createWrapper(_ request: WrapperRequest) async throws -> OperationHandle
     func discardImport(_ request: RuntimeDiscardImportRequest) async throws
     func subscribe(to topic: EventTopic) async throws -> AsyncStream<EventEnvelope>
 }
@@ -58,6 +62,10 @@ extension RuntimeControlClient: RuntimeService {
             icon: nil,
             operationID: OperationID()
         )
+    }
+
+    func createWrapper(_ request: WrapperRequest) async throws -> OperationHandle {
+        try await createWrapper(request, icon: nil, operationID: OperationID())
     }
 
     func refreshWrapper(packageID: RuntimePackageID) async throws -> OperationHandle {

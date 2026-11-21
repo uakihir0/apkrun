@@ -45,6 +45,8 @@ final class AddFlowModel {
     var createMacApp = true
     var macAppName = ""
     var location: AddFlowLocation = .userApplications
+    /// The directory **Other…** picked (wrapper.md §6.3).
+    var customDirectoryURL: URL?
     /// `wrappers.defaultLocation` (#80 controls it; `ask` leaves unselected).
     var defaultLocation: AddFlowLocation = .userApplications
 
@@ -127,27 +129,103 @@ final class AddFlowModel {
         guard let preview else { return }
         stage = .installing
         installError = nil
+        // §6.1: without an update source only Manual is enabled.
+        if suggestedProvider == nil { updateChoice = .manual }
         let authority: RuntimeUpdateAuthority = updateChoice == .manual ? .manual : .apkrun
         let options = RuntimeInstallOptions(
             authority: authority,
-            createWrapper: createMacApp,
+            createWrapper: false,
             provider: suggestedProvider,
             updateMode: updateChoice)
         Task { await runInstall(ticket: preview.ticket, options: options) }
+    }
+
+    /// Retries the wrapper step after a `wrapperError` (§6.2).
+    func retryWrapper() {
+        guard let packageID = installedPackageID else { return }
+        stage = .installing
+        wrapperError = nil
+        Task { await runWrapper(packageID: packageID) }
     }
 
     private func runInstall(
         ticket: RuntimeImportTicket, options: RuntimeInstallOptions
     ) async {
         do {
-            let summary = try await serviceFactory().installImported(
-                RuntimeInstallImportedRequest(ticket: ticket, options: options))
+            let service = try serviceFactory()
+            let operationID = OperationID()
+            let handle = try await service.beginInstallImported(
+                RuntimeInstallImportedRequest(ticket: ticket, options: options),
+                operationID: operationID)
+            let snapshot = try await Self.awaitTerminal(handle.operationID, using: service)
+            guard case .succeeded(.package(let summary))? = snapshot.result else {
+                if case .failed(let failure)? = snapshot.result { throw failure }
+                throw RuntimeWireError.runtime(
+                    "unknownResult",
+                    message: "The install finished without a result.")
+            }
             installedPackageID = summary.packageID
-            stage = .installed
+            if createMacApp {
+                await runWrapper(packageID: summary.packageID)
+            } else {
+                stage = .installed
+            }
         } catch {
             installError = Self.describe(error)
             stage = .review
         }
+    }
+
+    /// The `wrapperCreate` operation with the sheet's name and location
+    /// (host-ui.md §6.2 "Creating Mac app…").
+    private func runWrapper(packageID: RuntimePackageID) async {
+        do {
+            let service = try serviceFactory()
+            let name = macAppName.trimmingCharacters(in: .whitespaces)
+            let request = WrapperRequest(
+                packageID: packageID,
+                destination: wireDestination,
+                fileName: name.isEmpty ? nil : name,
+                displayName: name.isEmpty ? nil : name,
+                replace: .sameWrapper)
+            let handle = try await service.createWrapper(request)
+            let snapshot = try await Self.awaitTerminal(handle.operationID, using: service)
+            switch snapshot.result {
+            case .succeeded:
+                stage = .installed
+            case .failed(let failure):
+                wrapperError = Self.describe(failure)
+                stage = .installed
+            default:
+                wrapperError = nil
+                stage = .installed
+            }
+        } catch {
+            wrapperError = Self.describe(error)
+            stage = .installed
+        }
+    }
+
+    /// The `WrapperRequest` destination for the chosen location.
+    private var wireDestination: WireWrapperDestination? {
+        switch location {
+        case .userApplications: .userApplications
+        case .allApplications: .applications
+        case .other:
+            customDirectoryURL.map { .directory($0) } ?? .userApplications
+        }
+    }
+
+    /// Polls an operation until its snapshot carries a terminal result.
+    private static func awaitTerminal(
+        _ operationID: OperationID, using service: any RuntimeService
+    ) async throws -> OperationSnapshot {
+        while !Task.isCancelled {
+            let snapshot = try await service.operationStatus(operationID)
+            if snapshot.result != nil { return snapshot }
+            try await Task.sleep(for: .milliseconds(300))
+        }
+        throw CancellationError()
     }
 
     /// **Done** / dismiss: discards the ticket and closes the sheet. Work in

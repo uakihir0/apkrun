@@ -126,7 +126,9 @@ struct AddFlowView: View {
                 selection: Bindable(model).updateChoice
             ) {
                 Text("Automatic").tag(UpdateChoice.automatic)
+                    .disabled(model.suggestedProvider == nil)
                 Text("Notify only").tag(UpdateChoice.notifyOnly)
+                    .disabled(model.suggestedProvider == nil)
                 Text("Manual").tag(UpdateChoice.manual)
             }
             .pickerStyle(.radioGroup)
@@ -156,6 +158,24 @@ struct AddFlowView: View {
                     Text("Applications (all users)").tag(AddFlowLocation.allApplications)
                     Text("Other…").tag(AddFlowLocation.other)
                 }
+                .onChange(of: model.location) { _, newValue in
+                    guard newValue == .other else { return }
+                    let panel = NSOpenPanel()
+                    panel.canChooseDirectories = true
+                    panel.canChooseFiles = false
+                    panel.canCreateDirectories = true
+                    panel.prompt = "Choose"
+                    if panel.runModal() == .OK, let url = panel.url {
+                        model.customDirectoryURL = url
+                    } else {
+                        model.location = .userApplications
+                    }
+                }
+                if model.location == .other, let url = model.customDirectoryURL {
+                    Text(url.path(percentEncoded: false))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -173,6 +193,9 @@ struct AddFlowView: View {
             }
             HStack {
                 Spacer()
+                if model.wrapperError != nil {
+                    Button("Try Again") { model.retryWrapper() }
+                }
                 if model.installedPackageID != nil {
                     Button("Open") { model.openInstalled() }
                 }

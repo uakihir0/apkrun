@@ -120,18 +120,34 @@ final class FakeRuntimeService: RuntimeService, @unchecked Sendable {
         throw RuntimeWireError(domain: "package", code: "refused", message: "stub")
     }
 
-    func installImported(_ request: RuntimeInstallImportedRequest)
-        async throws -> RuntimePackageSummary
-    {
+    func beginInstallImported(
+        _ request: RuntimeInstallImportedRequest, operationID: OperationID
+    ) async throws -> OperationHandle {
         count("installImported")
         installRequests.append(request)
-        return RuntimePackageSummary(
-            packageID: RuntimePackageID(rawValue: "com.example.a")!,
-            displayName: "Example", versionCode: 1, versionName: "1.0",
-            state: .installed, managed: true, updateAuthority: .apkrun)
+        return OperationHandle(operationID: operationID, kind: .install)
+    }
+
+    func operationStatus(_ operationID: OperationID) async throws -> OperationSnapshot {
+        count("operationStatus")
+        return OperationSnapshot(
+            operationID: operationID, kind: .install, startedAt: Date(),
+            result: .succeeded(
+                .package(
+                    RuntimePackageSummary(
+                        packageID: RuntimePackageID(rawValue: "com.example.a")!,
+                        displayName: "Example", versionCode: 1, versionName: "1.0",
+                        state: .installed, managed: true, updateAuthority: .apkrun))))
+    }
+
+    func createWrapper(_ request: WrapperRequest) async throws -> OperationHandle {
+        count("createWrapper")
+        wrapperRequests.append(request)
+        return OperationHandle(operationID: OperationID(), kind: .wrapperCreate)
     }
 
     var installRequests: [RuntimeInstallImportedRequest] = []
+    var wrapperRequests: [WrapperRequest] = []
 
     func discardImport(_ request: RuntimeDiscardImportRequest) async throws {
         count("discardImport")
@@ -457,21 +473,40 @@ final class AddFlowModelTests: XCTestCase {
         XCTAssertTrue(m.createMacApp)
     }
 
-    // Install sends the ticket with createWrapper + the chosen update mode.
+    // Install sends the ticket; the wrapper goes through its own operation
+    // with the chosen name and location (§6.1).
     func testInstallPassesOptions() async {
         let service = FakeRuntimeService()
         let m = flow(with: service)
-        await m.inspectForTesting(preview())
+        await m.inspectForTesting(preview(name: "OddName App"))
         m.createMacApp = true
-        m.updateChoice = .automatic
+        m.location = .allApplications
         m.install()
-        // The install runs on a Task; give it a tick.
-        try? await Task.sleep(for: .milliseconds(50))
+        // The install + wrapper run on a Task; give them a tick.
+        try? await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(service.installRequests.count, 1)
         let request = service.installRequests[0]
-        XCTAssertTrue(request.options.createWrapper)
-        XCTAssertEqual(request.options.updateMode, .automatic)
-        XCTAssertEqual(request.options.authority, .apkrun)
+        XCTAssertFalse(request.options.createWrapper)
+        XCTAssertEqual(request.options.authority, .manual)
+        XCTAssertEqual(service.wrapperRequests.count, 1)
+        let wrapper = service.wrapperRequests[0]
+        XCTAssertEqual(wrapper.destination, .applications)
+        XCTAssertEqual(wrapper.fileName, "OddName App")
+        XCTAssertEqual(wrapper.displayName, "OddName App")
+    }
+
+    // §6.1: without an update source only Manual can be sent (the daemon
+    // refuses apkrun authority without a provider).
+    func testAutomaticWithoutProviderFallsBackToManual() async {
+        let service = FakeRuntimeService()
+        let m = flow(with: service)
+        await m.inspectForTesting(preview())
+        m.updateChoice = .automatic
+        m.install()
+        try? await Task.sleep(for: .milliseconds(50))
+        let request = service.installRequests[0]
+        XCTAssertEqual(request.options.authority, .manual)
+        XCTAssertEqual(m.updateChoice, .manual)
     }
 
     func testRefusedFilesFailFast() async {

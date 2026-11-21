@@ -30,7 +30,13 @@ class SaveToMacActivity : Activity() {
             finish()
             return
         }
-        val sourcePackage = intent.getStringExtra(EXTRA_SOURCE_PACKAGE) ?: callingPackage() ?: ""
+        // The extra wins for the in-app send; `referrer` (android-app://pkg)
+        // names the requester when the picker launched us without it.
+        val sourcePackage =
+            intent.getStringExtra(EXTRA_SOURCE_PACKAGE)
+                ?: callingPackage()
+                ?: referrer?.takeIf { it.scheme == "android-app" }?.host
+                ?: ""
         var offered = 0
         for (uri in uris) {
             try {

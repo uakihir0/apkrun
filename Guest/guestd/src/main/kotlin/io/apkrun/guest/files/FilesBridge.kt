@@ -192,9 +192,11 @@ internal class FilesBridge(
         if (request.decision != ExportDecision.EXPORT_DECISION_ACCEPT) {
             return ExportStart.getDefaultInstance()
         }
-        val bytes =
+        // The file is framed as it is read; it never lands in memory whole
+        // (desktop-integration.md §6.3).
+        val stream =
             try {
-                context.contentResolver.openInputStream(offer.uri)?.use { it.readBytes() }
+                context.contentResolver.openInputStream(offer.uri)
             } catch (error: Exception) {
                 AgentLog.warning(
                     "the offered file could not be read: ${error.javaClass.simpleName}"
@@ -202,8 +204,13 @@ internal class FilesBridge(
                 null
             } ?: return ExportStart.getDefaultInstance()
         val transferId =
-            bulkTransfers.send(BulkKind.BULK_KIND_FILE, offer.name, offer.mimeType, bytes)
-                ?: return ExportStart.getDefaultInstance()
+            bulkTransfers.sendStream(
+                BulkKind.BULK_KIND_FILE,
+                offer.name,
+                offer.mimeType,
+                offer.size,
+                stream,
+            ) ?: return ExportStart.getDefaultInstance()
         return ExportStart.newBuilder().setTransferId(transferId).build()
     }
 
@@ -253,7 +260,9 @@ internal class FilesBridge(
                 val sizeColumn = cursor.getColumnIndex(OpenableColumns.SIZE)
                 if (cursor.moveToFirst()) {
                     if (nameColumn >= 0) cursor.getString(nameColumn)?.let { name = it }
-                    if (sizeColumn >= 0) size = cursor.getLong(sizeColumn)
+                    if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) {
+                        size = cursor.getLong(sizeColumn)
+                    }
                 }
             }
         } catch (error: Exception) {

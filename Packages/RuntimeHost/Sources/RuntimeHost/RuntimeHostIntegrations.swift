@@ -158,6 +158,12 @@ private struct HostNotificationSink: NotificationSink {
 private struct GuestClipboardChannel: IntegrationChannel {
     /// `RuntimeHost`'s async send; throws any error, mapped here.
     let send: @Sendable (GPClipData) async throws -> Void
+    /// Whether the image advertises `clipboard.image.v1`.
+    let imagesSupported: @Sendable () async -> Bool
+    /// Uploads PNG bytes on the bulk stream; answers the transfer ID.
+    let upload: @Sendable (Data) async throws -> UInt64
+    /// The payload of an announced inbound transfer.
+    let inbound: @Sendable (UInt64) async -> Data?
 
     /// Forwards the clip; non-integration errors become ``IntegrationFailure/guestUnavailable``.
     func setClipboard(_ clip: GPClipData) async throws(IntegrationFailure) {
@@ -168,6 +174,25 @@ private struct GuestClipboardChannel: IntegrationChannel {
         } catch {
             throw .guestUnavailable
         }
+    }
+
+    /// `clipboard.image.v1` on the running image (guest-protocol.md §5.3).
+    func supportsImages() async -> Bool {
+        await imagesSupported()
+    }
+
+    /// Sends the image on the bulk stream; a send failure is `guestUnavailable`.
+    func uploadClipboardImage(_ png: Data) async throws(IntegrationFailure) -> UInt64 {
+        do {
+            return try await upload(png)
+        } catch {
+            throw .guestUnavailable
+        }
+    }
+
+    /// The resolved bytes of a guest-announced transfer.
+    func inboundTransfer(_ transferID: UInt64) async -> Data? {
+        await inbound(transferID)
     }
 }
 
@@ -189,24 +214,46 @@ extension RuntimeHost {
                 }
             )
         )
-        let channel = GuestClipboardChannel { [weak self] clip in
-            guard let self,
-                let supervisor = await self.runtimeSupervisorForIntegrations(),
-                let agent = await supervisor.developmentGuestAgent
-            else {
-                throw IntegrationFailure.guestUnavailable
-            }
-            do {
-                _ = try await agent.supervisor.send(GuestSetClipboard(clip: clip))
-            } catch let failure as GuestProtocolFailure {
-                if case .capabilityMissing(let capability) = failure {
-                    throw IntegrationFailure.notSupportedOnImage(capability: capability)
+        let channel = GuestClipboardChannel(
+            send: { [weak self] clip in
+                guard let self,
+                    let supervisor = await self.runtimeSupervisorForIntegrations(),
+                    let agent = await supervisor.developmentGuestAgent
+                else {
+                    throw IntegrationFailure.guestUnavailable
                 }
-                throw IntegrationFailure.guestUnavailable
-            } catch {
-                throw IntegrationFailure.guestUnavailable
-            }
-        }
+                do {
+                    _ = try await agent.supervisor.send(GuestSetClipboard(clip: clip))
+                } catch let failure as GuestProtocolFailure {
+                    if case .capabilityMissing(let capability) = failure {
+                        throw IntegrationFailure.notSupportedOnImage(capability: capability)
+                    }
+                    throw IntegrationFailure.guestUnavailable
+                } catch {
+                    throw IntegrationFailure.guestUnavailable
+                }
+            },
+            imagesSupported: { [weak self] in
+                self?.integrationSettings.supports("clipboard.image.v1") ?? false
+            },
+            upload: { [weak self] png in
+                guard let channel = try await self?.clipboardBulkChannel() else {
+                    throw IntegrationFailure.guestUnavailable
+                }
+                return try await channel.send(
+                    payload: png, kind: .clipboardImage, mimeType: "image/png")
+            },
+            inbound: { [weak self] transferID in
+                guard let channel = try? await self?.clipboardBulkChannel() else {
+                    return nil
+                }
+                // The transfer lands in the transfer cache first, is read
+                // once, and is deleted (desktop-integration.md §4.4).
+                guard let transfer = await channel.transfer(transferID) else {
+                    return nil
+                }
+                return self?.readTransferOnce(transfer)
+            })
         let coordinator = ClipboardCoordinator(policy: policy, channel: channel) {
             [weak self] sessionID, packageID, item in
             await self?.publishGuestClip(sessionID: sessionID, packageID: packageID, item: item)
@@ -252,6 +299,13 @@ extension RuntimeHost {
         }
         clipboardRelayTask = Task.detached { [weak self] in
             guard let agent = await supervisor.developmentGuestAgent else { return }
+            // A guest→host image rides the bulk connection; open it before
+            // the guest can announce a transfer — it otherwise opens lazily
+            // on the first host upload (desktop-integration.md §4.4).
+            await self?.refreshIntegrationCapabilities()
+            if let self, await self.integrationSettings.supports("clipboard.image.v1") {
+                _ = try? await self.clipboardBulkChannel().open()
+            }
             for await clip in agent.clipboardEvents {
                 guard !Task.isCancelled else { return }
                 await self?.clipboardFromGuest(clip)
@@ -709,6 +763,52 @@ extension RuntimeHost {
                     await self?.runtimeSupervisorForIntegrations()?
                         .developmentGuestAgent?.supervisor
                 }))
+        }
+    }
+}
+
+extension RuntimeHost {
+    /// The bulk channel of the current agent session, opened on first use
+    /// (guest-protocol.md §10). A new session token rebuilds it.
+    func clipboardBulkChannel() async throws -> GuestBulkChannel {
+        guard let supervisor = runtimeSupervisorForIntegrations(),
+            let agent = await supervisor.developmentGuestAgent,
+            let token = await agent.supervisor.session?.sessionToken
+        else {
+            throw GuestProtocolFailure.disconnected
+        }
+        if let channel = integrationBulkChannel, channel.token == token {
+            return channel.channel
+        }
+        if let channel = integrationBulkChannel {
+            await channel.channel.close()
+        }
+        let channel = GuestBulkChannel(agent: agent, token: token)
+        integrationBulkChannel = (token, channel)
+        return channel
+    }
+
+    /// Writes a finished transfer into `~/Library/Caches/io.apkrun.APKRun/
+    /// transfers/`, reads it back, and deletes the file
+    /// (desktop-integration.md §4.4). A failure anywhere answers the bytes.
+    nonisolated func readTransferOnce(_ transfer: GuestInboundTransfer) -> Data? {
+        guard !transfer.bytes.isEmpty else { return nil }
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let directory =
+            caches
+            .appendingPathComponent("io.apkrun.APKRun", isDirectory: true)
+            .appendingPathComponent("transfers", isDirectory: true)
+        let file = directory.appendingPathComponent("\(transfer.transferID)")
+        do {
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true)
+            try transfer.bytes.write(to: file, options: .atomic)
+            let bytes = try Data(contentsOf: file)
+            try? FileManager.default.removeItem(at: file)
+            return bytes
+        } catch {
+            try? FileManager.default.removeItem(at: file)
+            return transfer.bytes
         }
     }
 }

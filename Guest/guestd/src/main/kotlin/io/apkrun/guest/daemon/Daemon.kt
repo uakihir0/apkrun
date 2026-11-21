@@ -22,6 +22,9 @@ const val INPUT_SOCKET = "apkrun-guestd-input"
 /** The abstract socket of the bulk channel. */
 const val BULK_SOCKET = "apkrun-guestd-bulk"
 
+/** The installed package whose cache directory stores inbound transfers. */
+private const val GUEST_PACKAGE = "io.apkrun.guest"
+
 /**
  * The daemon: the three sockets, the sessions, the dispatcher, and the services
  * (guest-components.md §6.1). It is built once per process. [start] binds the sockets, starts the
@@ -76,7 +79,9 @@ class Daemon(internal val scope: CoroutineScope) {
     private val packages = PackageService(AndroidPackageCatalog(SystemContext.get().packageManager))
     internal val bulkTransfers = BulkTransfers()
     private val diagnostics = DiagnosticsService(bulkTransfers)
-    internal val clipboard = ClipboardBridge.create(SystemContext.get(), events)
+    internal val inboundTransfers = InboundTransfers(transfersDir())
+    internal val clipboard =
+        ClipboardBridge.create(SystemContext.get(), events, bulkTransfers, inboundTransfers)
     internal val notifications =
         NotificationBridge(events, ApkRunNotificationListener.access()).also {
             ApkRunNotificationListener.bridge = it
@@ -136,6 +141,23 @@ class Daemon(internal val scope: CoroutineScope) {
         sockets.forEach { it.start() }
         AgentLog.info("apkrun_guestd is serving the control, input, and bulk sockets")
     }
+
+    /**
+     * The directory inbound transfer files land in. In privileged mode the agent runs inside the
+     * `io.apkrun.guest` app, and TransferFileProvider resolves files under this same directory in
+     * the app process. The development agent runs as the shell uid (guest-components.md §3.2) and
+     * cannot write that private directory — it uses the shell-writable log directory instead; the
+     * provider path the URI grant needs is privileged-mode only (guest-components.md §5).
+     */
+    private fun transfersDir(): java.io.File =
+        if (android.os.Process.myUid() == android.os.Process.SHELL_UID) {
+            java.io.File("/data/local/tmp/apkrun/transfers")
+        } else {
+            java.io.File(
+                SystemContext.get().createPackageContext(GUEST_PACKAGE, 0).cacheDir,
+                "transfers",
+            )
+        }
 
     private fun serve(socket: LocalSocket, channel: ChannelKind) {
         scope.launch(Dispatchers.IO) { Connection(socket, channel, this@Daemon).run() }

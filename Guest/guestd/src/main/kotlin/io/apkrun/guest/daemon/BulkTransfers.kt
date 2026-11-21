@@ -13,24 +13,25 @@ import java.security.MessageDigest
  * frames go to the one open bulk connection. A send while no bulk connection is open reports
  * failure instead of queueing, so the announcing reply and the frames never disagree.
  */
-class BulkTransfers {
+class BulkTransfers : ClipboardBridge.BulkImageSender {
     private val lock = Any()
-    private var writer: FrameWriter? = null
+
+    /** The open bulk connections, newest first; sends go to the newest. */
+    private val writers = ArrayDeque<FrameWriter>()
     private var nextTransferId = 1L
 
     /** Makes [writer] the bulk connection's sink until [detach]. Only one is kept. */
     fun attach(writer: FrameWriter) {
         synchronized(lock) {
-            this.writer = writer
+            writers.remove(writer)
+            writers.addFirst(writer)
         }
     }
 
-    /** Stops sending on [writer]. */
+    /** Stops sending on [writer]; an older connection becomes the sink again. */
     fun detach(writer: FrameWriter) {
         synchronized(lock) {
-            if (this.writer === writer) {
-                this.writer = null
-            }
+            writers.remove(writer)
         }
     }
 
@@ -38,10 +39,24 @@ class BulkTransfers {
      * Sends [payload] as a [BulkKind.BULK_KIND_DIAGNOSTICS_ITEM] transfer and returns its transfer
      * ID, or `null` when no bulk connection is open. The frames are whole before this returns.
      */
-    fun sendDiagnosticsItem(name: String, mimeType: String, payload: ByteArray): Long? {
+    fun sendDiagnosticsItem(name: String, mimeType: String, payload: ByteArray): Long? =
+        send(BulkKind.BULK_KIND_DIAGNOSTICS_ITEM, name, mimeType, payload)
+
+    /**
+     * Sends PNG bytes as a [BulkKind.BULK_KIND_CLIPBOARD_IMAGE] transfer and returns its transfer
+     * ID, or `null` when no bulk connection is open.
+     */
+    override fun sendClipboardImage(png: ByteArray): Long? =
+        send(BulkKind.BULK_KIND_CLIPBOARD_IMAGE, "clip.png", "image/png", png)
+
+    /**
+     * Sends [payload] as a transfer of [kind] and returns its transfer ID, or `null` when no bulk
+     * connection is open. The frames are whole before this returns.
+     */
+    fun send(kind: BulkKind, name: String, mimeType: String, payload: ByteArray): Long? {
         val digest = MessageDigest.getInstance("SHA-256").digest(payload)
         synchronized(lock) {
-            val target = writer ?: return null
+            val target = writers.firstOrNull() ?: return null
             val transferId = nextTransferId
             nextTransferId += 2
             target.send { envelope ->
@@ -50,7 +65,7 @@ class BulkTransfers {
                         .setTransferId(transferId)
                         .setBegin(
                             BulkBegin.newBuilder()
-                                .setKind(BulkKind.BULK_KIND_DIAGNOSTICS_ITEM)
+                                .setKind(kind)
                                 .setName(name)
                                 .setMimeType(mimeType)
                                 .setSize(payload.size.toLong())

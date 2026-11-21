@@ -307,6 +307,23 @@ public actor GuestConnection {
         yieldFrame(frame)
     }
 
+    /// Sends one bulk frame on the bulk endpoint, as a `BulkFrame` envelope
+    /// (guest-protocol.md §10): begin, chunk, end, ack, or abort of a transfer
+    /// the host announced on the control channel. It fails with the
+    /// connection's failure when the connection is not usable. Only the bulk
+    /// endpoint carries frames.
+    public func sendBulkFrame(_ bulkFrame: GPBulkFrame) throws(GuestProtocolFailure) {
+        precondition(endpoint == .guestBulk, "Bulk frames go only to the bulk endpoint (guest-protocol.md §10)")
+        guard isUsable else {
+            throw failure ?? .disconnected
+        }
+        var envelope = GPEnvelope()
+        envelope.id = allocateEnvelopeID()
+        envelope.body = .bulk(bulkFrame)
+        let frame = try FrameCodec.encode(envelope)
+        yieldFrame(frame)
+    }
+
     /// Sends one IME command on the development IME endpoint, as an `ImeCommand` envelope (input.md §5.1). It fails
     /// with the connection's failure when the connection is not usable. Only the IME endpoint carries commands.
     public func sendImeCommand(_ command: GPImeCommand) throws(GuestProtocolFailure) {

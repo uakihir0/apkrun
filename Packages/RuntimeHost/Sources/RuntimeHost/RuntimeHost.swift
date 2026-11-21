@@ -168,6 +168,9 @@ public actor RuntimeHost {
     /// `integrations.notificationListener` registers once when the
     /// notification coordinator is created.
     var integrationHealthChecksRegistered = false
+    /// The persistent `.guestBulk` connection of the current agent session
+    /// (guest-protocol.md §10), keyed by its session token.
+    var integrationBulkChannel: (token: Data, channel: GuestBulkChannel)?
     /// The guest→coordinator clip relay; alive while the guest agent is.
     var clipboardRelayTask: Task<Void, Never>?
     /// The guest→coordinator notification relay; alive while the agent is.

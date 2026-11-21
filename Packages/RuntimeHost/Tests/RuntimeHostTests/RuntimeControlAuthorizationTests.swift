@@ -55,6 +55,7 @@ import Testing
     #expect(!RuntimeControlOperation.importPackage.allows(.launcher))
     #expect(!RuntimeControlOperation.installImported.allows(.launcher))
     #expect(!RuntimeControlOperation.beginUninstallPackage.allows(.launcher))
+    #expect(!RuntimeControlOperation.listSessions.allows(.launcher))
     #expect(!RuntimeControlOperation.configuration.allows(.launcher))
     #expect(!RuntimeControlOperation.updateConfiguration.allows(.launcher))
     #expect(allOperations.allSatisfy { !$0.allows(.wrapper) })

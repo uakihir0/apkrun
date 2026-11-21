@@ -5,6 +5,7 @@ import SwiftUI
 /// and the APKRun + Android update controls (`maintenance.*`).
 struct GeneralPane: View {
     @Bindable var model: SettingsModel
+    @StateObject private var menuBarSettings = MenuBarItemSettingsModel()
 
     var body: some View {
         Form {
@@ -12,8 +13,15 @@ struct GeneralPane: View {
                 Toggle(
                     "Show APKRun in the menu bar",
                     isOn: Binding(
-                        get: { Self.menuBarEnabled },
-                        set: { Self.setMenuBarEnabled($0) }))
+                        get: { menuBarSettings.isEnabled },
+                        set: { menuBarSettings.setEnabled($0) }))
+                if menuBarSettings.needsApproval {
+                    Text("Allow APKRunMenuBar in System Settings > General > Login Items.")
+                        .foregroundStyle(.secondary)
+                }
+                if let menuBarError = menuBarSettings.errorMessage {
+                    Text(menuBarError).foregroundStyle(.secondary)
+                }
                 LabeledContent("Default location for new Mac apps") {
                     Picker(
                         "Default location",
@@ -89,17 +97,4 @@ struct GeneralPane: View {
             set: { model.set(key, $0 ? "true" : "false") })
     }
 
-    /// §9.1: the menu bar item is a login item, not a settings key
-    /// (configuration.md §2.10).
-    private static var menuBarEnabled: Bool {
-        SMAppService.loginItem(identifier: "io.apkrun.APKRunMenuBar").status
-            == .enabled
-    }
-
-    private static func setMenuBarEnabled(_ enabled: Bool) {
-        let item = SMAppService.loginItem(identifier: "io.apkrun.APKRunMenuBar")
-        Task {
-            try? await (enabled ? item.register() : item.unregister())
-        }
-    }
 }

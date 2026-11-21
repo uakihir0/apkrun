@@ -35,6 +35,11 @@ struct APKRunApp: App {
                 home.importFiles(urls)
             }
         }
+        // First launch registers the menu-bar login item and starts the
+        // helper when it is already enabled (menu-bar.md).
+        Task { @MainActor in
+            MenuBarItemSettingsModel().initializeForApplicationLaunch()
+        }
 
         do {
             if try RuntimeRegistrationCommand.registerRuntimeAgentIfNeeded() {

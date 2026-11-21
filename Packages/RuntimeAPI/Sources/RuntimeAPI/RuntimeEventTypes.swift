@@ -284,12 +284,12 @@ public enum EventPayload: Codable, Equatable, Sendable {
 
     private enum CaseKey: String, CodingKey {
         case runtime
+        case sessions
         case packages
         case operations
-        case resyncRequired
         case wrappers
         case integrations
-        case sessions
+        case resyncRequired
         case stream
     }
 

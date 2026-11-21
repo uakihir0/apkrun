@@ -4190,7 +4190,8 @@
   {
    "code": "wrapper.destinationNotAccessible",
    "parameters": [
-    "file"
+    "file",
+    "stagingToken"
    ],
    "message": {
     "en": "APKRun's background service can't access the folder {file}."
@@ -4386,6 +4387,25 @@
     "when": "codesign returns a non-zero status during ad-hoc signing",
     "raisedBy": "WrapperSigner",
     "ref": "wrapper.md §7.1"
+   }
+  },
+  {
+   "code": "wrapper.launchServicesMissing",
+   "parameters": [],
+   "message": {
+    "en": "LaunchServices no longer knows one or more APKRun Mac apps."
+   },
+   "remediation": {
+    "en": "Open each Mac app once from its folder so macOS registers it again."
+   },
+   "action": "retry",
+   "cliExit": 0,
+   "doc": {
+    "table": "wrapperFailure",
+    "case": "(health)",
+    "when": "the wrappers.registration health check finds a registered wrapper LaunchServices forgot",
+    "raisedBy": "WrapperHealthChecks",
+    "ref": "wrapper.md §14"
    }
   },
   {

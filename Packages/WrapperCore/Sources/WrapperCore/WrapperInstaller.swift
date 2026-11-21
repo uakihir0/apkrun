@@ -141,11 +141,35 @@ public struct WrapperInstaller: Sendable {
                 error.code == NSFileWriteNoPermissionError
                     || error.code == NSFileReadNoPermissionError
             {
-                return .destinationNotAccessible(directory, stagingToken: stagingToken)
+                // macOS privacy controls (TCC) answer EPERM; plain permission
+                // bits answer EACCES. Only the former defers to the client
+                // (wrapper.md §6.3).
+                let posix = error.userInfo[NSUnderlyingErrorKey] as? NSError
+                if posix?.domain == NSPOSIXErrorDomain, posix?.code == Int(EPERM) {
+                    return .destinationNotAccessible(directory, stagingToken: stagingToken)
+                }
+                return .destinationNotWritable(directory)
             }
             return .destinationNotWritable(directory)
         }
         return nil
+    }
+
+    /// Runs the registration tail of §6.2 for a bundle the client already
+    /// moved into place: `LSRegisterURL` plus `noteFileSystemChanged`
+    /// (steps 12–13). Returns the non-fatal registration failure.
+    @discardableResult
+    public func registerPlaced(at finalURL: URL) -> WrapperFailure? {
+        let status = register(finalURL)
+        var warning: WrapperFailure?
+        if status != noErr {
+            warning = .registrationFailed(status)
+            logger.warning(
+                "LSRegisterURL failed with status \(status, .public).",
+                errorCode: "wrapper.registrationFailed")
+        }
+        noteChanged(finalURL)
+        return warning
     }
 
     /// Moves `staged` to `finalURL`; returns the failure on error (kept

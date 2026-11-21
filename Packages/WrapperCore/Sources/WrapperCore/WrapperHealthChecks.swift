@@ -1,5 +1,14 @@
+import CoreServices
 import DiagnosticsCore
 import Foundation
+
+/// Private LaunchServices lookup for bundle IDs (wrapper.md §14:
+/// `wrappers.registration` reports wrappers LaunchServices forgot).
+@_silgen_name("LSCopyApplicationURLsForBundleIdentifier")
+private func _LSCopyApplicationURLsForBundleIdentifier(
+    _ bundleID: CFString,
+    _ error: UnsafeMutablePointer<Unmanaged<CFError>?>?
+) -> Unmanaged<CFArray>?
 
 /// The `wrappers.*` health checks owned by WrapperCore (wrapper.md §14).
 public enum WrapperHealthChecks {
@@ -11,6 +20,90 @@ public enum WrapperHealthChecks {
     /// A `wrappers.registry` check bound to a registry.
     public static func registry(_ registry: WrapperRegistry) -> any HealthCheck {
         RegistryCheck(registry: registry)
+    }
+
+    /// A `wrappers.registration` check that warns when a registered
+    /// wrapper's bundle ID is unknown to LaunchServices (wrapper.md §14).
+    /// `knownToLaunchServices` is injectable for tests; never run
+    /// `mdimport` or the `lsregister` tool here.
+    public static func registration(
+        _ registry: WrapperRegistry,
+        knownToLaunchServices: (@Sendable (String) -> Bool)? = nil
+    ) -> any HealthCheck {
+        RegistrationCheck(
+            registry: registry,
+            knownToLaunchServices: knownToLaunchServices ?? { bundleID in
+                _LSCopyApplicationURLsForBundleIdentifier(bundleID as CFString, nil)
+                    .map { CFArrayGetCount($0.takeRetainedValue()) > 0 } ?? false
+            })
+    }
+}
+
+private struct RegistrationCheck: HealthCheck {
+    let registry: WrapperRegistry
+    let knownToLaunchServices: @Sendable (String) -> Bool
+
+    var id: HealthCheckID { "wrappers.registration" }
+    var group: HealthGroup { .macApps }
+    var requirement: HealthRequirement { .host }
+    var cost: HealthCost { .quick }
+    var title: LocalizedText { LocalizedText(key: id, fallback: "LaunchServices registration") }
+
+    func run(_ context: HealthContext) async -> HealthResult {
+        let outcome = await registry.load()
+        guard case .ready = outcome else {
+            return HealthResult(
+                id: id,
+                group: group,
+                state: .warning,
+                title: title,
+                detail: "The wrapper registry is unreadable.",
+                error: ErrorInfo(
+                    code: "wrapper.registryUnavailable",
+                    message: LocalizedText(
+                        key: "wrapper.registryUnavailable",
+                        fallback: "The wrapper registry is unreadable."),
+                    remediation: LocalizedText(
+                        key: "wrapper.registryUnavailable.remediation",
+                        fallback: "Re-register Mac apps from the home screen.")
+                ),
+                fixAvailable: false,
+                lastKnown: nil,
+                measuredAt: Date()
+            )
+        }
+        let missing = await registry.entries()
+            .filter { $0.state == .active }
+            .filter { !knownToLaunchServices($0.bundleId) }
+        let state = missing.isEmpty ? HealthState.pass : .warning
+        let detail =
+            missing.isEmpty
+            ? "LaunchServices knows every registered wrapper."
+            : "LaunchServices does not know \(missing.count) registered wrapper(s): "
+                + missing.map(\.fileName).sorted().joined(separator: ", ")
+        let error: ErrorInfo? =
+            missing.isEmpty
+            ? nil
+            : ErrorInfo(
+                code: "wrapper.launchServicesMissing",
+                message: LocalizedText(
+                    key: "wrapper.launchServicesMissing", fallback: detail),
+                remediation: LocalizedText(
+                    key: "wrapper.launchServicesMissing.remediation",
+                    fallback: "Open each Mac app once from its folder."),
+                action: .retry
+            )
+        return HealthResult(
+            id: id,
+            group: group,
+            state: state,
+            title: title,
+            detail: detail,
+            error: error,
+            fixAvailable: false,
+            lastKnown: nil,
+            measuredAt: Date()
+        )
     }
 }
 

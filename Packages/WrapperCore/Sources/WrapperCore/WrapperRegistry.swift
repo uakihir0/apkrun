@@ -387,6 +387,18 @@ public actor WrapperRegistry {
         try save()
     }
 
+    /// The pending entry waiting in `staging/<token>/`, for a
+    /// `placeStagedWrapper` call (wrapper.md §6.3).
+    public func pendingEntry(stagingToken: String) -> WrapperRegistryEntry? {
+        document.wrappers.first {
+            $0.state == .pending
+                && $0.stagingPath.map {
+                    URL(fileURLWithPath: $0).deletingLastPathComponent()
+                        .lastPathComponent == stagingToken
+                } ?? false
+        }
+    }
+
     /// Records the moved or renamed location of an entry (wrapper-json.md §4.3).
     public func updateLocation(bundleID: String, path: URL, bookmark: Data) throws {
         guard var entry = entry(bundleID: bundleID) else { return }

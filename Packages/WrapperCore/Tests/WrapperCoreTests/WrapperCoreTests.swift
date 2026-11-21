@@ -1,4 +1,5 @@
 import CryptoKit
+import DiagnosticsCore
 import Foundation
 import RuntimeAPI
 import Testing
@@ -392,4 +393,52 @@ private func sha256Tree(at url: URL) throws -> [String: String] {
     let siblings = try FileManager.default.contentsOfDirectory(atPath: fixture.root.path)
     #expect(!siblings.contains { $0.hasSuffix(".tmp") })
     #expect(siblings.contains("registry.json"))
+}
+
+// MARK: - T0: placeStagedWrapper support (wrapper.md §6.3)
+
+@Test func pendingEntryMatchesStagingToken() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.cleanup() }
+    let registry = fixture.registry
+    var entry = WrapperRegistryEntry(
+        bundleId: "io.apkrun.android.com.example.game",
+        packageId: "com.example.game",
+        kind: .local,
+        state: .pending,
+        path: fixture.destination.appendingPathComponent("Game.app").path,
+        cdhash: "cd",
+        launcherVersion: "0.1.0",
+        launcherAPI: "1.0",
+        fileName: "Game",
+        displayName: "Game",
+        createdAt: Date()
+    )
+    entry.stagingPath =
+        fixture.staging
+        .appendingPathComponent("tok-123", isDirectory: true)
+        .appendingPathComponent("Game.app").path
+    try await registry.markPending(entry)
+    #expect(await registry.pendingEntry(stagingToken: "tok-123")?.bundleId == entry.bundleId)
+    #expect(await registry.pendingEntry(stagingToken: "other") == nil)
+}
+
+@Test func registrationCheckWarnsWhenLaunchServicesForgets() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.cleanup() }
+    _ = try await fixture.generator().generate(fixture.request())
+    let context = HealthContext(
+        daemonAvailable: true,
+        runtimeRunning: false,
+        paths: APKRunPaths(
+            allowingHomeOverride: true,
+            environment: ["APKRUN_HOME": fixture.root.path]
+        )
+    )
+    let known = WrapperHealthChecks.registration(fixture.registry) { _ in true }
+    #expect(await known.run(context).state == .pass)
+    let unknown = WrapperHealthChecks.registration(fixture.registry) { _ in false }
+    let result = await unknown.run(context)
+    #expect(result.state == .warning)
+    #expect(result.error?.code == "wrapper.launchServicesMissing")
 }

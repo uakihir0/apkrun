@@ -175,9 +175,19 @@ public actor AppWrapperGenerator {
         let bundleID = BundleIDMapper.map(configuration.packageID)
 
         // 3. resolve the destination and check conflicts (wrapper.md §6.4).
+        //    A TCC-protected destination defers placement (§6.3): the bundle
+        //    is still built and signed in staging, the client moves it, and
+        //    `placeStagedWrapper` finishes registration.
         let stagingID = newStagingToken()
-        let destination = try environment.installer.resolveDestination(
-            request.destination, stagingToken: stagingID)
+        var deferredDestination: URL?
+        let destination: URL
+        do {
+            destination = try environment.installer.resolveDestination(
+                request.destination, stagingToken: stagingID)
+        } catch WrapperFailure.destinationNotAccessible(let directory, _) {
+            deferredDestination = directory
+            destination = directory
+        }
         let finalURL = destination.appendingPathComponent("\(fileName).app", isDirectory: true)
         let existing = await environment.registry.entry(bundleID: bundleID)
         // The security bookmark tracks the bundle across a move in Finder,
@@ -212,7 +222,9 @@ public actor AppWrapperGenerator {
                 throw .wrapperExists(configuration.packageID, existingURL)
             }
         }
-        if fileManager.fileExists(atPath: finalURL.path) {
+        // A protected folder cannot be listed; the client's move handles
+        // whatever already sits at the name it picks.
+        if deferredDestination == nil, fileManager.fileExists(atPath: finalURL.path) {
             if environment.installer.isWrapperOf(configuration.packageID, at: finalURL) {
                 guard request.replace == .sameWrapper else {
                     throw .wrapperExists(configuration.packageID, finalURL)
@@ -272,7 +284,13 @@ public actor AppWrapperGenerator {
             throw .registryUnavailable
         }
 
-        // 11. place.
+        // 11. place. A deferred destination leaves the bundle staged: the
+        // pending entry's stagingPath carries the token `placeStagedWrapper`
+        // matches, and staging cleanup expires it (wrapper.md §6.3).
+        if let deferredDestination {
+            throw .destinationNotAccessible(
+                deferredDestination, stagingToken: stagingID)
+        }
         _ = try environment.installer.place(staged: stagedBundle, to: finalURL)
 
         // 12. bookmark + active.

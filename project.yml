@@ -13,6 +13,9 @@ configs:
 packages:
   APKRun:
     path: .
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.10.1
 
 aggregateTargets:
   BuildStamp:
@@ -34,14 +37,18 @@ settings:
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
     APKRUN_CHANNEL: "dev"
+    APKRUN_SU_FEED_URL: "https://apkrun.io/apkrun/appcast.xml"
+    APKRUN_SU_PUBLIC_ED_KEY: "SWpdhgyuYC9qtfgHtlSL8IwmHxmK0XqB21A6bc8GlKs="
     ENABLE_HARDENED_RUNTIME: YES
     SWIFT_TREAT_WARNINGS_AS_ERRORS: "$(APKRUN_CI)"
     GCC_TREAT_WARNINGS_AS_ERRORS: "$(APKRUN_CI)"
   configs:
     Debug:
       APKRUN_BUILD_IDENTITY: dev
+      GCC_PREPROCESSOR_DEFINITIONS: "APKRUN_SELF_UPDATE=0"
     Release:
       APKRUN_BUILD_IDENTITY: release
+      GCC_PREPROCESSOR_DEFINITIONS: "APKRUN_SELF_UPDATE=1"
 
 targets:
   APKRun:
@@ -74,6 +81,8 @@ targets:
         product: RuntimeAPI
       - package: APKRun
         product: DiagnosticsCore
+      - package: Sparkle
+        product: Sparkle
       - target: apkrund
         embed: false
         link: false

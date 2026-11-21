@@ -86,6 +86,12 @@ let package = Package(
             url: "https://github.com/weichsel/ZIPFoundation.git",
             exact: "0.9.20"
         ),
+        // Sparkle is linked into APKRun.app only (through project.yml);
+        // it is pinned here so the third-party lock check sees it.
+        .package(
+            url: "https://github.com/sparkle-project/Sparkle.git",
+            exact: "2.10.1"
+        ),
     ],
     targets: [
         .target(name: "DiagnosticsCore", path: "Packages/DiagnosticsCore/Sources/DiagnosticsCore"),

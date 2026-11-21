@@ -749,14 +749,27 @@ extension RuntimeHost {
     /// `keys` nil returns all four.
     func updateConfigValues(keys: [String]?) -> [String: String] {
         let globals = GlobalSettings.load(from: paths.settingsFile)
-        let all: [String: String] = [
+        var all: [String: String] = [
             "updates.checkIntervalHours": String(globals.updatesCheckIntervalHours),
             "updates.downloadOnExpensiveNetwork":
                 globals.updatesDownloadOnExpensiveNetwork ? "true" : "false",
             "updates.startRuntimeToInstall":
                 globals.updatesStartRuntimeToInstall ? "true" : "false",
             "updates.notifyInstalled": globals.updatesNotifyInstalled ? "true" : "false",
+            "developer.enabled": globals.developerEnabled ? "true" : "false",
         ]
+        for (name, value) in globals.integrationsEnabled {
+            all["integrations.enabled.\(name)"] = value ? "true" : "false"
+        }
+        for (name, value) in globals.integrationsDefaults {
+            all["integrations.defaults.\(name)"] = value
+        }
+        for (key, defaultValue) in GlobalSettings.extraDefaults {
+            all[key] = globals.extras[key] ?? defaultValue
+        }
+        for (key, value) in globals.extras where all[key] == nil {
+            all[key] = value
+        }
         guard let keys else { return all }
         return all.filter { keys.contains($0.key) }
     }
@@ -793,10 +806,79 @@ extension RuntimeHost {
             default:
                 globals.updatesNotifyInstalled = flag
             }
+        case "developer.enabled":
+            guard let flag = Self.configBool(value, key: key) else {
+                throw Self.invalidConfigValue(key, "true or false")
+            }
+            globals.developerEnabled = flag
+        case let integrationKey where integrationKey.hasPrefix("integrations.enabled."):
+            let name = String(integrationKey.dropFirst("integrations.enabled.".count))
+            guard !name.isEmpty else { throw Self.unknownConfigKey(key) }
+            guard let flag = Self.configBool(value, key: key) else {
+                throw Self.invalidConfigValue(key, "true or false")
+            }
+            globals.integrationsEnabled[name] = flag
+        case let integrationKey where integrationKey.hasPrefix("integrations.defaults."):
+            let name = String(integrationKey.dropFirst("integrations.defaults.".count))
+            guard !name.isEmpty else { throw Self.unknownConfigKey(key) }
+            switch name {
+            case "links":
+                guard ["ask", "mac", "android"].contains(value) else {
+                    throw Self.invalidConfigValue(key, "ask, mac, or android")
+                }
+            case "sharedFolders":
+                guard ["off", "readOnly", "readWrite"].contains(value) else {
+                    throw Self.invalidConfigValue(key, "off, readOnly, or readWrite")
+                }
+            default:
+                guard Self.configBool(value, key: key) != nil else {
+                    throw Self.invalidConfigValue(key, "true or false")
+                }
+            }
+            globals.integrationsDefaults[name] = value
+        case "runtime.startPolicy":
+            guard ["onDemand", "atLogin"].contains(value) else {
+                throw Self.invalidConfigValue(key, "onDemand or atLogin")
+            }
+            globals.extras[key] = value
+        case "maintenance.channel":
+            guard ["stable", "beta"].contains(value) else {
+                throw Self.invalidConfigValue(key, "stable or beta")
+            }
+            globals.extras[key] = value
+        case "maintenance.installImages":
+            guard ["automatic", "ask"].contains(value) else {
+                throw Self.invalidConfigValue(key, "automatic or ask")
+            }
+            globals.extras[key] = value
+        case "wrappers.defaultLocation":
+            guard ["userApplications", "allUsersApplications", "ask"].contains(value)
+            else {
+                throw Self.invalidConfigValue(
+                    key, "userApplications, allUsersApplications, or ask")
+            }
+            globals.extras[key] = value
+        case "runtime.idleSuspendMinutes", "runtime.idleStopMinutes":
+            try Self.configInt(key, value, range: 0...1440, into: &globals)
+        case "runtime.cpuCount":
+            try Self.configInt(key, value, range: 2...16, into: &globals)
+        case "runtime.memoryGiB":
+            try Self.configInt(key, value, range: 3...128, into: &globals)
+        case "runtime.userdataGiB":
+            try Self.configInt(key, value, range: 8...256, into: &globals)
+        case "display.maxSessions":
+            try Self.configInt(key, value, range: 1...15, into: &globals)
+        case "runtime.autoRestart", "audio.output", "graphics.safeMode",
+            "maintenance.checkAutomatically", "maintenance.installAPKRunAutomatically",
+            "maintenance.downloadImagesAutomatically",
+            "maintenance.notifyImageInstalled", "system.syncLocale",
+            "system.syncTimeZone", "system.syncClockFormat":
+            guard Self.configBool(value, key: key) != nil else {
+                throw Self.invalidConfigValue(key, "true or false")
+            }
+            globals.extras[key] = value
         default:
-            throw RuntimeWireError(
-                domain: "runtime", code: "runtime.unknownConfigKey",
-                message: "unknown setting \(key); run `apkrun config get` to list the keys")
+            throw Self.unknownConfigKey(key)
         }
         try GlobalSettings.store(globals, to: paths.settingsFile)
         return updateConfigValues(keys: nil)
@@ -1806,5 +1888,34 @@ extension RuntimeHost {
     /// "time remaining" sentinel for AC.
     static func hostOnACPower() -> Bool {
         IOPSGetTimeRemainingEstimate() == -2.0
+    }
+}
+
+extension RuntimeHost {
+    static func configBool(_ value: String, key _: String) -> Bool? {
+        value == "true" ? true : value == "false" ? false : nil
+    }
+
+    static func invalidConfigValue(_ key: String, _ allowed: String) -> RuntimeWireError {
+        RuntimeWireError(
+            domain: "runtime", code: "runtime.invalidConfigValue",
+            message: "\(key) must be \(allowed)")
+    }
+
+    static func unknownConfigKey(_ key: String) -> RuntimeWireError {
+        RuntimeWireError(
+            domain: "runtime", code: "runtime.unknownConfigKey",
+            message: "unknown setting \(key); run `apkrun config get` to list the keys")
+    }
+
+    static func configInt(
+        _ key: String, _ value: String, range: ClosedRange<Int>,
+        into globals: inout GlobalSettings
+    ) throws {
+        guard let number = Int(value), range.contains(number) else {
+            throw invalidConfigValue(
+                key, "an integer from \(range.lowerBound) to \(range.upperBound)")
+        }
+        globals.extras[key] = value
     }
 }

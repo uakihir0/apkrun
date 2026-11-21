@@ -22,7 +22,8 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.22 adds `repairPackage` (package-store.md §11.1).
     /// 1.23 adds `listSessions`, `packageIcon`, and `sessions` topic events
     /// (host-ui.md §5.2–§5.3).
-    public static let current = APIVersion(major: 1, minor: 23)
+    /// 1.24 adds `packageSettings` and `updatePackageSettings` (host-ui.md §7).
+    public static let current = APIVersion(major: 1, minor: 25)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -795,6 +796,12 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func listUpdates(_ request: Data, reply: @escaping (Data) -> Void)
     /// Reads update history (runtime-api.md §9.1, update-system.md §10.2).
     func updateHistory(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns the package's stored `settings.json` groups (host-ui.md §7).
+    /// Reply: `RuntimePackageSettingsControlReply`.
+    func packageSettings(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Applies a `settings.json` patch and returns the stored settings
+    /// (host-ui.md §7). Reply: `RuntimeUpdatePackageSettingsControlReply`.
+    func updatePackageSettings(_ request: Data, reply: @escaping (Data) -> Void)
     /// Sets a package's update mode and provider (runtime-api.md §9.1).
     func setUpdatePolicy(_ request: Data, reply: @escaping (Data) -> Void)
     /// Sets a package's update authority (runtime-api.md §9.1, update-system.md §2.1).

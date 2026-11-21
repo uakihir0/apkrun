@@ -1983,6 +1983,26 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         }
     }
 
+    func packageSettings(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimePackageSettingsControlReply(
+                    result: PackageSettingsWire(groups: [:], recommended: [:], entries: [])))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func updatePackageSettings(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                RuntimePackageSettingsControlReply(
+                    result: PackageSettingsWire(groups: [:], recommended: [:], entries: [])))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
     func integrationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         do {
             return try JSONEncoder().encode(

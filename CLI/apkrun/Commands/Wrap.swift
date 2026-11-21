@@ -556,9 +556,12 @@
         }
 
         /// Resolves `--output` to the wire destination with the user's own
-        /// file access (cli.md §4.4).
+        /// file access (cli.md §4.4). Without `--output` the CLI asks for
+        /// `~/Applications` explicitly (wrapper.md §12.2); the
+        /// `wrappers.defaultLocation` setting only governs the GUI's nil
+        /// destination (runtime-api.md §10.3).
         static func destination(for output: String?) throws -> WireWrapperDestination? {
-            guard let output else { return nil }
+            guard let output else { return .userApplications }
             let url = URL(fileURLWithPath: output).standardizedFileURL
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),

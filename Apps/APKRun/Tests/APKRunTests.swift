@@ -14,7 +14,19 @@ final class FakeRuntimeService: RuntimeService, @unchecked Sendable {
     var error: (any Error)?
     var callCounts: [String: Int] = [:]
 
-    private func count(_ name: String) { callCounts[name, default: 0] += 1 }
+    private let lock = NSLock()
+
+    private func count(_ name: String) {
+        lock.lock()
+        callCounts[name, default: 0] += 1
+        lock.unlock()
+    }
+
+    private func record(_ body: () -> Void) {
+        lock.lock()
+        body()
+        lock.unlock()
+    }
 
     func runtimeStatus() async throws -> RuntimeHostStatus {
         count("runtimeStatus")
@@ -105,6 +117,20 @@ final class FakeRuntimeService: RuntimeService, @unchecked Sendable {
         return OperationHandle(operationID: OperationID(), kind: .wrapperRefresh)
     }
 
+    var refreshChange: WrapperRefreshWire?
+    var refreshIcon: FileHandle?
+    func refreshWrapper(
+        packageID: RuntimePackageID,
+        change: WrapperRefreshWire,
+        iconFile: FileHandle?
+    ) async throws -> OperationHandle {
+        record {
+            refreshChange = change
+            refreshIcon = iconFile
+        }
+        return try await refreshWrapper(packageID: packageID)
+    }
+
     func repairPackage(packageID: RuntimePackageID) async throws -> OperationHandle {
         count("repairPackage")
         return OperationHandle(operationID: OperationID(), kind: .repair)
@@ -128,8 +154,14 @@ final class FakeRuntimeService: RuntimeService, @unchecked Sendable {
         return OperationHandle(operationID: operationID, kind: .install)
     }
 
+    var operationResultOverride: OperationResult?
     func operationStatus(_ operationID: OperationID) async throws -> OperationSnapshot {
         count("operationStatus")
+        if let operationResultOverride {
+            return OperationSnapshot(
+                operationID: operationID, kind: .install, startedAt: Date(),
+                result: operationResultOverride)
+        }
         return OperationSnapshot(
             operationID: operationID, kind: .install, startedAt: Date(),
             result: .succeeded(
@@ -181,6 +213,120 @@ final class FakeRuntimeService: RuntimeService, @unchecked Sendable {
 
     func subscribe(to topic: EventTopic) async throws -> AsyncStream<EventEnvelope> {
         AsyncStream { $0.finish() }
+    }
+
+    var details: RuntimePackageDetails?
+    var settings: PackageSettingsWire?
+    var integration: IntegrationStatus?
+    var settingPatches: [RuntimePackageSettingsPatch] = []
+    var policies: [UpdatePolicy] = []
+    var authorities: [AuthorityChoice] = []
+    var configValues: [String: String] = [:]
+    var configSets: [(String, String)] = []
+
+    func packageInfo(packageID: RuntimePackageID) async throws -> RuntimePackageDetails {
+        count("packageInfo")
+        if let error { throw error }
+        return details
+            ?? RuntimePackageDetails(
+                summary: package(packageID.rawValue), files: [], artifactBytes: 1024)
+    }
+
+    func packageSettings(_ packageID: RuntimePackageID) async throws -> PackageSettingsWire? {
+        count("packageSettings")
+        return settings
+    }
+
+    func updatePackageSettings(
+        _ packageID: RuntimePackageID, patch: RuntimePackageSettingsPatch
+    ) async throws -> PackageSettingsWire {
+        count("updatePackageSettings")
+        record { settingPatches.append(patch) }
+        if let error { throw error }
+        return settings ?? PackageSettingsWire(groups: [:], recommended: [:], entries: [])
+    }
+
+    func integrationStatus(packageID: RuntimePackageID) async throws -> IntegrationStatus {
+        count("integrationStatus")
+        return integration
+            ?? IntegrationStatus(packageID: packageID, items: [], microphoneNeedsRestart: false)
+    }
+
+    func setUpdatePolicy(
+        packageID: RuntimePackageID, policy: UpdatePolicy
+    ) async throws -> PackageUpdateStatus {
+        count("setUpdatePolicy")
+        record { policies.append(policy) }
+        return updates.first { $0.packageID == packageID }
+            ?? PackageUpdateStatus(
+                packageID: packageID, choice: policy.choice, authority: "apkrun",
+                provider: nil, phase: nil, candidate: nil,
+                lastCheckAt: nil, nextCheckAt: nil, consecutiveFailures: 0, waiting: [])
+    }
+
+    func setUpdateAuthority(
+        packageID: RuntimePackageID, authority: AuthorityChoice
+    ) async throws -> PackageUpdateStatus {
+        count("setUpdateAuthority")
+        record { authorities.append(authority) }
+        return PackageUpdateStatus(
+            packageID: packageID, choice: nil, authority: authority.rawValue,
+            provider: nil, phase: nil, candidate: nil,
+            lastCheckAt: nil, nextCheckAt: nil, consecutiveFailures: 0, waiting: [])
+    }
+
+    var rollbackCalls: [Bool] = []
+    var rollbackReply = RuntimeRollbackPackageControlReply(rolledBackTo: 2)
+    func rollbackPackage(packageID: RuntimePackageID, allowDataLoss: Bool)
+        async throws -> RuntimeRollbackPackageControlReply
+    {
+        count("rollbackPackage")
+        rollbackCalls.append(allowDataLoss)
+        return rollbackReply
+    }
+
+    func updateSkipped(packageID: RuntimePackageID, versionCode: RuntimeVersionCode, skipped: Bool)
+        async throws
+    {
+        count("updateSkipped")
+    }
+
+    func beginUninstallPackage(
+        _ request: RuntimeUninstallPackageRequest, operationID: OperationID
+    ) async throws -> OperationHandle {
+        count("beginUninstallPackage")
+        return OperationHandle(operationID: operationID, kind: .uninstall)
+    }
+
+    func removeWrapper(packageID: RuntimePackageID, trash: Bool) async throws -> Bool {
+        count("removeWrapper")
+        return true
+    }
+
+    func deniedWrappers() async throws -> [DeniedWrapper] {
+        count("deniedWrappers")
+        return []
+    }
+
+    func clearWrapperDenial(bundleID: String, cdhash: String) async throws {
+        count("clearWrapperDenial")
+    }
+
+    func getConfig(keys: [String]?) async throws -> [String: String] {
+        count("getConfig")
+        if let error { throw error }
+        if let keys { return configValues.filter { keys.contains($0.key) } }
+        return configValues
+    }
+
+    func setConfig(key: String, value: String) async throws -> [String: String] {
+        count("setConfig")
+        record {
+            configSets.append((key, value))
+            configValues[key] = value
+        }
+        if let error { throw error }
+        return configValues
     }
 }
 
@@ -539,5 +685,232 @@ final class AddFlowModelTests: XCTestCase {
         let m = flow(with: FakeRuntimeService())
         m.begin(urls: [URL(fileURLWithPath: "/tmp/photo.png")])
         XCTAssertEqual(m.stage, .failed("APKRun can add .apk, .apks, .xapk, and .apkm files."))
+    }
+
+    // §6.1 + configuration.md §2.10: "Ask each time"
+    // (`wrappers.defaultLocation = ask`) leaves the location unselected and
+    // Install waits for a choice.
+    func testAskLocationWaitsForChoice() async {
+        XCTAssertNil(AddFlowModel.location(for: "ask"))
+        let service = FakeRuntimeService()
+        let m = flow(with: service)
+        m.defaultLocation = AddFlowModel.location(for: "ask")
+        await m.inspectForTesting(preview())
+        XCTAssertNil(m.location)
+        XCTAssertTrue(m.needsLocationChoice)
+        m.install()
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(service.installRequests.isEmpty)
+        m.location = .allApplications
+        XCTAssertFalse(m.needsLocationChoice)
+        m.install()
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(service.installRequests.count, 1)
+        XCTAssertEqual(service.wrapperRequests.first?.destination, .applications)
+    }
+}
+
+// MARK: - #80 app page and settings panes
+
+private func wireEntry(
+    _ key: String, _ value: String,
+    source: String = "default", appliesLive: Bool = true, stored: String? = nil
+) -> PackageSettingWire {
+    PackageSettingWire(
+        key: key, value: value, source: source, appliesLive: appliesLive,
+        stored: stored, allowed: nil)
+}
+
+@MainActor
+final class PackageDetailModelTests: XCTestCase {
+    private func model(
+        service: FakeRuntimeService,
+        settings: PackageSettingsWire? = nil
+    ) -> PackageDetailModel {
+        service.settings = settings
+        return PackageDetailModel(
+            packageID: RuntimePackageID(rawValue: "com.example.a")!,
+            makeService: { service })
+    }
+
+    /// Issue #80 T0: every control writes its key and value at once.
+    func testSetWritesKeyAndValue() async {
+        let service = FakeRuntimeService()
+        let m = model(
+            service: service,
+            settings: PackageSettingsWire(
+                groups: [:], recommended: [:],
+                entries: [wireEntry("window.resizable", "true")]))
+        m.set("window.resizable", "false")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(service.callCounts["updatePackageSettings"], 1)
+        XCTAssertEqual(service.settingPatches.first?.set["window.resizable"], "false")
+    }
+
+    /// Issue #80 T0: Reset clears the stored value (sends the clear list).
+    func testResetClearsKey() async {
+        let service = FakeRuntimeService()
+        let m = model(service: service)
+        m.reset("window.alwaysOnTop")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(service.settingPatches.first?.clear, ["window.alwaysOnTop"])
+        XCTAssertTrue(service.settingPatches.first?.set.isEmpty ?? false)
+    }
+
+    /// Issue #80 T0: a change to a next-session key shows the note.
+    func testNextSessionKeyShowsNote() async {
+        let service = FakeRuntimeService()
+        let m = model(
+            service: service,
+            settings: PackageSettingsWire(
+                groups: [:], recommended: [:],
+                entries: [wireEntry("window.mode", "primaryDisplayCompatibility", appliesLive: false)]))
+        m.set("window.mode", "primaryDisplayCompatibility")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertTrue(m.appliesNextOpenNotice)
+    }
+
+    /// Issue #80 T0: recommended keys show the marker and Reset.
+    func testRecommendedMarkerAndCustomizedReset() async {
+        let service = FakeRuntimeService()
+        let m = model(
+            service: service,
+            settings: PackageSettingsWire(
+                groups: [:], recommended: [:],
+                entries: [
+                    wireEntry("input.hover", "false", source: "recommended"),
+                    wireEntry("window.zoom", "1.25", source: "user", stored: "1.25"),
+                    wireEntry("input.escapeKey", "back"),
+                ]))
+        await m.load()
+        XCTAssertTrue(m.isRecommended("input.hover"))
+        XCTAssertTrue(m.isCustomized("window.zoom"))
+        XCTAssertFalse(m.isCustomized("input.escapeKey"))
+        XCTAssertEqual(m.value("window.zoom"), "1.25")
+    }
+
+    /// Issue #80 T0: Updated by → external asks first; confirming sends it.
+    func testExternalAuthorityAsksFirst() async {
+        let service = FakeRuntimeService()
+        service.updates = [
+            PackageUpdateStatus(
+                packageID: RuntimePackageID(rawValue: "com.example.a")!,
+                choice: nil, authority: "apkrun", provider: nil, phase: nil,
+                candidate: nil, lastCheckAt: nil, nextCheckAt: nil,
+                consecutiveFailures: 0, waiting: [])
+        ]
+        let m = model(service: service)
+        await m.load()
+        m.pickAuthority(.external)
+        XCTAssertTrue(m.confirmExternalAuthority)
+        XCTAssertEqual(service.callCounts["setUpdateAuthority"] ?? 0, 0)
+        m.confirmExternal()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(service.authorities, [.external])
+    }
+
+    /// Issue #80 T0: the mode picker writes through setUpdatePolicy.
+    func testModeWritesPolicy() async {
+        let service = FakeRuntimeService()
+        let m = model(service: service)
+        m.setMode(.notifyOnly)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(service.policies.first?.choice, .notifyOnly)
+        XCTAssertEqual(service.callCounts["updatePackageSettings"] ?? 0, 0)
+    }
+
+    /// Issue #80 T0: the header's Open and Update Now call the wire ops.
+    func testHeaderActions() async {
+        let service = FakeRuntimeService()
+        let m = model(service: service)
+        m.open()
+        m.updateNow()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(service.callCounts["launch"], 1)
+        XCTAssertEqual(service.callCounts["updatePackage"], 1)
+    }
+
+    /// Check Now reloads the page so a found update surfaces (§5.3 row 5).
+    func testCheckNowReloadsPage() async {
+        let service = FakeRuntimeService()
+        let m = model(service: service)
+        m.checkNow()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(service.callCounts["checkForUpdates"], 1)
+        XCTAssertEqual(service.callCounts["packageInfo"] ?? 0, 1)
+    }
+
+    /// §8.5: a `rollbackUnavailable` reply asks for the erases-data
+    /// confirmation, and confirming retries with `allowDataLoss`.
+    func testRollbackUnavailableAsksDataLoss() async {
+        let service = FakeRuntimeService()
+        service.rollbackReply = RuntimeRollbackPackageControlReply(unavailable: true)
+        let m = model(service: service)
+        m.rollback()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertTrue(m.confirmDataLossRollback)
+        XCTAssertEqual(service.rollbackCalls, [false])
+        service.rollbackReply = RuntimeRollbackPackageControlReply(rolledBackTo: 2)
+        m.rollback(allowDataLoss: true)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(service.rollbackCalls, [false, true])
+    }
+
+    /// A staged §7.1 edit clears only after the refresh op ends in
+    /// success; a failure keeps it and reports the error.
+    func testRefreshKeepsPendingsOnFailure() async {
+        let service = FakeRuntimeService()
+        let m = model(service: service)
+        m.pendingDisplayName = "New Name"
+        service.operationResultOverride = .failed(
+            RuntimeWireError(
+                domain: "wrapper", code: "wrapper.wrapperRunning",
+                message: "The app is running."))
+        m.refreshWrapper()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(m.pendingDisplayName, "New Name")
+        XCTAssertNotNil(m.loadError)
+        service.operationResultOverride = nil
+        m.refreshWrapper()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertNil(m.pendingDisplayName)
+    }
+}
+
+@MainActor
+final class SettingsModelTests: XCTestCase {
+    /// Issue #80 T0: each pane control writes its key and value at once.
+    func testSetWritesConfigKey() async {
+        let service = FakeRuntimeService()
+        let m = SettingsModel(makeService: { service })
+        m.set("runtime.idleSuspendMinutes", "30")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(service.configSets.first?.0, "runtime.idleSuspendMinutes")
+        XCTAssertEqual(service.configSets.first?.1, "30")
+        XCTAssertEqual(m.value("runtime.idleSuspendMinutes"), "30")
+    }
+
+    /// Issue #80 T0: Developer mode turns on only after confirmation.
+    func testDeveloperModeAsksFirst() async {
+        let service = FakeRuntimeService()
+        let m = SettingsModel(makeService: { service })
+        m.injectValues(["developer.enabled": "false"])
+        m.pickDeveloperMode(true)
+        XCTAssertTrue(m.confirmDeveloperMode)
+        XCTAssertTrue(service.configSets.isEmpty)
+        m.confirmDeveloperModeOn()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(service.configSets.first?.1, "true")
+    }
+
+    /// Issue #80 T0: turning Developer mode off asks nothing.
+    func testDeveloperModeOffNeedsNoConfirmation() async {
+        let service = FakeRuntimeService()
+        let m = SettingsModel(makeService: { service })
+        m.injectValues(["developer.enabled": "true"])
+        m.pickDeveloperMode(false)
+        XCTAssertFalse(m.confirmDeveloperMode)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(service.configSets.first?.1, "false")
     }
 }

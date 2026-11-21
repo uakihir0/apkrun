@@ -1160,6 +1160,8 @@ extension RuntimeIntegrationStatusControlRequest: VersionedControlRequest {}
 extension RuntimeCheckForUpdatesControlRequest: VersionedControlRequest {}
 extension RuntimeListUpdatesControlRequest: VersionedControlRequest {}
 extension RuntimeUpdateHistoryControlRequest: VersionedControlRequest {}
+extension RuntimePackageSettingsControlRequest: VersionedControlRequest {}
+extension RuntimeUpdatePackageSettingsControlRequest: VersionedControlRequest {}
 extension RuntimeSetUpdatePolicyControlRequest: VersionedControlRequest {}
 extension RuntimeSetUpdateAuthorityControlRequest: VersionedControlRequest {}
 extension RuntimeRollbackPackageControlRequest: VersionedControlRequest {}
@@ -1223,6 +1225,8 @@ enum RuntimeControlOperation {
     case updatePackage
     case getConfig
     case setConfig
+    case packageSettings
+    case updatePackageSettings
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1323,7 +1327,8 @@ enum RuntimeControlOperation {
             }
         case .checkForUpdates, .listUpdates, .updateHistory, .setUpdatePolicy,
             .setUpdateAuthority, .rollbackPackage, .beginRepairPackage,
-            .updateSkipped, .updatePackage, .getConfig, .setConfig:
+            .updateSkipped, .updatePackage, .getConfig, .setConfig,
+            .packageSettings, .updatePackageSettings:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -2576,6 +2581,104 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeWrapperInfoControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func packageSettings(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimePackageSettingsControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .packageSettings,
+                as: RuntimePackageSettingsControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimePackageSettingsControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimePackageSettingsControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimePackageSettingsControlReply(error: Self.malformedWireError))
+                )
+                return
+            }
+            do {
+                let result = try await host.packageSettings(decoded.request.packageID)
+                response.send(Self.encode(RuntimePackageSettingsControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimePackageSettingsControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func updatePackageSettings(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeUpdatePackageSettingsControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .updatePackageSettings,
+                as: RuntimeUpdatePackageSettingsControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeUpdatePackageSettingsControlReply(
+                            error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeUpdatePackageSettingsControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeUpdatePackageSettingsControlReply(
+                            error: Self.malformedWireError))
+                )
+                return
+            }
+            do {
+                let result = try await host.updatePackageSettings(decoded.request)
+                response.send(
+                    Self.encode(RuntimeUpdatePackageSettingsControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(
+                    Self.encode(RuntimeUpdatePackageSettingsControlReply(error: wireError)))
             }
         }
     }

@@ -434,6 +434,65 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// The stored `settings.json` of a package; nil when none is stored
+    /// (host-ui.md §7).
+    public func packageSettings(
+        _ packageID: RuntimePackageID
+    ) async throws(RuntimeControlClientError) -> PackageSettingsWire? {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimePackageSettingsControlRequest(
+                header: makeHeader(),
+                request: RuntimePackageSettingsRequest(packageID: packageID))
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.packageSettings(data)
+            let reply = try Self.decode(RuntimePackageSettingsControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            return reply.result
+        } catch {
+            let failure = error as? RuntimeControlClientError ?? .malformedReply
+            invalidateAfterTransportFailure(opened.channel, error: failure)
+            throw failure
+        }
+    }
+
+    /// Applies a `settings.json` patch and returns the stored settings
+    /// (host-ui.md §7).
+    public func updatePackageSettings(
+        _ packageID: RuntimePackageID,
+        patch: RuntimePackageSettingsPatch
+    ) async throws(RuntimeControlClientError) -> PackageSettingsWire {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeUpdatePackageSettingsControlRequest(
+                header: makeHeader(),
+                request: RuntimeUpdatePackageSettingsRequest(
+                    packageID: packageID, patch: patch))
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.updatePackageSettings(data)
+            let reply = try Self.decode(
+                RuntimeUpdatePackageSettingsControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let failure = error as? RuntimeControlClientError ?? .malformedReply
+            invalidateAfterTransportFailure(opened.channel, error: failure)
+            throw failure
+        }
+    }
+
     /// Lists every registered wrapper with its status (wrapper.md §9.1).
     public func listWrappers() async throws(RuntimeControlClientError) -> [WrapperListEntryWire] {
         let opened = try await ensureControl()
@@ -2614,6 +2673,12 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     /// Lists every registered wrapper (wrapper.md §9.1).
     func listWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data
 
+    /// The stored settings of one package (host-ui.md §7).
+    func packageSettings(_ request: Data) async throws(RuntimeControlClientError) -> Data
+
+    /// Applies a settings patch (host-ui.md §7).
+    func updatePackageSettings(_ request: Data) async throws(RuntimeControlClientError) -> Data
+
     /// Removes a wrapper's registry entry (wrapper.md §9.5).
     func removeWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data
 
@@ -3239,6 +3304,36 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.listWrappers(request) { response in finish(.success(response)) }
+        }
+    }
+
+    /// The stored settings of one package (host-ui.md §7).
+    func packageSettings(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.packageSettings(request) { response in finish(.success(response)) }
+        }
+    }
+
+    /// Applies a settings patch (host-ui.md §7).
+    func updatePackageSettings(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.updatePackageSettings(request) { response in finish(.success(response)) }
         }
     }
 

@@ -134,6 +134,10 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case packageInUse(PackageID)
     /// The package has no staged update to install.
     case stagedUpdateMissing
+    /// A `settings.json` patch named a key outside package-metadata-json.md §3.1.
+    case unknownSettingKey(String)
+    /// A `settings.json` patch value is outside the key's §3.1 range.
+    case invalidSettingValue(key: String, allowed: String)
     /// No rollback can run (package-store.md §7.3).
     case rollbackUnavailable(RollbackUnavailableReason)
     /// Android refused or failed the rollback commit.
@@ -2050,7 +2054,7 @@ public actor PackageStore {
         } else {
             settings = PackageSettings()
         }
-        settings.update["mode"] = mode
+        settings.set("update.mode", mode)
         try writeJSON(settings, to: url)
     }
 
@@ -2552,6 +2556,8 @@ public actor PackageStore {
         try requireOpen()
         let mutationLock = try await acquireLock(at: mutationLockURL)
         defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard records[packageID] != nil else { throw PackageStoreFailure.packageNotFound }
         let directory = directories[packageID] ?? directoryName(for: packageID)
         let url = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
             .appendingPathComponent("settings.json")
@@ -2561,6 +2567,45 @@ public actor PackageStore {
             return nil
         }
         return try? Self.decoder().decode(PackageSettings.self, from: data)
+    }
+
+    /// Applies a patch to the package's `settings.json` (host-ui.md §7):
+    /// each dotted key is written, `nil` removes the stored value. Unknown
+    /// keys and values outside package-metadata-json.md §3.1 are refused.
+    @discardableResult
+    public func updatePackageSettings(
+        _ packageID: PackageID, patch: [String: String?]
+    ) async throws -> PackageSettings {
+        try requireWritable()
+        for (key, value) in patch {
+            guard PackageSettingsSchema.key(key) != nil else {
+                throw PackageStoreFailure.unknownSettingKey(key)
+            }
+            if let value, !PackageSettingsSchema.isValid(key, stored: value) {
+                throw PackageStoreFailure.invalidSettingValue(
+                    key: key,
+                    allowed: PackageSettingsSchema.allowedValues(key) ?? "a different value")
+            }
+        }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard records[packageID] != nil else { throw PackageStoreFailure.packageNotFound }
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        let url = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
+            .appendingPathComponent("settings.json")
+        var settings = PackageSettings()
+        if fileManager.fileExists(atPath: url.path),
+            let data = try? Data(contentsOf: url),
+            let decoded = try? Self.decoder().decode(PackageSettings.self, from: data)
+        {
+            settings = decoded
+        }
+        for (key, value) in patch {
+            settings.set(key, value)
+        }
+        try writeJSON(settings, to: url)
+        return settings
     }
 
     /// Returns the last Android package inventory observed by a live runtime.

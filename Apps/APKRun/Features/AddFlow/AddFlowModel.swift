@@ -48,11 +48,15 @@ final class AddFlowModel {
     var updateChoice: UpdateChoice = .manual
     var createMacApp = true
     var macAppName = ""
-    var location: AddFlowLocation = .userApplications
+    /// The review picker's location; nil only under "Ask each time"
+    /// (`wrappers.defaultLocation = ask`), where the user must choose
+    /// before **Install** runs (configuration.md §2.10).
+    var location: AddFlowLocation? = .userApplications
     /// The directory **Other…** picked (wrapper.md §6.3).
     var customDirectoryURL: URL?
-    /// `wrappers.defaultLocation` (#80 controls it; `ask` leaves unselected).
-    var defaultLocation: AddFlowLocation = .userApplications
+    /// `wrappers.defaultLocation` (#80 controls it; `ask` maps to nil and
+    /// leaves the picker unselected).
+    var defaultLocation: AddFlowLocation? = .userApplications
 
     /// Detected provider suggestion; stays off until the user turns it on
     /// (update-system.md §4.7). Nil when the host detected none.
@@ -132,6 +136,11 @@ final class AddFlowModel {
             let request = RuntimeImportPackageRequest(files: sources, origin: origin)
             let preview = try await serviceFactory().importPackage(request, files: handles)
             self.preview = preview
+            let globals = try? await serviceFactory()
+                .getConfig(keys: ["wrappers.defaultLocation"])
+            if let configured = globals?["wrappers.defaultLocation"] {
+                defaultLocation = Self.location(for: configured)
+            }
             // A list failure stays conservative: only a fresh or uninspected
             // package offers Create Mac app without a confirmed empty list
             // (wrapper.md §9.1, AGENTS.md §4 invariant 13).
@@ -159,9 +168,14 @@ final class AddFlowModel {
         stage = .review
     }
 
+    /// Whether **Install** waits on a location choice ("Ask each time").
+    var needsLocationChoice: Bool {
+        createMacApp && showsMacAppRow && location == nil
+    }
+
     /// **Install** / **Reinstall** / **Update** (§6.2).
     func install() {
-        guard let preview else { return }
+        guard let preview, !needsLocationChoice else { return }
         stage = .installing
         installError = nil
         // §6.1: without an update source only Manual is enabled.
@@ -279,6 +293,17 @@ final class AddFlowModel {
         }
     }
 
+    /// Maps `wrappers.defaultLocation` to a picker value (configuration.md
+    /// §2.10); `ask` returns nil so the sheet starts unselected and the
+    /// user picks before **Install** runs.
+    static func location(for configured: String) -> AddFlowLocation? {
+        switch configured {
+        case "allUsersApplications": .allApplications
+        case "ask": nil
+        default: .userApplications
+        }
+    }
+
     /// The `WrapperRequest` destination for the chosen location.
     private var wireDestination: WireWrapperDestination? {
         switch location {
@@ -286,6 +311,7 @@ final class AddFlowModel {
         case .allApplications: .applications
         case .other:
             customDirectoryURL.map { .directory($0) } ?? .userApplications
+        case nil: .userApplications
         }
     }
 

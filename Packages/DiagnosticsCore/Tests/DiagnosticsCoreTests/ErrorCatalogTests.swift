@@ -47,6 +47,7 @@ import Testing
                 "guestAgentOperationFailed", "inputNotBound",
                 "busy", "operationNotFound", "notProvisioned", "hostRequirementsNotMet",
                 "developerModeRequired", "invalidConfigValue", "unknownConfigKey",
+                "unknownResult",
             ].map { "runtime.\($0)" }
             + [
                 "rendererInitFailed", "rendererOperationFailed", "rendererLost", "libraryMissing",
@@ -80,6 +81,7 @@ import Testing
                 "reservedPackage", "tooLarge", "resourcesArscNotAligned", "signerMismatch",
                 "alreadyInstalled", "downgradeRefused", "packageAlreadyManaged",
                 "packageInUse", "stagedUpdateMissing", "rollbackUnavailable", "notRepairable",
+                "packageNotFound", "unknownSetting", "invalidSettingValue",
                 "packageInUse", "stagedUpdateMissing",
             ].map { "store.\($0)" }
             + [

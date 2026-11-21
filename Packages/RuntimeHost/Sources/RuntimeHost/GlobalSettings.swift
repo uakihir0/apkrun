@@ -24,6 +24,11 @@ public struct GlobalSettings: Equatable, Sendable {
     public var updatesStartRuntimeToInstall: Bool
     /// `updates.notifyInstalled` — §2.7.
     public var updatesNotifyInstalled: Bool
+    /// The dotted keys of the remaining families — `runtime.*`, `display.*`,
+    /// `audio.*`, `maintenance.*`, `wrappers.*`, `system.*`, `graphics.*` —
+    /// kept verbatim so the Settings panes can read and write them without
+    /// a field per key (configuration.md §2).
+    public var extras: [String: String]
 
     /// `updates.checkIntervalHours` allowed values (configuration.md §2.7).
     public static let allowedCheckIntervalHours = [1, 3, 6, 12, 24, 72, 168]
@@ -38,7 +43,8 @@ public struct GlobalSettings: Equatable, Sendable {
         updatesCheckIntervalHours: Int = GlobalSettings.defaultCheckIntervalHours,
         updatesDownloadOnExpensiveNetwork: Bool = false,
         updatesStartRuntimeToInstall: Bool = false,
-        updatesNotifyInstalled: Bool = false
+        updatesNotifyInstalled: Bool = false,
+        extras: [String: String] = [:]
     ) {
         self.developerEnabled = developerEnabled
         self.integrationsEnabled = integrationsEnabled
@@ -50,6 +56,43 @@ public struct GlobalSettings: Equatable, Sendable {
         self.updatesDownloadOnExpensiveNetwork = updatesDownloadOnExpensiveNetwork
         self.updatesStartRuntimeToInstall = updatesStartRuntimeToInstall
         self.updatesNotifyInstalled = updatesNotifyInstalled
+        self.extras = extras
+    }
+
+    /// The `settings.json` objects `extras` reads and writes.
+    public static let extraFamilies: Set<String> = [
+        "runtime", "display", "audio", "maintenance", "wrappers", "system",
+        "graphics",
+    ]
+
+    /// The defaults `extras` reports for keys the file does not set
+    /// (configuration.md §2's "Default" column).
+    public static let extraDefaults: [String: String] = [
+        "runtime.startPolicy": "onDemand",
+        "runtime.idleSuspendMinutes": "10",
+        "runtime.idleStopMinutes": "60",
+        "runtime.autoRestart": "true",
+        "runtime.cpuCount": "4",
+        "runtime.memoryGiB": "4",
+        "runtime.userdataGiB": "32",
+        "display.maxSessions": "8",
+        "audio.output": "true",
+        "graphics.safeMode": "false",
+        "maintenance.checkAutomatically": "true",
+        "maintenance.channel": "stable",
+        "maintenance.installAPKRunAutomatically": "false",
+        "maintenance.downloadImagesAutomatically": "true",
+        "maintenance.installImages": "automatic",
+        "maintenance.notifyImageInstalled": "false",
+        "wrappers.defaultLocation": "userApplications",
+        "system.syncLocale": "true",
+        "system.syncTimeZone": "true",
+        "system.syncClockFormat": "true",
+    ]
+
+    /// The effective value of an `extras` key.
+    public func extraValue(_ key: String) -> String? {
+        extras[key] ?? Self.extraDefaults[key]
     }
 
     /// The global `integrations.enabled.<name>` switch; absent means on.
@@ -83,6 +126,19 @@ public struct GlobalSettings: Equatable, Sendable {
                 }
             }
         }
+        var extras: [String: String] = [:]
+        for family in Self.extraFamilies {
+            guard let raw = object[family] as? [String: Any] else { continue }
+            for (name, value) in raw {
+                if let flag = value as? Bool {
+                    extras["\(family).\(name)"] = flag ? "true" : "false"
+                } else if let number = value as? Int {
+                    extras["\(family).\(name)"] = String(number)
+                } else if let word = value as? String {
+                    extras["\(family).\(name)"] = word
+                }
+            }
+        }
         let updates = object["updates"] as? [String: Any]
         return GlobalSettings(
             developerEnabled: developer?["enabled"] as? Bool ?? false,
@@ -92,7 +148,8 @@ public struct GlobalSettings: Equatable, Sendable {
                 ?? Self.defaultCheckIntervalHours,
             updatesDownloadOnExpensiveNetwork: updates?["downloadOnExpensiveNetwork"] as? Bool ?? false,
             updatesStartRuntimeToInstall: updates?["startRuntimeToInstall"] as? Bool ?? false,
-            updatesNotifyInstalled: updates?["notifyInstalled"] as? Bool ?? false)
+            updatesNotifyInstalled: updates?["notifyInstalled"] as? Bool ?? false,
+            extras: extras)
     }
 
     /// Writes `settings.json` atomically (`apkrun config set`), mode 0600. Keys
@@ -127,6 +184,23 @@ public struct GlobalSettings: Equatable, Sendable {
         updates["startRuntimeToInstall"] = settings.updatesStartRuntimeToInstall
         updates["notifyInstalled"] = settings.updatesNotifyInstalled
         object["updates"] = updates
+        for (key, value) in settings.extras {
+            let parts = key.split(separator: ".", maxSplits: 1).map(String.init)
+            guard parts.count == 2, Self.extraFamilies.contains(parts[0]) else {
+                continue
+            }
+            var family = object[parts[0]] as? [String: Any] ?? [:]
+            if value == "true" {
+                family[parts[1]] = true
+            } else if value == "false" {
+                family[parts[1]] = false
+            } else if let number = Int(value) {
+                family[parts[1]] = number
+            } else {
+                family[parts[1]] = value
+            }
+            object[parts[0]] = family
+        }
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         let temporary = parent.appendingPathComponent(".\(fileURL.lastPathComponent).\(UUID().uuidString).tmp")
         try data.write(to: temporary, options: .withoutOverwriting)

@@ -299,6 +299,8 @@ final class HomeModel {
     var selection: HomeSection = .apps
     /// The package a `package/<id>` route selects, or an "isn't installed" id.
     var selectedPackage: RuntimePackageID?
+    /// The `package/<id>/<section>` route's section (host-ui.md §3.1).
+    var selectedPackageSection: String?
     var missingPackageID: String?
     /// The add flow (#79) opened by a drop, Add App…, or a document open.
     let addFlow: AddFlowModel
@@ -346,10 +348,11 @@ final class HomeModel {
             selection = .apps
         case .updates:
             selection = .updates
-        case .package(let packageID, _):
+        case .package(let packageID, let section):
             selection = .apps
             if packages.managed.contains(where: { $0.packageID == packageID }) {
                 selectedPackage = packageID
+                selectedPackageSection = section
                 missingPackageID = nil
             } else {
                 missingPackageID = packageID.rawValue

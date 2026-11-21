@@ -719,6 +719,61 @@ public actor RuntimeHost {
         return try await service.adoptPackage(request)
     }
 
+    /// The stored `settings.json` of a package (host-ui.md §7).
+    public func packageSettings(
+        _ packageID: RuntimePackageID
+    ) async throws(RuntimeWireError) -> PackageSettingsWire? {
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        return try await service.packageSettings(for: packageID)
+    }
+
+    /// Applies a `settings.json` patch and publishes `settingsChanged`
+    /// (host-ui.md §7, API 1.24).
+    public func updatePackageSettings(
+        _ request: RuntimeUpdatePackageSettingsRequest
+    ) async throws(RuntimeWireError) -> PackageSettingsWire {
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        let result = try await service.updatePackageSettings(request)
+        eventHub.publishPackageChange(
+            .settingsChanged(
+                request.packageID,
+                request.patch.set.keys.sorted() + request.patch.clear.sorted()),
+            operationID: nil)
+        // `window.*` keys reach an open session's window live
+        // (configuration.md §1.5, package-metadata-json.md §3.4).
+        let touched =
+            Set(request.patch.set.keys).union(request.patch.clear)
+            .intersection(["window.resizable", "window.alwaysOnTop", "window.zoom"])
+        if !touched.isEmpty,
+            let prefs = Self.windowPrefs(from: result)
+        {
+            eventHub.publishPackageChange(
+                .windowPrefsChanged(request.packageID, prefs), operationID: nil)
+        }
+        return result
+    }
+
+    /// `SessionDescriptor.windowPrefs` of a resolved settings reply
+    /// (runtime-api.md §10.2): missing keys keep their defaults.
+    static func windowPrefs(from settings: PackageSettingsWire) -> WindowPrefs? {
+        func value(_ key: String) -> String? {
+            settings.entries.first { $0.key == key }?.value
+        }
+        guard let resizable = value("window.resizable"),
+            let alwaysOnTop = value("window.alwaysOnTop"),
+            let zoom = value("window.zoom"),
+            let zoomValue = Double(zoom)
+        else {
+            return nil
+        }
+        return WindowPrefs(
+            resizable: resizable == "true",
+            alwaysOnTop: alwaysOnTop == "true",
+            zoom: zoomValue)
+    }
+
     /// Starts Android on demand, attaches its package channel, and installs an inspected import.
     public func installImported(
         _ request: RuntimeInstallImportedRequest
@@ -1874,8 +1929,15 @@ public actor RuntimeHost {
         )
         let destination: WrapperDestination
         switch request.destination {
-        case .userApplications, .none:
+        case .userApplications:
             destination = .userApplications
+        case .none:
+            // `nil` = `wrappers.defaultLocation` (runtime-api.md §10.3); an
+            // `ask` default cannot ask here, so it falls back to the user's
+            // Applications folder.
+            let configured = GlobalSettings.load(from: paths.settingsFile)
+                .extras["wrappers.defaultLocation"]
+            destination = configured == "allUsersApplications" ? .applications : .userApplications
         case .applications:
             destination = .applications
         case .directory(let url):

@@ -98,6 +98,18 @@ public enum WrapperFailure: APKRunError, Equatable {
     /// (B1–B2: not approved, already installed).
     case bootstrapNotAllowed(BootstrapRefusal)
 
+    /// `notarytool` or `stapler` is missing, so a distribution wrapper
+    /// cannot be notarized (wrapper.md §11). Payload: the tool name.
+    case distributionToolMissing(String)
+
+    /// `security find-identity -v -p codesigning` does not list the named
+    /// signing identity (wrapper.md §11). Payload: the identity.
+    case identityNotFound(String)
+
+    /// The notary service rejected or timed out a submission
+    /// (wrapper.md §11). Payload: the submission ID and the log summary.
+    case notarizationFailed(submissionID: String, summary: String)
+
     /// The stable error catalog namespace for wrappers.
     public static let domain: ErrorDomain = .wrapper
 
@@ -126,6 +138,9 @@ public enum WrapperFailure: APKRunError, Equatable {
         case .approvalBusy: "busy"
         case .bootstrapInvalid: "bootstrapInvalid"
         case .bootstrapNotAllowed: "bootstrapNotAllowed"
+        case .distributionToolMissing: "distributionToolMissing"
+        case .identityNotFound: "identityNotFound"
+        case .notarizationFailed: "notarizationFailed"
         case .wrapperRunning: "wrapperRunning"
         case .refreshBlocked: "refreshBlocked"
         }
@@ -181,6 +196,15 @@ public enum WrapperFailure: APKRunError, Equatable {
             ["reason": .text(problem.rawValue)]
         case .bootstrapNotAllowed(let refusal):
             ["reason": .text(refusal.rawValue)]
+        case .distributionToolMissing(let tool):
+            ["tool": .text(tool)]
+        case .identityNotFound(let identity):
+            ["identity": .text(identity)]
+        case .notarizationFailed(let submissionID, let summary):
+            [
+                "submissionID": .text(submissionID),
+                "summary": .text(summary),
+            ]
         case .registryUnavailable, .stagingExpired, .approvalDenied, .approvalTimedOut,
             .approvalNotFound, .approvalBusy:
             [:]

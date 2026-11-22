@@ -66,6 +66,7 @@ internal class FilesBridge(
         val displayId: Int,
         /** Opened eagerly while the share grant lives, when no persistable grant exists. */
         val stream: java.io.InputStream?,
+        val createdAt: Long,
     )
 
     private val offerIds = AtomicLong(System.currentTimeMillis() and 0x3FFFFFFF)
@@ -175,6 +176,7 @@ internal class FilesBridge(
                 }
             }
         val offerId = offerIds.incrementAndGet()
+        purgeExpiredExports()
         synchronized(pendingExports) {
             pendingExports[offerId] =
                 PendingExport(
@@ -186,6 +188,7 @@ internal class FilesBridge(
                     sourcePackage = sourcePackage,
                     displayId = displayId,
                     stream = stream,
+                    createdAt = System.currentTimeMillis(),
                 )
         }
         events.publish { event ->
@@ -213,12 +216,25 @@ internal class FilesBridge(
         doomed.forEach { it.stream?.close() }
     }
 
+    /** Offers that outlive the save dialog are dropped so their streams close. */
+    private fun purgeExpiredExports() {
+        val now = System.currentTimeMillis()
+        val expired =
+            synchronized(pendingExports) {
+                val keys =
+                    pendingExports.filterValues { now - it.createdAt > OFFER_TTL_MS }.keys
+                keys.mapNotNull { pendingExports.remove(it) }
+            }
+        expired.forEach { it.stream?.close() }
+    }
+
     /**
      * Answers a ResolveExport request (op 51). An accepted offer reads the file and sends it as a
      * `.file` transfer; the response carries `export_start` with the transfer id. A declined or
      * unknown offer answers with the empty message.
      */
     fun resolveExport(request: ResolveExport): ExportStart {
+        purgeExpiredExports()
         val offer =
             synchronized(pendingExports) { pendingExports.remove(request.offerId) }
                 ?: return ExportStart.getDefaultInstance()
@@ -338,5 +354,10 @@ internal class FilesBridge(
     private fun commonMime(mimes: List<String>): String {
         val types = mimes.map { it.substringBefore('/') }.distinct()
         return if (types.size == 1) "${types[0]}/*" else "*/*"
+    }
+
+    private companion object {
+        /** Longer than any save dialog can reasonably stay open. */
+        const val OFFER_TTL_MS: Long = 120_000
     }
 }

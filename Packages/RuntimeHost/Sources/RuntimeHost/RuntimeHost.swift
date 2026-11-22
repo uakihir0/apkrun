@@ -4320,7 +4320,10 @@ public actor RuntimeHost {
             imageVersion: image?.version.description,
             guestAgentState: guestAgentStateName,
             guestAgentProtocolVersion: guestAgentStatus?.protocolVersion?.description,
-            provisioning: provisioningState
+            provisioning: provisioningState,
+            recordingPackages: activeRecordings()
+                .compactMap { RuntimePackageID(rawValue: $0) }
+                .sorted { $0.rawValue < $1.rawValue }
         )
     }
 

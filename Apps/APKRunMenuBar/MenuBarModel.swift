@@ -231,6 +231,10 @@ final class MenuBarModel: ObservableObject {
     private func reloadSnapshot(using service: any MenuBarRuntimeService) async {
         do {
             let runtimeStatus = try await service.runtimeStatus()
+            // A menu bar started while the guest records sees no
+            // `recordingChanged` yet; the snapshot carries the live set
+            // (desktop-integration.md §8.2).
+            recordingPackages = (runtimeStatus.recordingPackages ?? []).map(\.rawValue)
             let sessions = try await service.listSessions()
             let packages = try await service.listPackages()
             let displayNames = Dictionary(

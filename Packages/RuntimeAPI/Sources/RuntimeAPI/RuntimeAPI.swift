@@ -240,6 +240,11 @@ public struct RuntimeHostStatus: Codable, Equatable, Sendable {
     /// The first-run provisioning state (runtime-daemon.md §9.2). Decoding an older
     /// daemon's reply leaves this nil; clients treat nil as `.notStarted`.
     public let provisioning: WireProvisioningState?
+    /// The packages the guest reports as recording (desktop-integration.md
+    /// §8.2): package IDs only, never contents or levels (NFR-SEC-05).
+    /// Decoding an older daemon's reply leaves this nil; clients treat nil
+    /// as no active recordings.
+    public let recordingPackages: [RuntimePackageID]?
 
     /// Creates a status snapshot.
     public init(
@@ -253,7 +258,8 @@ public struct RuntimeHostStatus: Codable, Equatable, Sendable {
         imageVersion: String?,
         guestAgentState: GuestAgentConnectionState? = nil,
         guestAgentProtocolVersion: String? = nil,
-        provisioning: WireProvisioningState? = nil
+        provisioning: WireProvisioningState? = nil,
+        recordingPackages: [RuntimePackageID]? = nil
     ) {
         self.hostState = hostState
         self.runtimeState = runtimeState
@@ -266,6 +272,7 @@ public struct RuntimeHostStatus: Codable, Equatable, Sendable {
         self.guestAgentState = guestAgentState
         self.guestAgentProtocolVersion = guestAgentProtocolVersion
         self.provisioning = provisioning
+        self.recordingPackages = recordingPackages
     }
 }
 

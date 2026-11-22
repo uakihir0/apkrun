@@ -1,0 +1,26 @@
+// APKRun agent APKs (android-image.md §11.1).
+//
+// The APKs are built by scripts/aosp/build-product.sh and copied into
+// prebuilt/ (git-ignored). Soong installs them into
+// /system_ext/priv-app and sign_target_files_apks re-signs them with
+// the platform certificate during `m dist`.
+
+android_app_import {
+    name: "ApkRunGuest",
+    apk: "prebuilt/ApkRunGuest.apk",
+    certificate: "platform",
+    privileged: true,
+    presigned: false,
+    system_ext_specific: true,
+    filename: "ApkRunGuest.apk",
+}
+
+android_app_import {
+    name: "ApkRunStore",
+    apk: "prebuilt/ApkRunStore.apk",
+    certificate: "platform",
+    privileged: true,
+    presigned: false,
+    system_ext_specific: true,
+    filename: "ApkRunStore.apk",
+}

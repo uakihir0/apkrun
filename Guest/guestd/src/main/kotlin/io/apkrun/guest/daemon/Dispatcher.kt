@@ -137,6 +137,8 @@ class Dispatcher(
                             .setGuestUptimeMs(uptimeMillis())
                     )
                     .build()
+            Request.OpCase.GET_HEALTH ->
+                Response.newBuilder().setGetHealth(operations.health()).build()
             Request.OpCase.GET_SNAPSHOT ->
                 Response.newBuilder().setGetSnapshot(operations.snapshot()).build()
             Request.OpCase.SET_DISPLAY_POLICY -> {
@@ -271,7 +273,8 @@ class Dispatcher(
         fun requiredCapability(request: Request): GuestCapability? =
             when (request.opCase) {
                 Request.OpCase.PING,
-                Request.OpCase.GET_SNAPSHOT -> GuestCapability.CORE
+                Request.OpCase.GET_SNAPSHOT,
+                Request.OpCase.GET_HEALTH -> GuestCapability.CORE
                 Request.OpCase.SET_DISPLAY_POLICY,
                 Request.OpCase.CLEAR_DISPLAY -> GuestCapability.DISPLAY
                 Request.OpCase.LAUNCH_APPLICATION,

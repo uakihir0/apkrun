@@ -30,7 +30,10 @@ class DiagnosticsService(
 
     private fun collectItem(item: DiagnosticsItem, maxBytes: Long): DiagnosticsItemResult {
         return when (item) {
-            DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_MEMINFO -> dumpsysMeminfo(maxBytes)
+            DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_MEMINFO ->
+                dumpsys(item, maxBytes, "dumpsys-meminfo.txt", "meminfo", "-c")
+            DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_SURFACEFLINGER ->
+                dumpsys(item, maxBytes, "dumpsys-surfaceflinger.txt", "SurfaceFlinger")
             else ->
                 DiagnosticsItemResult.newBuilder()
                     .setItem(item)
@@ -39,34 +42,39 @@ class DiagnosticsService(
         }
     }
 
-    private fun dumpsysMeminfo(maxBytes: Long): DiagnosticsItemResult {
+    private fun dumpsys(
+        item: DiagnosticsItem,
+        maxBytes: Long,
+        fileName: String,
+        vararg arguments: String,
+    ): DiagnosticsItemResult {
         val limit = if (maxBytes > 0) minOf(maxBytes, MAX_ITEM_BYTES) else MAX_ITEM_BYTES
         val output: ByteArray =
             try {
-                shellRunner.run("dumpsys", "meminfo", "-c")
+                shellRunner.run("dumpsys", *arguments)
             } catch (error: Exception) {
-                AgentLog.error("dumpsys meminfo -c failed", error)
+                AgentLog.error("dumpsys ${arguments.joinToString(" ")} failed", error)
                 return DiagnosticsItemResult.newBuilder()
-                    .setItem(DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_MEMINFO)
+                    .setItem(item)
                     .setStatus(DiagnosticsItemStatus.DIAGNOSTICS_ITEM_STATUS_FAILED)
                     .build()
             }
         if (output.size > MAX_ITEM_BYTES) {
             return DiagnosticsItemResult.newBuilder()
-                .setItem(DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_MEMINFO)
+                .setItem(item)
                 .setStatus(DiagnosticsItemStatus.DIAGNOSTICS_ITEM_STATUS_TOO_LARGE)
                 .build()
         }
         val truncated = output.size > limit
         val payload = if (truncated) output.copyOf(limit.toInt()) else output
         val transferId =
-            bulk.sendDiagnosticsItem("dumpsys-meminfo.txt", "text/plain", payload)
+            bulk.sendDiagnosticsItem(fileName, "text/plain", payload)
                 ?: return DiagnosticsItemResult.newBuilder()
-                    .setItem(DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_MEMINFO)
+                    .setItem(item)
                     .setStatus(DiagnosticsItemStatus.DIAGNOSTICS_ITEM_STATUS_FAILED)
                     .build()
         return DiagnosticsItemResult.newBuilder()
-            .setItem(DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_MEMINFO)
+            .setItem(item)
             .setStatus(DiagnosticsItemStatus.DIAGNOSTICS_ITEM_STATUS_OK)
             .setTransferId(transferId)
             .setTruncated(truncated)

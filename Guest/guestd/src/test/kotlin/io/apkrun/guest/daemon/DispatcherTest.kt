@@ -11,6 +11,7 @@ import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
 import io.apkrun.guest.protocol.v1.DismissNotification
 import io.apkrun.guest.protocol.v1.ExportStart
 import io.apkrun.guest.protocol.v1.GuestErrorCode
+import io.apkrun.guest.protocol.v1.Health
 import io.apkrun.guest.protocol.v1.ImePolicy
 import io.apkrun.guest.protocol.v1.ImportFiles
 import io.apkrun.guest.protocol.v1.ImportResult
@@ -88,6 +89,11 @@ private class FakeOperations : AgentOperations {
     }
 
     override fun snapshot(): Snapshot = Snapshot.getDefaultInstance()
+
+    override fun health(): Health {
+        enter()
+        return Health.newBuilder().setAgentUptimeMs(42).build()
+    }
 
     override fun setDisplayPolicy(request: SetDisplayPolicy) = enter()
 

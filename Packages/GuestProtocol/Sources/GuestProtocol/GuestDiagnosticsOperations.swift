@@ -49,3 +49,31 @@ public struct GuestCollectDiagnostics: GuestOperation {
         return nil
     }
 }
+
+/// GetHealth, guest protocol operation 21 (guest-protocol.md §7.4). The agent
+/// returns its own health counters; the host turns them into `agent.*` checks.
+public struct GuestGetHealth: GuestOperation {
+    /// The agent health counters.
+    public typealias Result = GPHealth
+    /// The stable guest protocol operation number.
+    public static let number = 21
+
+    /// Creates a get-health request.
+    public init() {}
+
+    /// The operation name used in diagnostics.
+    public var operationName: String { "GetHealth" }
+    /// The Guest Agent capability required for this operation.
+    public var capability: GuestCapability { .core }
+    /// The per-call timeout.
+    public var timeout: Duration { .seconds(5) }
+
+    /// Builds the versioned wire request.
+    public func request() -> GPRequest.OneOf_Op { .getHealth(GPGetHealth()) }
+
+    /// Extracts the health counters.
+    public static func decode(_ result: GPResponse.OneOf_Result) -> GPHealth? {
+        if case .getHealth(let health) = result { return health }
+        return nil
+    }
+}

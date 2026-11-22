@@ -8,6 +8,7 @@ import io.apkrun.guest.protocol.v1.CollectDiagnostics
 import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
 import io.apkrun.guest.protocol.v1.DismissNotification
 import io.apkrun.guest.protocol.v1.ExportStart
+import io.apkrun.guest.protocol.v1.Health
 import io.apkrun.guest.protocol.v1.ImportFiles
 import io.apkrun.guest.protocol.v1.ImportResult
 import io.apkrun.guest.protocol.v1.LaunchApplication
@@ -37,6 +38,9 @@ import io.apkrun.guest.protocol.v1.SyncTime
 interface AgentOperations {
     /** The state that the host reads after every handshake (guest-protocol.md §7.2). */
     fun snapshot(): Snapshot
+
+    /** The agent health counters of `Health` (guest-protocol.md §7.4). */
+    fun health(): Health
 
     /** Applies the density and the IME policy of a display (display.v1). */
     fun setDisplayPolicy(request: SetDisplayPolicy)

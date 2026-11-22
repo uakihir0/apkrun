@@ -160,6 +160,7 @@ class Daemon(internal val scope: CoroutineScope) {
                     notifications,
                     urlRedirect,
                     filesBridge,
+                    input,
                 ),
             uptimeMillis = { SystemClock.elapsedRealtime() },
         )

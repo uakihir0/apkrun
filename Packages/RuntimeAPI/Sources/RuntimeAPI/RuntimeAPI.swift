@@ -30,9 +30,11 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// `DistributionWrapperResult` (wrapper.md §11). 1.37 adds
     /// RuntimeCompatibilityInfo on package details and import previews
     /// (#91).
-    public static let current = APIVersion(major: 1, minor: 38)
+    public static let current = APIVersion(major: 1, minor: 39)
     /// 1.38 adds `StartRuntimeRequest.hold`, which keeps a CLI start
     /// activity until its control connection closes (runtime-daemon.md §5).
+    /// 1.39 adds the `closeSession` operation and `WireClosePolicy`
+    /// (display-and-windowing.md §7.6).
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -763,6 +765,9 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func launch(_ request: Data, reply: @escaping (Data) -> Void)
     /// Terminates an installed package session.
     func terminate(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Closes a package session per `window.closeBehavior`
+    /// (display-and-windowing.md §7.6); the window process only.
+    func closeSession(_ request: Data, reply: @escaping (Data) -> Void)
     /// Checks a wrapper bundle against the registry and the store.
     func verifyWrapper(_ request: Data, reply: @escaping (Data) -> Void)
     /// Starts a wrapper generation; replies with the operation handle.

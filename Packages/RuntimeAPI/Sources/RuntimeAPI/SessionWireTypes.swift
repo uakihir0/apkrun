@@ -128,3 +128,46 @@ public enum SessionChange: Codable, Equatable, Sendable {
         }
     }
 }
+
+/// The close policy a `closeSession` request applies to a package session
+/// (display-and-windowing.md §7.6).
+public enum WireClosePolicy: String, Codable, Sendable, Equatable {
+    /// The Guest Agent finishes the session's tasks; Android may keep the
+    /// process cached.
+    case stop
+    /// The root task moves to display 0 behind the launcher and the daemon
+    /// holds a background-task activity until the task ends.
+    case keepRunning
+}
+
+/// A `closeSession` control request (runtime-api.md §6.1, API 1.39).
+public struct RuntimeCloseSessionControlRequest: Codable, Equatable, Sendable {
+    /// The authenticated request metadata.
+    public let header: APIRequestHeader
+    /// The package whose session should close.
+    public let packageID: RuntimePackageID
+    /// The policy to apply; `nil` reads the package's saved
+    /// `window.closeBehavior`.
+    public let policy: WireClosePolicy?
+
+    /// Creates the request.
+    public init(header: APIRequestHeader, packageID: RuntimePackageID, policy: WireClosePolicy? = nil) {
+        self.header = header
+        self.packageID = packageID
+        self.policy = policy
+    }
+}
+
+/// The `closeSession` reply.
+public struct RuntimeCloseSessionControlReply: Codable, Equatable, Sendable {
+    /// Whether a session existed and was closed, when the request succeeded.
+    public var hadSession: Bool?
+    /// The typed failure, when the request failed.
+    public var error: RuntimeWireError?
+
+    /// Creates the reply.
+    public init(hadSession: Bool? = nil, error: RuntimeWireError? = nil) {
+        self.hadSession = hadSession
+        self.error = error
+    }
+}

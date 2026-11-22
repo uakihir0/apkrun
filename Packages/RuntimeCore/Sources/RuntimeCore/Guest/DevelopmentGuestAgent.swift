@@ -867,11 +867,20 @@ extension DevelopmentGuestAgent: DisplayControlChannel {
 
     /// Finishes the tasks on one display before the host disables its scanout.
     public func clearDisplay(_ displayID: Int32) async throws(DisplayControlFailure) {
+        try await clearDisplay(displayID, policy: .finishTasks)
+    }
+
+    /// Applies a clear policy to one display (display-and-windowing.md §7.6):
+    /// `.finishTasks` finishes its tasks; `.moveToDefaultDisplay` moves the
+    /// display's tasks to display 0 behind the launcher instead.
+    public func clearDisplay(_ displayID: Int32, policy: GPClearPolicy) async throws(
+        DisplayControlFailure
+    ) {
         guard await supervisor.state == .ready else {
             throw .unavailable
         }
         do throws(GuestProtocolFailure) {
-            _ = try await supervisor.send(GuestClearDisplay(displayID: displayID, policy: .finishTasks))
+            _ = try await supervisor.send(GuestClearDisplay(displayID: displayID, policy: policy))
         } catch {
             throw .operationFailed
         }

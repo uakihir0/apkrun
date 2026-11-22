@@ -1437,6 +1437,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private let cancelOperationData: Data
     private let launchData: Data
     private let terminateData: Data
+    private let closeSessionData: Data
     private let lock = NSLock()
     private var serviceNameValue: String?
     private var brokerRequirementValue: String?
@@ -1611,6 +1612,9 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         )
         launchData = try JSONEncoder().encode(launchReply ?? defaultLaunchReply)
         terminateData = try JSONEncoder().encode(terminateReply ?? defaultTerminateReply)
+        closeSessionData = try JSONEncoder().encode(
+            RuntimeCloseSessionControlReply(hadSession: true)
+        )
     }
 
     func makeBroker(
@@ -2054,6 +2058,10 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
             throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
         }
         return terminateData
+    }
+
+    func closeSession(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        closeSessionData
     }
 
     func verifyWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data {

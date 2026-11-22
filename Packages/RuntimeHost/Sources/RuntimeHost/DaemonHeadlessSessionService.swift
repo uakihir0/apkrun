@@ -1,6 +1,7 @@
 import CoreGraphics
 import DiagnosticsCore
 import Foundation
+import GuestProtocol
 import RuntimeAPI
 import RuntimeCore
 import UpdateCore
@@ -269,6 +270,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
 
         let packageID = request.packageID.rawValue
         guard let current = await registry.session(packageID: packageID) else {
+            markBackgroundTask(packageID, active: false)
             return try await Self.terminateWithoutSession(request, using: guestAgent)
         }
         let isInstalled: Bool
@@ -309,7 +311,68 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         await stopDrainingFrames(for: current.id)
         _ = await registry.stopCompleted(sessionID: current.id)
         await forgetSession(packageID: packageID, sessionID: current.id)
+        markBackgroundTask(packageID, active: false)
         return RuntimeTerminateResult(packageID: request.packageID, hadSession: true)
+    }
+
+    /// Closes the package's session with `policy` (display-and-windowing.md
+    /// §7.6). `stop` finishes the session's tasks through the Guest Agent;
+    /// `keepRunning` moves the root task to display 0 and marks it as a
+    /// background task so the runtime stays active until it ends.
+    func closeSession(
+        _ request: RuntimeCloseSessionRequest, policy: WireClosePolicy
+    ) async throws(RuntimeWireError) -> RuntimeCloseSessionResult {
+        guard await acquireOperation() else {
+            throw Self.shuttingDownError
+        }
+        defer { releaseOperation() }
+        await ensureGuestObservation()
+        guard !isShuttingDown else {
+            throw Self.shuttingDownError
+        }
+
+        let packageID = request.packageID.rawValue
+        guard let current = await registry.session(packageID: packageID) else {
+            return RuntimeCloseSessionResult(packageID: request.packageID, hadSession: false)
+        }
+        if current.state != .closing {
+            do throws(SessionRegistryFailure) {
+                _ = try await registry.transition(current.id, to: .closing)
+            } catch {
+                guard let latest = await registry.session(current.id), Self.isEnded(latest.state)
+                else {
+                    throw Self.wireError(for: error)
+                }
+            }
+        }
+        guard let latest = await registry.session(current.id), !Self.isEnded(latest.state) else {
+            return RuntimeCloseSessionResult(packageID: request.packageID, hadSession: false)
+        }
+
+        switch policy {
+        case .stop:
+            do throws(GuestAgentFailure) {
+                try await guestAgent.applyClearPolicy(latest.displayID, policy: .finishTasks)
+            } catch {
+                throw Self.wireError(for: error)
+            }
+        case .keepRunning:
+            guard latest.displayID != 0 else {
+                throw Self.wireError(for: GuestAgentFailure.operationFailed(
+                    reason: "taskAlreadyOnDefaultDisplay"))
+            }
+            do throws(GuestAgentFailure) {
+                try await guestAgent.applyClearPolicy(latest.displayID, policy: .moveToDefaultDisplay)
+            } catch {
+                throw Self.wireError(for: error)
+            }
+            markBackgroundTask(packageID, active: true)
+        }
+
+        await stopDrainingFrames(for: current.id)
+        _ = await registry.stopCompleted(sessionID: current.id)
+        await forgetSession(packageID: packageID, sessionID: current.id)
+        return RuntimeCloseSessionResult(packageID: request.packageID, hadSession: true)
     }
 
     /// update-system.md §8.2: launches the package and watches for its
@@ -390,6 +453,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         }
 
         let packageID = request.packageID.rawValue
+        markBackgroundTask(packageID, active: false)
         guard let current = await registry.session(packageID: packageID) else { return }
         var shouldForceStop = true
         if current.state != .closing {
@@ -598,12 +662,18 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             } catch {
                 return
             }
+            // Relaunch of a package whose task a keepRunning close retained:
+            // the session's own hold takes over the task's (§7.6).
+            markBackgroundTask(package, active: false)
         case .vanished(let package, let taskID):
             let updated = await registry.taskVanished(packageID: package, taskID: taskID)
             if let updated, Self.isEnded(updated.state) {
                 await stopDrainingFrames(for: updated.id)
                 await forgetSession(packageID: package, sessionID: updated.id)
             }
+            // A task kept by a keepRunning close ends its hold here
+            // (display-and-windowing.md §7.6); the session is already gone.
+            markBackgroundTask(package, active: false)
         }
     }
 

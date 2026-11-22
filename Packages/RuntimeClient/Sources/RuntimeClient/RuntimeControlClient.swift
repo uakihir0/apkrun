@@ -409,6 +409,27 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Closes the package's session with `policy` (display-and-windowing.md
+    /// §7.6); `nil` lets the daemon apply the saved `window.closeBehavior`.
+    public func closeSession(_ request: RuntimeCloseSessionRequest) async throws(RuntimeControlClientError)
+        -> RuntimeCloseSessionResult
+    {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeCloseSessionControlRequest(
+                header: makeHeader(),
+                packageID: request.packageID,
+                policy: request.policy
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.closeSession(data)
+            return try Self.decodeCloseSessionReply(from: response, packageID: request.packageID)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
     /// Verifies a wrapper bundle against the daemon's registry and package store.
     public func verifyWrapper(
         bundleURL: URL,
@@ -3151,6 +3172,22 @@ public actor RuntimeControlClient {
         return result
     }
 
+    private static func decodeCloseSessionReply(
+        from data: Data, packageID: RuntimePackageID
+    ) throws(RuntimeControlClientError) -> RuntimeCloseSessionResult {
+        let reply = try Self.decode(RuntimeCloseSessionControlReply.self, from: data)
+        guard (reply.hadSession != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message, parameters: failure.parameters)
+        }
+        guard let hadSession = reply.hadSession else {
+            throw .malformedReply
+        }
+        return RuntimeCloseSessionResult(packageID: packageID, hadSession: hadSession)
+    }
+
     private static func decodePackageListReply(from data: Data) throws(RuntimeControlClientError)
         -> RuntimePackageListResult
     {
@@ -3408,6 +3445,7 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func unsubscribe(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func terminate(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func closeSession(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func verifyWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data
 
     /// Starts a wrapper generation; the reply carries the operation handle.
@@ -4194,6 +4232,20 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.terminate(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func closeSession(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.closeSession(request) { response in finish(.success(response)) }
         }
     }
 

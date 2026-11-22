@@ -980,6 +980,36 @@ public struct RuntimeTerminateResult: Codable, Sendable, Equatable {
     }
 }
 
+/// Closes a package session per `window.closeBehavior`
+/// (display-and-windowing.md §7.6).
+public struct RuntimeCloseSessionRequest: Codable, Sendable, Equatable {
+    /// The package whose session should close.
+    public var packageID: RuntimePackageID
+    /// The policy to apply; `nil` reads the package's saved
+    /// `window.closeBehavior` (`stop` when unset).
+    public var policy: WireClosePolicy?
+
+    /// Creates a close request.
+    public init(packageID: RuntimePackageID, policy: WireClosePolicy? = nil) {
+        self.packageID = packageID
+        self.policy = policy
+    }
+}
+
+/// The outcome of a session close request.
+public struct RuntimeCloseSessionResult: Codable, Sendable, Equatable {
+    /// The package whose session was closed.
+    public var packageID: RuntimePackageID
+    /// Whether the runtime had an active session to close.
+    public var hadSession: Bool
+
+    /// Creates a close result.
+    public init(packageID: RuntimePackageID, hadSession: Bool) {
+        self.packageID = packageID
+        self.hadSession = hadSession
+    }
+}
+
 /// A stable, transport-safe runtime failure with a user-facing fallback message.
 public struct RuntimeWireError: Error, Codable, Sendable, Equatable {
     /// The error domain, such as `runtime` or `store`.

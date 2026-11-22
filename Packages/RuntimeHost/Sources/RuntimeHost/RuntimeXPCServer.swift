@@ -1359,6 +1359,7 @@ extension SelfUpdateStatusRequest: VersionedControlRequest {}
 extension RuntimePackageIconControlRequest: VersionedControlRequest {}
 extension RuntimeLaunchControlRequest: VersionedControlRequest {}
 extension RuntimeTerminateControlRequest: VersionedControlRequest {}
+extension RuntimeCloseSessionControlRequest: VersionedControlRequest {}
 extension RuntimeImportPackageControlRequest: VersionedControlRequest {}
 extension RuntimeInstallImportedControlRequest: VersionedControlRequest {}
 extension RuntimeDiscardImportControlRequest: VersionedControlRequest {}
@@ -1433,6 +1434,7 @@ enum RuntimeControlOperation {
     case packageIcon
     case launch
     case terminate
+    case closeSession
     case importPackage
     case installImported
     case discardImport
@@ -1591,6 +1593,15 @@ enum RuntimeControlOperation {
             // Developer-mode reads; the developer.enabled gate is enforced in
             // RuntimeHost (diagnostics.md §9.3, runtime-api.md §13.1).
             true
+        case .closeSession:
+            // display-and-windowing.md §7.6: the window process closes its
+            // own session with the package's saved close policy.
+            switch clientKind {
+            case .wrapper, .launcher:
+                true
+            case .app, .menuBar, .cli:
+                false
+            }
         case .pushClipboard, .clipboardWritten, .focusChanged, .resolveLinkPrompt,
             .importFiles, .acceptExport:
             // Session-channel messages of desktop-integration.md §3.3, §6
@@ -3473,6 +3484,41 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeTerminateControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func closeSession(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(Self.encode(RuntimeCloseSessionControlReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .closeSession,
+                as: RuntimeCloseSessionControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeCloseSessionControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeCloseSessionControlRequest.self, from: request) else {
+                response.send(Self.encode(RuntimeCloseSessionControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let result = try await host.closeSession(
+                    RuntimeCloseSessionRequest(packageID: decoded.packageID, policy: decoded.policy))
+                response.send(Self.encode(RuntimeCloseSessionControlReply(hadSession: result.hadSession)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeCloseSessionControlReply(error: wireError)))
             }
         }
     }

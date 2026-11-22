@@ -130,6 +130,9 @@ public actor RuntimeHost {
     private var idleController: IdleController?
     private var packageStoreMutationTestGate: (@Sendable () async -> Void)?
     private var sessionActivityAssertions: [String: RuntimeActivityAssertion] = [:]
+    /// `.backgroundTask` holds for tasks a keepRunning close retains
+    /// (display-and-windowing.md §7.6).
+    private var backgroundTaskAssertions: [String: RuntimeActivityAssertion] = [:]
     private var adbClientActivityAssertion: RuntimeActivityAssertion?
     private var adbClientActivityTracker = ADBClientActivityTracker()
     private var isAcquiringADBClientActivity = false
@@ -825,6 +828,18 @@ public actor RuntimeHost {
             await idleController.assertActivity(.session)
     }
 
+    private func releaseBackgroundTaskActivity(_ packageID: String) {
+        backgroundTaskAssertions.removeValue(forKey: packageID)?.release()
+    }
+
+    private func releaseAllBackgroundTaskActivity() {
+        let assertions = backgroundTaskAssertions.values
+        backgroundTaskAssertions.removeAll()
+        for assertion in assertions {
+            assertion.release()
+        }
+    }
+
     func releaseSessionActivityIfInactive(_ packageID: RuntimePackageID) async {
         if let headlessSessionService {
             guard let sessionHandling = headlessSessionService as? any PackageMutationSessionHandling else {
@@ -896,6 +911,7 @@ public actor RuntimeHost {
         for assertion in assertions {
             assertion.release()
         }
+        releaseAllBackgroundTaskActivity()
     }
 
     private static func runtimeHostErrorCode(_ error: any Error) -> String {
@@ -1366,6 +1382,48 @@ public actor RuntimeHost {
             request,
             using: guestAgent
         )
+    }
+
+    /// Closes a package session per `window.closeBehavior`
+    /// (display-and-windowing.md §7.6). For `keepRunning` a `.backgroundTask`
+    /// activity assertion is acquired before the `.session` hold releases so
+    /// the idle controller never sees a false idle transition; it releases on
+    /// task disappearance, terminate, uninstall, or runtime teardown.
+    public func closeSession(_ request: RuntimeCloseSessionRequest) async throws(RuntimeWireError)
+        -> RuntimeCloseSessionResult
+    {
+        guard let supervisor, await supervisor.state == .ready else {
+            return RuntimeCloseSessionResult(packageID: request.packageID, hadSession: false)
+        }
+        let policy: WireClosePolicy
+        if let requested = request.policy {
+            policy = requested
+        } else {
+            let stored = try? await packageSettings(request.packageID)
+            policy = WireClosePolicy(rawValue: stored?.value("window.closeBehavior") ?? "") ?? .stop
+        }
+        guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
+            throw Self.guestAgentUnavailableError
+        }
+        if policy == .keepRunning, backgroundTaskAssertions[request.packageID.rawValue] == nil,
+            let idleController
+        {
+            backgroundTaskAssertions[request.packageID.rawValue] =
+                await idleController.assertActivity(.backgroundTask)
+        }
+        do {
+            let result = try await service.closeSession(request, policy: policy)
+            if result.hadSession {
+                releaseSessionActivity(request.packageID.rawValue)
+            }
+            if policy != .keepRunning {
+                releaseBackgroundTaskActivity(request.packageID.rawValue)
+            }
+            return result
+        } catch {
+            releaseBackgroundTaskActivity(request.packageID.rawValue)
+            throw error
+        }
     }
 
     /// Imports and inspects APK files without starting Android.
@@ -5186,6 +5244,8 @@ public actor RuntimeHost {
     /// pool so the next launch recreates them on the new supervisor.
     func dropRuntimeAttachedServices() async {
         headlessSessionService = nil
+        // The retained keepRunning tasks die with the guest connection.
+        releaseAllBackgroundTaskActivity()
         if let packageQueryService {
             await packageQueryService.detachRuntime()
         }
@@ -5642,6 +5702,13 @@ public actor RuntimeHost {
         await service.setSessionChangeObserver { [weak self] snapshot in
             guard let change = Self.sessionChange(for: snapshot) else { return }
             self?.eventHub.publishSessionChange(change)
+        }
+        // §7.6: a retained keepRunning task releases its `.backgroundTask`
+        // hold when the task ends (vanished, terminate, uninstall, relaunch).
+        await service.observeSessionActivity { [weak self] packageID, activity in
+            if activity == .taskEnded {
+                Task { await self?.releaseBackgroundTaskActivity(packageID.rawValue) }
+            }
         }
         headlessSessionService = service
         await wireUpdateGateSessionHooks()

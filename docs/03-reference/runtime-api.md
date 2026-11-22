@@ -126,6 +126,7 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.24 | `updatePackageSettings`, `packageSettings` |
 | 1.25 | `RuntimePackageDetails.previous` (the rollback slot) |
 | 1.38 | Optional `StartRuntimeRequest.hold` keeps a CLI start activity until its control connection closes |
+| 1.39 | `closeSession` applies a package's close policy (`stop`/`keepRunning`) to its session |
 
 
 ### 2.2 Rules per endpoint
@@ -603,6 +604,7 @@ Target `RuntimeStatus` replaces `RuntimeHostStatus` for `runtimeStatus`. Fields:
 |---|---|---|---|---|---|
 | `launch` (built) | `RuntimeLaunchControlRequest` (`packageID`) → `RuntimeLaunchControlReply` (`result`: `RuntimeLaunchResult`) | C | W | `sessions.*` (target) | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.2 |
 | `terminate` (built) | `RuntimeTerminateControlRequest` (`packageID`) → `RuntimeTerminateControlReply` (`result`: `RuntimeTerminateResult`) | C | U | `sessions.ended` (target) | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.2 |
+| `closeSession` (target) | `RuntimeCloseSessionControlRequest` (`packageID`, `policy`: `stop`, `keepRunning`, or nil for `window.closeBehavior`) → `RuntimeCloseSessionControlReply` (`hadSession`) | W, L | U | `sessions.ended` (target) | [display-and-windowing.md](../02-design/display-and-windowing.md) §7.6 |
 | `openSession` (target) | `OpenSessionRequest` → `SessionDescriptor` + `[IOSurface]` | W, L | W | session channel, `sessions.opened` | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.1 |
 | `listSessions` (target) | — → `[SessionSummary]` | C | Q | — | [runtime-daemon.md](../02-design/runtime-daemon.md) §8.6 |
 

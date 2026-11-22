@@ -332,7 +332,7 @@ final class IdleSuspendTests: XCTestCase {
     }
 }
 
-private final class ManualRuntimeIdleClock: RuntimeIdleClock, @unchecked Sendable {
+final class ManualRuntimeIdleClock: RuntimeIdleClock, @unchecked Sendable {
     private final class Waiter: @unchecked Sendable {
         let id = UUID()
         let deadline: Duration

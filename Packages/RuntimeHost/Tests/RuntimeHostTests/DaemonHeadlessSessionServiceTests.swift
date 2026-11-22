@@ -78,6 +78,61 @@ func daemonTerminateWithoutSessionRejectsAnUninstalledPackage() async throws {
     }
 
     #expect(await fixture.agent.forceStoppedPackages.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonCloseSessionStopFinishesTheTasksAndEndsTheSession() async throws {
+    let fixture = makeHeadlessServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let launched = try await fixture.service.launch(RuntimeLaunchRequest(packageID: package))
+
+    let result = try await fixture.service.closeSession(
+        RuntimeCloseSessionRequest(packageID: package), policy: .stop)
+
+    #expect(result.hadSession)
+    let stopPolicies = await fixture.agent.clearPolicies
+    #expect(stopPolicies.count == 1)
+    #expect(stopPolicies.first?.displayID == 1)
+    #expect(stopPolicies.first?.policy == .finishTasks)
+    #expect(await fixture.registry.session(.app(launched.sessionID))?.state == .ended(.userClosed))
+    #expect((await fixture.displayPool.snapshot())[0].state == .free)
+    #expect(!(await fixture.service.hasBackgroundActivity(packageID: package)))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonCloseSessionKeepRunningMovesTheTaskToDisplayZeroAndKeepsABackgroundHold() async throws {
+    let fixture = makeHeadlessServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let launched = try await fixture.service.launch(RuntimeLaunchRequest(packageID: package))
+
+    let result = try await fixture.service.closeSession(
+        RuntimeCloseSessionRequest(packageID: package), policy: .keepRunning)
+
+    #expect(result.hadSession)
+    let keepPolicies = await fixture.agent.clearPolicies
+    #expect(keepPolicies.count == 1)
+    #expect(keepPolicies.first?.displayID == 1)
+    #expect(keepPolicies.first?.policy == .moveToDefaultDisplay)
+    #expect(await fixture.service.hasBackgroundActivity(packageID: package))
+    #expect(await fixture.registry.session(.app(launched.sessionID))?.state == .ended(.userClosed))
+    #expect((await fixture.displayPool.snapshot())[0].state == .free)
+
+    let terminated = try await fixture.service.terminate(RuntimeTerminateRequest(packageID: package))
+    #expect(!terminated.hadSession)
+    #expect(await fixture.agent.forceStoppedPackages == [package.rawValue])
+    #expect(!(await fixture.service.hasBackgroundActivity(packageID: package)))
+}
+
+@Test
+func daemonCloseSessionWithoutASessionReportsHadSessionFalse() async throws {
+    let fixture = makeHeadlessServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    let result = try await fixture.service.closeSession(
+        RuntimeCloseSessionRequest(packageID: package), policy: .stop)
+
+    #expect(!result.hadSession)
+    #expect(await fixture.agent.clearPolicies.isEmpty)
     #expect(fixture.scanouts.configuredScanouts.isEmpty)
     #expect((await fixture.displayPool.snapshot())[0].state == .free)
 }
@@ -253,6 +308,7 @@ private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
     private(set) var launchCalls: [HeadlessLaunchCall] = []
     private(set) var stoppedPackages: [String] = []
     private(set) var forceStoppedPackages: [String] = []
+    private(set) var clearPolicies: [(displayID: Int32, policy: GPClearPolicy)] = []
     private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
     private var resynchronizationHandlerID: UUID?
     private var resynchronizationHandler: (@Sendable (GuestSnapshotState) async -> Void)?
@@ -295,6 +351,10 @@ private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
     func forceStopApplication(package: String) async throws(GuestAgentFailure) -> Bool {
         forceStoppedPackages.append(package)
         return stopResults.isEmpty ? true : stopResults.removeFirst()
+    }
+
+    func applyClearPolicy(_ displayID: Int32, policy: GPClearPolicy) async throws(GuestAgentFailure) {
+        clearPolicies.append((displayID: displayID, policy: policy))
     }
 
     func addResynchronizationHandler(

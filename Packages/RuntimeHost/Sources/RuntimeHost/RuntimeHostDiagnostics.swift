@@ -89,7 +89,9 @@ extension RuntimeHost {
         let deviceStatistics = await supervisor?.graphicsDeviceStatistics
         return GraphicsHealthStatus(
             deviceReady: deviceStatistics != nil,
-            gpuRendering: !safeMode && (deviceStatistics?.rendererFailures ?? 0) == 0,
+            // softwareRendering is the safe-mode (guestSwiftshader) path; a
+            // renderer failure does not switch the device off the GPU.
+            gpuRendering: !safeMode,
             // A still screen legitimately presents nothing; only a slow
             // measured present time is a warning, never fps == 0 alone.
             fastPresentation: sessions.allSatisfy { $0.presentGPUTimeP95Us < 33_000 },

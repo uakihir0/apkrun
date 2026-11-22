@@ -214,8 +214,7 @@ internal class FilesBridge(
     fun discardOffersOf(sourcePackage: String) {
         val doomed =
             synchronized(pendingExports) {
-                val keys =
-                    pendingExports.filterValues { it.sourcePackage == sourcePackage }.keys
+                val keys = pendingExports.filterValues { it.sourcePackage == sourcePackage }.keys
                 keys.mapNotNull { pendingExports.remove(it) }
             }
         doomed.forEach { it.file?.delete() }
@@ -226,8 +225,7 @@ internal class FilesBridge(
         val now = System.currentTimeMillis()
         val expired =
             synchronized(pendingExports) {
-                val keys =
-                    pendingExports.filterValues { now - it.createdAt > OFFER_TTL_MS }.keys
+                val keys = pendingExports.filterValues { now - it.createdAt > OFFER_TTL_MS }.keys
                 keys.mapNotNull { pendingExports.remove(it) }
             }
         expired.forEach { it.file?.delete() }
@@ -252,8 +250,7 @@ internal class FilesBridge(
         // activity's transient grant; a persistable grant is reopened.
         val stream =
             try {
-                (offer.file?.inputStream()
-                    ?: context.contentResolver.openInputStream(offer.uri))
+                (offer.file?.inputStream() ?: context.contentResolver.openInputStream(offer.uri))
             } catch (error: Exception) {
                 offer.file?.delete()
                 AgentLog.warning(

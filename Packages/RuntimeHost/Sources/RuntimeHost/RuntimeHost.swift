@@ -1416,16 +1416,15 @@ public actor RuntimeHost {
             if result.hadSession {
                 releaseSessionActivity(request.packageID.rawValue)
             }
-            // A keepRunning close that found no session marked no background
-            // task, so nothing releases the hold later — unless the package
-            // still has a retained task (a repeated keepRunning close).
-            let taskRetained: Bool
-            if result.hadSession {
-                taskRetained = true
-            } else {
-                taskRetained = await service.hasBackgroundActivity(packageID: request.packageID)
+            // Keep the hold only while the package has a retained
+            // keepRunning task: a close that marked none (no session, or
+            // every task already gone) releases the acquired assertion;
+            // a repeated close keeps the earlier retain (§7.6).
+            var holdRetained = false
+            if policy == .keepRunning {
+                holdRetained = await service.hasBackgroundActivity(packageID: request.packageID)
             }
-            if policy != .keepRunning || !taskRetained {
+            if !holdRetained {
                 releaseBackgroundTaskActivity(request.packageID.rawValue)
             }
             return result

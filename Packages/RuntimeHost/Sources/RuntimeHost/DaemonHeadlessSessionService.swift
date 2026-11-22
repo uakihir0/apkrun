@@ -376,7 +376,11 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             } catch {
                 throw Self.wireError(for: error)
             }
-            retainBackgroundTasks(packageID, taskIDs: latest.taskIDs)
+            // A task that vanished during the move is already gone from
+            // the session; seed only the still-tracked IDs (§7.6).
+            retainBackgroundTasks(
+                packageID,
+                taskIDs: await registry.session(current.id)?.taskIDs ?? [])
         }
 
         await stopDrainingFrames(for: current.id)
@@ -956,7 +960,9 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
 
     /// Marks `taskIDs` of `packageID` as keepRunning-retained (a
     /// `window.closeBehavior = keepRunning` close keeps those tasks alive).
+    /// An empty seed marks nothing: no live task means no hold.
     func retainBackgroundTasks(_ packageID: String, taskIDs: Set<Int32>) {
+        guard !taskIDs.isEmpty else { return }
         backgroundTasks[packageID, default: []].formUnion(taskIDs)
     }
 

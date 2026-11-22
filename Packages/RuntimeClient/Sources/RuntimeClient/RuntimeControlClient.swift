@@ -2121,6 +2121,47 @@ public actor RuntimeControlClient {
             on: { try await $0.rollbackImage($1) })
     }
 
+    /// The daemon's health report (`apkrun doctor`; runtime-api.md §13).
+    public func healthReport(
+        deep: Bool = false, checks: [String]? = nil
+    ) async throws(RuntimeControlClientError) -> WireHealthReport {
+        try await healthCall(
+            HealthRequest(header: makeHeader(), deep: deep, checks: checks),
+            on: { try await $0.healthReport($1) })
+    }
+
+    /// Applies the safe repairs of failed checks (`apkrun doctor --fix`).
+    /// An empty `checks` fixes every fixable failure.
+    public func applyHealthFixes(
+        checks: [String] = []
+    ) async throws(RuntimeControlClientError) -> WireHealthReport {
+        try await healthCall(
+            HealthFixRequest(header: makeHeader(), checks: checks),
+            on: { try await $0.applyHealthFixes($1) })
+    }
+
+    private func healthCall<Request: Encodable>(
+        _ request: Request,
+        on call: @escaping (any RuntimeControlChannel, Data) async throws -> Data
+    ) async throws(RuntimeControlClientError) -> WireHealthReport {
+        let opened = try await ensureControl()
+        do {
+            let data = try Self.encode(request)
+            let response = try await call(opened.channel, data)
+            let report = try Self.decode(WireHealthReport.self, from: response)
+            if let failure = report.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message,
+                    parameters: failure.parameters)
+            }
+            return report
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
     /// Runs a user-initiated feed action (`apkrun image check`,
     /// `apkrun image install --latest`). Returns the result line.
     public func imageFeedAction(_ action: String) async throws(RuntimeControlClientError) -> String {
@@ -3358,6 +3399,10 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func rollbackImage(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func imageFeedAction(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func deleteImageRecoveryPoint(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Health report (`apkrun doctor`; runtime-api.md §13).
+    func healthReport(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Safe health repairs (`apkrun doctor --fix`).
+    func applyHealthFixes(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func getConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func setConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func selfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -4629,6 +4674,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.imageFeedAction(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func healthReport(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.healthReport(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func applyHealthFixes(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.applyHealthFixes(request) { response in finish(.success(response)) }
         }
     }
 

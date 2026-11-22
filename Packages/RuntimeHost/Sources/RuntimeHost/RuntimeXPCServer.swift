@@ -1281,6 +1281,8 @@ private protocol VersionedControlRequest: Decodable {
 }
 
 extension RuntimeStatusRequest: VersionedControlRequest {}
+extension HealthRequest: VersionedControlRequest {}
+extension HealthFixRequest: VersionedControlRequest {}
 extension StartRuntimeRequest: VersionedControlRequest {}
 extension StopRuntimeRequest: VersionedControlRequest {}
 extension RestartRuntimeRequest: VersionedControlRequest {}
@@ -1434,6 +1436,8 @@ enum RuntimeControlOperation {
     case rollbackImage
     case deleteImageRecoveryPoint
     case imageFeedAction
+    case healthReport
+    case applyHealthFixes
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1555,7 +1559,8 @@ enum RuntimeControlOperation {
             .updateSkipped, .updatePackage, .getConfig, .setConfig,
             .packageSettings, .updatePackageSettings, .installImage,
             .imageStatus, .applyImage, .rollbackImage,
-            .deleteImageRecoveryPoint, .imageFeedAction:
+            .deleteImageRecoveryPoint, .imageFeedAction, .healthReport,
+            .applyHealthFixes:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -3027,6 +3032,84 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 response.send(Self.encode(WireImageApplyReply(result: result)))
             } catch {
                 response.send(Self.encode(WireImageApplyReply(error: Self.imageWireError(error))))
+            }
+        }
+    }
+
+    /// Runs the health checks (`apkrun doctor`). Reply: `WireHealthReport`.
+    func healthReport(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireHealthReport(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .healthReport,
+                as: HealthRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireHealthReport(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(HealthRequest.self, from: request)
+            else {
+                response.send(Self.encode(WireHealthReport(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let report = try await host.healthReport(
+                    deep: decoded.deep, checks: decoded.checks)
+                response.send(Self.encode(report))
+            } catch {
+                response.send(
+                    Self.encode(
+                        WireHealthReport(
+                            error: error as? RuntimeWireError ?? Self.malformedWireError)))
+            }
+        }
+    }
+
+    /// Applies safe health repairs (`apkrun doctor --fix`). Reply:
+    /// `WireHealthReport`.
+    func applyHealthFixes(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireHealthReport(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .applyHealthFixes,
+                as: HealthFixRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireHealthReport(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(HealthFixRequest.self, from: request)
+            else {
+                response.send(Self.encode(WireHealthReport(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let report = try await host.applyHealthFixes(checks: decoded.checks)
+                response.send(Self.encode(report))
+            } catch {
+                response.send(
+                    Self.encode(
+                        WireHealthReport(
+                            error: error as? RuntimeWireError ?? Self.malformedWireError)))
             }
         }
     }

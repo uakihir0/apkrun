@@ -224,6 +224,18 @@ final class RuntimeEventHub: @unchecked Sendable {
         )
     }
 
+    /// Publishes a `healthChanged` event on the `health` topic (§13).
+    func publishHealthEvent(_ event: HealthEvent) {
+        publish(
+            QueuedEvent(
+                topic: .health,
+                time: Date(),
+                operationID: nil,
+                payload: .health(event)
+            )
+        )
+    }
+
     /// Publishes an integration event on the `integrations` topic (§16.2).
     func publishIntegrationChange(_ change: IntegrationChange) {
         publish(

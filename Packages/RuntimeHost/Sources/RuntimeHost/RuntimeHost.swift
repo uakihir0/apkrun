@@ -78,7 +78,7 @@ public actor RuntimeHost {
 
     let paths: APKRunPaths
     let configurationStore: RuntimeConfigurationStore
-    private let buildInfo: BuildInfo
+    let buildInfo: BuildInfo
     private let environment: [String: String]
     private let executableURL: URL
     private let uncleanExitRecoveryOverride: (any DaemonUncleanExitRecovering)?
@@ -86,7 +86,7 @@ public actor RuntimeHost {
     /// When true, Android-bound operations fail with `runtime.notProvisioned` until `setup`
     /// completes (runtime-daemon.md §9.2). The daemon enforces it; dev and test hosts do not.
     private let enforceProvisioning: Bool
-    private var provisioningState: WireProvisioningState = .notStarted
+    var provisioningState: WireProvisioningState = .notStarted
     var imageStore: ImageStore?
     var diagnostics: DiagnosticsContext?
     /// The health-check registry, for checks hosted outside this file
@@ -102,7 +102,7 @@ public actor RuntimeHost {
     var logger: APKLogger?
     private var instanceLock: InstanceLock?
     private var stateStore: DaemonStateStore?
-    private var startupAssessment: DaemonStartupAssessment?
+    var startupAssessment: DaemonStartupAssessment?
     var image: InstalledImage?
     var instanceStore: InstanceStore?
     var supervisor: RuntimeSupervisor?
@@ -111,6 +111,11 @@ public actor RuntimeHost {
     private var wrapperRegistry: WrapperRegistry?
     private var wrapperRegistryLoadTask: Task<WrapperRegistry, Never>?
     private var wrapperHealthChecksRegistered = false
+    var agentHealthChecksRegistered = false
+    /// Last results, for `HealthContext.lastKnown` and healthChanged diffs.
+    var healthLastKnown: [HealthCheckID: LastKnown] = [:]
+    /// The state last published on the `health` topic, per check.
+    var healthPublished: [HealthCheckID: HealthState] = [:]
     /// Package IDs with a `wrapperCreate` operation in flight.
     private var wrapperCreationsInFlight: Set<String> = []
     /// The wrapper statuses of the last sweep or list pass (wrapper.md §9.1).
@@ -123,7 +128,7 @@ public actor RuntimeHost {
     private var bootProgressGeneration: UInt64 = 0
     private var runtimeStateSnapshotRevision: UInt64 = 0
     private var runtimeStateEventRevision: UInt64 = 0
-    private var runtimeStateSnapshot: RuntimeState = .stopped
+    var runtimeStateSnapshot: RuntimeState = .stopped
     private var recordedBootOperationIDs = Set<UUID>()
     private var hostState = "starting"
     private var startupFailure: (step: Int, code: String)?
@@ -3460,7 +3465,7 @@ public actor RuntimeHost {
     /// of every entry, refreshing `latestWrapperStatuses` and posting
     /// `statusChanged` for entries that changed. Low priority and quiet:
     /// failures only drop the sweep until the next list pass.
-    private func runWrapperSweep() async {
+    func runWrapperSweep() async {
         let registry = await wrapperRegistryInstance()
         let service = packageQueryServiceInstance()
         var knownPackages: Set<String>?
@@ -5038,7 +5043,7 @@ public actor RuntimeHost {
 
     /// Session graphics rows from the headless session service, or `[]` before
     /// Android has ever run (the read itself never starts it).
-    private func sessionGraphicsStatistics(sessionID: UUID?) async -> [SessionGraphicsStatistics] {
+    func sessionGraphicsStatistics(sessionID: UUID?) async -> [SessionGraphicsStatistics] {
         guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
             return []
         }

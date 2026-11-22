@@ -3,13 +3,18 @@ import Foundation
 /// `healthReport` request (runtime-api.md §13): a quick report takes at most
 /// 15 s, a deep one 3 minutes. `checks` nil means every registered check.
 public struct HealthRequest: Codable, Equatable, Sendable {
+    /// The API version stamp.
+    public var header: APIRequestHeader
     /// Run deep checks too.
     public var deep: Bool
     /// Restrict the report to these check IDs; nil runs all.
     public var checks: [String]?
 
     /// Creates a health report request.
-    public init(deep: Bool = false, checks: [String]? = nil) {
+    public init(
+        header: APIRequestHeader, deep: Bool = false, checks: [String]? = nil
+    ) {
+        self.header = header
         self.deep = deep
         self.checks = checks
     }
@@ -19,11 +24,14 @@ public struct HealthRequest: Codable, Equatable, Sendable {
 /// the named failed checks. An empty list means every failed check that
 /// offers a fix.
 public struct HealthFixRequest: Codable, Equatable, Sendable {
+    /// The API version stamp.
+    public var header: APIRequestHeader
     /// The check IDs to fix; empty means all fixable failures.
     public var checks: [String]
 
     /// Creates a fix request.
-    public init(checks: [String] = []) {
+    public init(header: APIRequestHeader, checks: [String] = []) {
+        self.header = header
         self.checks = checks
     }
 }
@@ -102,18 +110,22 @@ public struct WireHealthReport: Codable, Equatable, Sendable {
     public var statusLine: String
     /// Check IDs whose fix ran (`applyHealthFixes` only).
     public var fixed: [String]
+    /// The failure, when the request itself was rejected.
+    public var error: RuntimeWireError?
 
     /// Creates a report reply.
     public init(
         results: [WireHealthResult],
         verdict: String,
         statusLine: String,
-        fixed: [String] = []
+        fixed: [String] = [],
+        error: RuntimeWireError? = nil
     ) {
         self.results = results
         self.verdict = verdict
         self.statusLine = statusLine
         self.fixed = fixed
+        self.error = error
     }
 
     /// An error reply carrying a `RuntimeWireError` payload.
@@ -122,6 +134,7 @@ public struct WireHealthReport: Codable, Equatable, Sendable {
         verdict = "unknown"
         statusLine = error.message
         fixed = []
+        self.error = error
     }
 }
 

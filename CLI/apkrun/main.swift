@@ -31,6 +31,7 @@ struct APKRunCommand: AsyncParsableCommand {
                     ConfigCommand.self,
                     SelfUpdateCommand.self,
                     DoctorCommand.self,
+                    DiagnosticsCommand.self,
                     DevCommand.self,
                 ]
             )
@@ -65,6 +66,7 @@ struct APKRunCommand: AsyncParsableCommand {
                     ConfigCommand.self,
                     SelfUpdateCommand.self,
                     DoctorCommand.self,
+                    DiagnosticsCommand.self,
                 ]
             )
         #endif

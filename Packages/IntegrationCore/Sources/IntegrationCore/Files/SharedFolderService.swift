@@ -452,7 +452,8 @@ public actor SharedFolderService {
             root = try await checkedPickerCreate(package: package, rootID: rootID)
         } else {
             root = try await checkedAccess(
-                package: package, rootID: rootID, write: true).0
+                package: package, rootID: rootID, write: true
+            ).0
         }
         return try await create(
             root: root, package: package,
@@ -570,7 +571,8 @@ public actor SharedFolderService {
         // file that was there. A destination that IS the source — a pure
         // case change on a case-insensitive volume — is still allowed.
         if faccessat(parentFD, clean, F_OK, AT_SYMLINK_NOFOLLOW) == 0 {
-            var sourceInfo = Darwin.stat(), targetInfo = Darwin.stat()
+            var sourceInfo = Darwin.stat()
+            var targetInfo = Darwin.stat()
             // Same inode alone is not enough: a second hardlink of the same
             // inode would make renameat a silent no-op that leaves the old
             // name behind. Only a single-link entry is a true case change.

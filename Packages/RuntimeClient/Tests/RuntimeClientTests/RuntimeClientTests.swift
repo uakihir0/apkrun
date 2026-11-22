@@ -405,11 +405,11 @@ import Testing
         try await client.restartRuntime()
     }
 
-    for _ in 0..<1_000 {
+    for _ in 0..<200 {
         if transport.snapshot().restartRequests.count == 1 {
             break
         }
-        await Task.yield()
+        try await Task.sleep(for: .milliseconds(10))
     }
     #expect(transport.snapshot().restartRequests.count == 1)
     restart.cancel()

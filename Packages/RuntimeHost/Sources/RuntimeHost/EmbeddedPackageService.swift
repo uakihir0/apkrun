@@ -290,7 +290,7 @@ public actor EmbeddedPackageService: RuntimeService {
             }
             // B8: the ticket path runs the store's own install checks (for
             // example the downgrade refusal when Android kept newer data).
-            guard let ticket = RuntimeImportTicket(rawValue: preview.ticket.uuidString) else {
+            guard let ticket = RuntimeImportTicket(rawValue: preview.ticket.uuidString.lowercased()) else {
                 throw Self.wireError(for: PackageStoreFailure.importTicketNotFound)
             }
             let result = try await installImportedWithChange(
@@ -1384,7 +1384,7 @@ public actor EmbeddedPackageService: RuntimeService {
         from preview: PackageImportPreview,
         relation: RuntimeImportRelation
     ) throws -> RuntimeImportPreview {
-        guard let ticket = RuntimeImportTicket(rawValue: preview.ticket.uuidString.lowercased()) else {
+        guard let ticket = XX) else {
             throw EmbeddedPackageServiceFailure.invalidTicket
         }
         return RuntimeImportPreview(

@@ -63,7 +63,7 @@ final class FileTransferController {
     /// Shows the save panel and resolves through `acceptExport` (§6.3).
     private func present(_ offer: ExportOffer) async {
         let panel = NSSavePanel()
-        panel.title = "Save to Mac"
+        panel.title = LauncherStrings.text("Save to Mac")
         panel.message = "\(packageName) wants to save a file to your Mac."
         panel.nameFieldStringValue = Self.safeName(offer.name)
         if let type = UTType(mimeType: offer.type) {

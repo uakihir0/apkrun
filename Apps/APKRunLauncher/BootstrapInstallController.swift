@@ -71,11 +71,11 @@ final class BootstrapInstallController {
             ?? payload.packageId
         let version = payload.versionName ?? String(payload.versionCode)
         let alert = NSAlert()
-        alert.messageText = "Install \(appName) \(version) from this Mac app?"
+        alert.messageText = LauncherStrings.text("Install \(appName) \(version) from this Mac app?")
         alert.informativeText =
             "This Mac app contains the Android app. Install it to continue."
-        alert.addButton(withTitle: "Install from This App")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: LauncherStrings.text("Install from This App"))
+        alert.addButton(withTitle: LauncherStrings.text("Cancel"))
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return false }
         do {
@@ -97,7 +97,7 @@ final class BootstrapInstallController {
             return true
         } catch {
             let failure = NSAlert()
-            failure.messageText = "\(appName) could not be installed."
+            failure.messageText = LauncherStrings.text("\(appName) could not be installed.")
             failure.informativeText = String(describing: error)
             failure.runModal()
             return false

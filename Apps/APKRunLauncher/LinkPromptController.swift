@@ -64,18 +64,18 @@ final class LinkPromptController {
     /// Shows the sheet on `window` and resolves through `resolveLinkPrompt`.
     private func present(_ prompt: LinkPrompt, packageID: RuntimePackageID) async {
         let alert = NSAlert()
-        alert.messageText = "\(packageName) wants to open a link."
+        alert.messageText = LauncherStrings.text("\(packageName) wants to open a link.")
         alert.informativeText =
             prompt.signInHint
             ? "The link may be a sign-in page. Open it in your browser, not in \(packageName)."
             : "Open the link in your browser, or keep it in \(packageName)."
         alert.alertStyle = .informational
 
-        let openButton = alert.addButton(withTitle: "Open in Browser")
+        let openButton = alert.addButton(withTitle: LauncherStrings.text("Open in Browser"))
         if prompt.keepInAndroidAvailable {
-            alert.addButton(withTitle: "Keep in Android")
+            alert.addButton(withTitle: LauncherStrings.text("Keep in Android"))
         }
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: LauncherStrings.text("Cancel"))
         openButton.keyEquivalent = "\r"
 
         // The bold registrable domain plus the Remember checkbox (§7.2).

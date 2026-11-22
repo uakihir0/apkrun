@@ -46,7 +46,7 @@ private final class FrameStatisticsController {
             backing: .buffered,
             defer: false
         )
-        panel.title = "Frame Statistics"
+        panel.title = LauncherStrings.text("Frame Statistics")
         panel.isFloatingPanel = true
         panel.level = .floating
         guard let contentView = panel.contentView else { return }
@@ -81,7 +81,7 @@ private final class FrameStatisticsController {
             let client = try RuntimeControlClient(clientKind: .launcher)
             let sessions = try await client.frameStatistics()
             guard !sessions.isEmpty else {
-                field.stringValue = "no app session"
+                field.stringValue = LauncherStrings.text("no app session")
                 return
             }
             field.stringValue = sessions.map { session in
@@ -92,7 +92,7 @@ private final class FrameStatisticsController {
                     session.droppedFrames, session.hostReadbacks)
             }.joined(separator: "   ")
         } catch {
-            field.stringValue = "frameStatistics: \(error.localizedDescription)"
+            field.stringValue = LauncherStrings.text("frameStatistics: \(error.localizedDescription)")
         }
     }
 }
@@ -145,7 +145,7 @@ private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "APKRun Launcher"
+        window.title = LauncherStrings.text("APKRun Launcher")
         window.center()
         window.contentView = NSView()
         window.makeKeyAndOrderFront(nil)

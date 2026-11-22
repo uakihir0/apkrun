@@ -371,6 +371,19 @@ targets:
         INFOPLIST_EXPAND_BUILD_SETTINGS: YES
         CODE_SIGN_ENTITLEMENTS: Tests/IntegrationTests/Host/APKRunTestHost.entitlements
 
+  HostUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: Tests/IntegrationTests/HostUITests
+    settings:
+      base:
+        PRODUCT_NAME: HostUITests
+        PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.host-ui-tests
+        TEST_TARGET_NAME: APKRun
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: APKRun
   IntegrationTests:
     type: bundle.unit-test
     platform: macOS

@@ -7,10 +7,12 @@
         "flag"
       ],
       "message": {
-        "en": "This command needs a confirmation, but there is no terminal to ask."
+        "en": "This command needs a confirmation, but there is no terminal to ask.",
+        "ja": "このコマンドには確認が必要ですが、応答できる端末がありません。"
       },
       "remediation": {
-        "en": "Run it again with {flag}."
+        "en": "Run it again with {flag}.",
+        "ja": "{flag} を付けて再度実行してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -25,7 +27,8 @@
       "code": "cli.declined",
       "parameters": [],
       "message": {
-        "en": "Nothing was changed."
+        "en": "Nothing was changed.",
+        "ja": "何も変更されませんでした。"
       },
       "action": "none",
       "cliExit": 5,
@@ -41,11 +44,11 @@
       "parameters": [],
       "message": {
         "en": "`apkrun dev console` requires an interactive terminal.",
-        "ja": "`apkrun dev console` の実行には対話型ターミナルが必要です。"
+        "ja": "`apkrun dev console` には対話端末が必要です。"
       },
       "remediation": {
         "en": "Run the command from Terminal or another interactive terminal application.",
-        "ja": "ターミナルまたは別の対話型ターミナルアプリからコマンドを実行してください。"
+        "ja": "ターミナルなどの対話端末から実行してください。"
       },
       "action": "none",
       "cliExit": 64,
@@ -62,10 +65,12 @@
         "command"
       ],
       "message": {
-        "en": "{command} needs developer mode."
+        "en": "{command} needs developer mode.",
+        "ja": "{command} には開発者モードが必要です。"
       },
       "remediation": {
-        "en": "Turn on Developer mode in Settings → Advanced, or run: apkrun config set developer.enabled true"
+        "en": "Turn on Developer mode in Settings → Advanced, or run: apkrun config set developer.enabled true",
+        "ja": "設定 → 詳細設定で開発者モードをオンにするか、`apkrun config set developer.mode true` を実行してください。"
       },
       "action": "none",
       "cliExit": 5,
@@ -81,11 +86,11 @@
       "parameters": [],
       "message": {
         "en": "Android display details aren't available from the runtime service yet.",
-        "ja": "Android ディスプレイの詳細は、まだランタイムサービスから取得できません。"
+        "ja": "Android のディスプレイ詳細はまだランタイムサービスから取得できません。"
       },
       "remediation": {
         "en": "Run `apkrun runtime status` for available runtime details. Display reporting is tracked in #29.",
-        "ja": "取得可能なランタイム情報は `apkrun runtime status` で確認できます。ディスプレイ情報の対応は #29 で管理されています。"
+        "ja": "`apkrun runtime status` で利用可能なランタイム詳細を確認してください。"
       },
       "action": "none",
       "cliExit": 69,
@@ -103,10 +108,12 @@
         "reason"
       ],
       "message": {
-        "en": "apkrun can't open {file}."
+        "en": "apkrun can't open {file}.",
+        "ja": "apkrun は {file} を開けません。"
       },
       "remediation": {
-        "en": "Check the path and its permissions."
+        "en": "Check the path and its permissions.",
+        "ja": "パスと権限を確認してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -119,10 +126,12 @@
       "variants": {
         "notFound": {
           "message": {
-            "en": "{file} doesn't exist."
+            "en": "{file} doesn't exist.",
+            "ja": "{file} が存在しません。"
           },
           "remediation": {
-            "en": "Check the path."
+            "en": "Check the path.",
+            "ja": "パスを確認してください。"
           },
           "action": "none",
           "doc": {
@@ -133,10 +142,12 @@
         },
         "permissionDenied": {
           "message": {
-            "en": "apkrun isn't allowed to open {file}."
+            "en": "apkrun isn't allowed to open {file}.",
+            "ja": "apkrun は {file} を開く許可がありません。"
           },
           "remediation": {
-            "en": "Check the permissions, or give Terminal access in System Settings → Privacy & Security → Files and Folders."
+            "en": "Check the permissions, or give Terminal access in System Settings → Privacy & Security → Files and Folders.",
+            "ja": "権限を確認するか、システム設定 → プライバシーとセキュリティでターミナルにアクセスを許可してください。"
           },
           "action": "none",
           "doc": {
@@ -147,10 +158,12 @@
         },
         "isDirectory": {
           "message": {
-            "en": "{file} is a folder."
+            "en": "{file} is a folder.",
+            "ja": "{file} はフォルダです。"
           },
           "remediation": {
-            "en": "Name a file. Unpacked image folders are for apkrun dev image install."
+            "en": "Name a file. Unpacked image folders are for apkrun dev image install.",
+            "ja": "ファイルを指定してください。展開済みイメージフォルダは `apkrun dev image install` 用です。"
           },
           "action": "none",
           "doc": {
@@ -168,10 +181,12 @@
         "reason"
       ],
       "message": {
-        "en": "The value of {argument} isn't valid ({reason})."
+        "en": "The value of {argument} isn't valid ({reason}).",
+        "ja": "{argument} の値が不正です（{reason}）。"
       },
       "remediation": {
-        "en": "Run the command with --help to see the allowed values."
+        "en": "Run the command with --help to see the allowed values.",
+        "ja": "--help を付けて実行し、許可される値を確認してください。"
       },
       "action": "none",
       "cliExit": 64,
@@ -186,10 +201,12 @@
       "code": "cli.invalidArguments",
       "parameters": [],
       "message": {
-        "en": "The command arguments aren't valid."
+        "en": "The command arguments aren't valid.",
+        "ja": "コマンド引数が不正です。"
       },
       "remediation": {
-        "en": "Run the command with --help to see the allowed values."
+        "en": "Run the command with --help to see the allowed values.",
+        "ja": "--help を付けて実行し、許可される値を確認してください。"
       },
       "action": "none",
       "cliExit": 64,
@@ -206,10 +223,12 @@
         "package"
       ],
       "message": {
-        "en": "{package} isn't a valid Android package name."
+        "en": "{package} isn't a valid Android package name.",
+        "ja": "{package} は有効な Android パッケージ名ではありません。"
       },
       "remediation": {
-        "en": "Use a package name such as com.example.app. apkrun list shows the installed apps."
+        "en": "Use a package name such as com.example.app. apkrun list shows the installed apps.",
+        "ja": "com.example.app のようなパッケージ名を使用してください。`apkrun list` で一覧を確認できます。"
       },
       "action": "none",
       "cliExit": 64,
@@ -224,10 +243,12 @@
       "code": "cli.invalidSourceSpec",
       "parameters": [],
       "message": {
-        "en": "This update source isn't valid."
+        "en": "This update source isn't valid.",
+        "ja": "このアップデート元は不正です。"
       },
       "remediation": {
-        "en": "Use one of the forms local:, direct:, fdroid, or github:. apkrun update policy --help shows them."
+        "en": "Use one of the forms local:, direct:, fdroid, or github:. apkrun update policy --help shows them.",
+        "ja": "local:、direct:、fdroid、github: のいずれかの形式を使用してください。`apkrun update policy` を参照してください。"
       },
       "action": "none",
       "cliExit": 64,
@@ -242,10 +263,12 @@
       "code": "cli.logsUnavailable",
       "parameters": [],
       "message": {
-        "en": "APKRun's logs couldn't be read."
+        "en": "APKRun's logs couldn't be read.",
+        "ja": "APKRun のログを読み取れませんでした。"
       },
       "remediation": {
-        "en": "Try again. If it fails again, create a diagnostics report."
+        "en": "Try again. If it fails again, create a diagnostics report.",
+        "ja": "もう一度お試しください。再度失敗する場合は診断レポートを作成してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -262,10 +285,12 @@
         "operation"
       ],
       "message": {
-        "en": "apkrun couldn't read the answer of APKRun's background service ({operation})."
+        "en": "apkrun couldn't read the answer of APKRun's background service ({operation}).",
+        "ja": "apkrun は APKRun のバックグラウンドサービス（{operation}）の応答を読み取れませんでした。"
       },
       "remediation": {
-        "en": "Make sure apkrun comes from the installed APKRun, then report the problem."
+        "en": "Make sure apkrun comes from the installed APKRun, then report the problem.",
+        "ja": "apkrun がインストール先の APKRun と一致しているか確認してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -283,10 +308,12 @@
         "found"
       ],
       "message": {
-        "en": "This apkrun ({version}) doesn't match APKRun ({found})."
+        "en": "This apkrun ({version}) doesn't match APKRun ({found}).",
+        "ja": "この apkrun（{version}）は APKRun（{found}）と一致しません。"
       },
       "remediation": {
-        "en": "Link apkrun to the installed APKRun: Settings → Advanced → Install Command-Line Tool…"
+        "en": "Link apkrun to the installed APKRun: Settings → Advanced → Install Command-Line Tool…",
+        "ja": "apkrun をインストール済みの APKRun にリンクしてください（設定 → 詳細設定）。"
       },
       "action": "none",
       "cliExit": 0,
@@ -304,11 +331,11 @@
       ],
       "message": {
         "en": "Android couldn't apply a display change.",
-        "ja": "Androidにディスプレイの変更を適用できませんでした。"
+        "ja": "Android がディスプレイ変更を適用できませんでした。"
       },
       "remediation": {
         "en": "Restart Android.",
-        "ja": "Androidを再起動してください。"
+        "ja": "Android を再起動してください。"
       },
       "action": "restartAndroid",
       "cliExit": 1,
@@ -324,11 +351,11 @@
       "parameters": [],
       "message": {
         "en": "Android's display isn't ready yet.",
-        "ja": "Androidのディスプレイはまだ準備できていません。"
+        "ja": "Android のディスプレイの準備がまだできていません。"
       },
       "remediation": {
         "en": "Try again in a moment.",
-        "ja": "少し待ってからもう一度お試しください。"
+        "ja": "しばらくしてからもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 75,
@@ -346,11 +373,11 @@
       ],
       "message": {
         "en": "Part of APKRun is missing or damaged.",
-        "ja": "APKRunの一部が見つからないか、破損しています。"
+        "ja": "APKRun の一部が見つからないか破損しています。"
       },
       "remediation": {
         "en": "Reinstall APKRun.",
-        "ja": "APKRunを再インストールしてください。"
+        "ja": "APKRun を再インストールしてください。"
       },
       "action": "openDownloadsPage",
       "cliExit": 1,
@@ -368,7 +395,7 @@
       ],
       "message": {
         "en": "Android's display configuration is not valid.",
-        "ja": "Androidのディスプレイ設定が正しくありません。"
+        "ja": "Android のディスプレイ構成が不正です。"
       },
       "remediation": {
         "en": "Report the problem.",
@@ -390,11 +417,11 @@
       ],
       "message": {
         "en": "There isn't enough graphics memory for this window.",
-        "ja": "このウインドウに必要なグラフィックスメモリが不足しています。"
+        "ja": "このウインドウ用のグラフィックスメモリが不足しています。"
       },
       "remediation": {
         "en": "Close other apps or windows, then try again. If it happens again, create a diagnostics report.",
-        "ja": "ほかのアプリやウインドウを閉じてから、もう一度お試しください。再発する場合は診断レポートを作成してください。"
+        "ja": "他のアプリやウインドウを閉じてからもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -413,11 +440,11 @@
       ],
       "message": {
         "en": "Graphics failed to start.",
-        "ja": "グラフィックスを起動できませんでした。"
+        "ja": "グラフィックスの起動に失敗しました。"
       },
       "remediation": {
         "en": "Start Android in Graphics Safe Mode. If that doesn't help, update macOS and APKRun, and create a diagnostics report.",
-        "ja": "グラフィックスセーフモードでAndroidを起動してください。解決しない場合は、macOSとAPKRunをアップデートして診断レポートを作成してください。"
+        "ja": "グラフィックスセーフモードで Android を起動してください。改善しない場合は macOS と APKRun をアップデートしてください。"
       },
       "action": "startGraphicsSafeMode",
       "cliExit": 1,
@@ -435,11 +462,11 @@
       ],
       "message": {
         "en": "Android's graphics stopped working.",
-        "ja": "Androidのグラフィックスが停止しました。"
+        "ja": "Android のグラフィックスが停止しました。"
       },
       "remediation": {
         "en": "Android restarts automatically. If this happens often, start Android in Graphics Safe Mode.",
-        "ja": "Androidは自動的に再起動します。頻繁に発生する場合は、グラフィックスセーフモードでAndroidを起動してください。"
+        "ja": "Android は自動的に再起動します。頻発する場合はグラフィックスセーフモードで起動してください。"
       },
       "action": "startGraphicsSafeMode",
       "cliExit": 1,
@@ -458,11 +485,11 @@
       ],
       "message": {
         "en": "A graphics operation could not be completed.",
-        "ja": "グラフィックス処理を完了できませんでした。"
+        "ja": "グラフィックス操作を完了できませんでした。"
       },
       "remediation": {
         "en": "Restart Android. If the problem continues, create a diagnostics report.",
-        "ja": "Androidを再起動してください。解決しない場合は診断レポートを作成してください。"
+        "ja": "Android を再起動してください。問題が続く場合は診断レポートを作成してください。"
       },
       "action": "reportProblem",
       "cliExit": 1,
@@ -480,7 +507,7 @@
       ],
       "message": {
         "en": "Android's display configuration is not valid.",
-        "ja": "Androidのディスプレイ設定が正しくありません。"
+        "ja": "Android のディスプレイ構成が不正です。"
       },
       "remediation": {
         "en": "Report the problem.",
@@ -504,7 +531,7 @@
       ],
       "message": {
         "en": "Android's start configuration isn't valid.",
-        "ja": "Android の起動設定が正しくありません。"
+        "ja": "Android の起動構成が不正です。"
       },
       "remediation": {
         "en": "Report the problem.",
@@ -526,7 +553,7 @@
       ],
       "message": {
         "en": "Android's start configuration isn't valid.",
-        "ja": "Android の起動設定が正しくありません。"
+        "ja": "Android の起動構成が不正です。"
       },
       "remediation": {
         "en": "Report the problem.",
@@ -550,7 +577,7 @@
       },
       "remediation": {
         "en": "Check the free disk space, then try again. If it fails again, create a diagnostics report.",
-        "ja": "ディスクの空き容量を確認してから、もう一度お試しください。再び失敗する場合は、診断レポートを作成してください。"
+        "ja": "空き容量を確認してからもう一度お試しください。再度失敗する場合は診断レポートを作成してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -568,7 +595,7 @@
       ],
       "message": {
         "en": "APKRun's data is not on an APFS volume.",
-        "ja": "APKRun のデータが APFS ボリュームにありません。"
+        "ja": "APKRun のデータが APFS ボリューム上にありません。"
       },
       "remediation": {
         "en": "Move APKRun's data to an APFS volume.",
@@ -590,7 +617,7 @@
       ],
       "message": {
         "en": "Android's start configuration isn't valid.",
-        "ja": "Android の起動設定が正しくありません。"
+        "ja": "Android の起動構成が不正です。"
       },
       "remediation": {
         "en": "Report the problem.",
@@ -613,11 +640,11 @@
       ],
       "message": {
         "en": "Android {to} is older than the installed Android {from}, so it was not installed.",
-        "ja": "Android {to} は、インストール済みの Android {from} より古いため、インストールしませんでした。"
+        "ja": "Android {to} はインストール済みの Android {from} より古いため、インストールされませんでした。"
       },
       "remediation": {
         "en": "Install a newer Android system.",
-        "ja": "より新しい Android システムをインストールしてください。"
+        "ja": "より新しい Android をインストールしてください。"
       },
       "action": "openStorageSettings",
       "cliExit": 1,
@@ -635,11 +662,11 @@
       ],
       "message": {
         "en": "Some Android system files are damaged.",
-        "ja": "Android システムのファイルの一部が破損しています。"
+        "ja": "一部の Android システムファイルが破損しています。"
       },
       "remediation": {
         "en": "Install Android again from Settings → Storage. To check every file, run: apkrun doctor --deep",
-        "ja": "設定 → ストレージから Android をもう一度インストールしてください。すべてのファイルを確認するには apkrun doctor --deep を実行してください。"
+        "ja": "設定 → ストレージから Android を再インストールしてください。全ファイルを確認するには `apkrun image verify` を実行してください。"
       },
       "action": "openStorageSettings",
       "cliExit": 1,
@@ -657,11 +684,11 @@
       ],
       "message": {
         "en": "The Android image archive contains an unsafe entry: {path}.",
-        "ja": "Android イメージアーカイブに安全でないエントリ {path} が含まれています。"
+        "ja": "Android イメージのアーカイブに安全でないエントリが含まれています: {path}。"
       },
       "remediation": {
         "en": "Do not install this archive; get the Android system from the official feed.",
-        "ja": "このアーカイブはインストールしないでください。公式フィードから Android システムを取得してください。"
+        "ja": "このアーカイブはインストールしないでください。正規の提供元から取得してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -683,7 +710,7 @@
       },
       "remediation": {
         "en": "Install that Android system first, or choose one that is installed.",
-        "ja": "先にその Android システムをインストールするか、インストール済みのものを選んでください。"
+        "ja": "先にその Android システムをインストールするか、インストール済みのものを選択してください。"
       },
       "action": "openStorageSettings",
       "cliExit": 1,
@@ -697,10 +724,12 @@
     {
       "code": "image.imageRejected",
       "message": {
-        "en": "This Android image was rejected."
+        "en": "This Android image was rejected.",
+        "ja": "この Android イメージは拒否されました。"
       },
       "remediation": {
-        "en": "The image failed its compatibility or post-migration check. Install a newer image or roll back to the previous one."
+        "en": "The image failed its compatibility or post-migration check. Install a newer image or roll back to the previous one.",
+        "ja": "互換性または移行後チェックに失敗しました。より新しいイメージをインストールしてください。"
       },
       "parameters": [
         "version",
@@ -718,10 +747,12 @@
     {
       "code": "image.imageUpdateBusy",
       "message": {
-        "en": "An Android image update is already in progress."
+        "en": "An Android image update is already in progress.",
+        "ja": "Android イメージのアップデートがすでに進行中です。"
       },
       "remediation": {
-        "en": "Wait for the current image operation to finish, then try again."
+        "en": "Wait for the current image operation to finish, then try again.",
+        "ja": "現在のイメージ処理が終わってからもう一度お試しください。"
       },
       "parameters": [
         "detail"
@@ -745,11 +776,11 @@
       ],
       "message": {
         "en": "Android needs guest protocol {minimum}–{maximum}; this APKRun speaks {hostMinimum}–{hostMaximum}.",
-        "ja": "Android はゲストプロトコル {minimum}–{maximum} を必要としますが、この APKRun は {hostMinimum}–{hostMaximum} です。"
+        "ja": "Android はゲストプロトコル {minimum}–{maximum} を必要としますが、この APKRun は {hostMinimum}–{hostMaximum} を話します。"
       },
       "remediation": {
         "en": "Update APKRun, then install the Android system again.",
-        "ja": "APKRun を更新してから Android システムを再度インストールしてください。"
+        "ja": "APKRun と Android を互換性のあるバージョンにアップデートしてください。"
       },
       "action": "updateAPKRun",
       "cliExit": 1,
@@ -768,11 +799,11 @@
       ],
       "message": {
         "en": "Android requires APKRun {minimum} or later; this is {found}.",
-        "ja": "Android には APKRun {minimum} 以上が必要ですが、現在は {found} です。"
+        "ja": "Android は APKRun {minimum} 以降を必要としますが、現在は {found} です。"
       },
       "remediation": {
         "en": "Update APKRun, then install the Android system again.",
-        "ja": "APKRun を更新してから Android システムを再度インストールしてください。"
+        "ja": "APKRun をアップデートしてから Android システムをインストールしてください。"
       },
       "action": "updateAPKRun",
       "cliExit": 1,
@@ -794,7 +825,7 @@
       },
       "remediation": {
         "en": "Reset Android in Settings → Troubleshooting, or go back to a recovery point in Settings → Storage.",
-        "ja": "設定 → トラブルシューティングで Android をリセットするか、設定 → ストレージで復元ポイントに戻してください。"
+        "ja": "設定 → トラブルシューティングで Android をリセットするか、復元ポイントに戻してください。"
       },
       "action": "openTroubleshooting",
       "cliExit": 1,
@@ -814,7 +845,7 @@
       },
       "remediation": {
         "en": "Reset Android in Settings → Troubleshooting, or go back to a recovery point in Settings → Storage.",
-        "ja": "設定 → トラブルシューティングで Android をリセットするか、設定 → ストレージで復元ポイントに戻してください。"
+        "ja": "設定 → トラブルシューティングで Android をリセットするか、復元ポイントに戻してください。"
       },
       "action": "openTroubleshooting",
       "cliExit": 1,
@@ -833,11 +864,11 @@
       ],
       "message": {
         "en": "Android needs {needed} of free disk space, but only {available} is free.",
-        "ja": "Android には {needed} の空き容量が必要ですが、空きは {available} しかありません。"
+        "ja": "Android は {needed} の空き容量を必要としますが、{available} しかありません。"
       },
       "remediation": {
         "en": "Free up disk space, then try again.",
-        "ja": "ディスクの空き容量を増やしてから、もう一度お試しください。"
+        "ja": "ディスク容量を空けてからもう一度お試しください。"
       },
       "action": "openStorageSettings",
       "cliExit": 1,
@@ -856,11 +887,11 @@
       ],
       "message": {
         "en": "This Android system isn't valid.",
-        "ja": "この Android システムは正しくありません。"
+        "ja": "この Android システムは不正です。"
       },
       "remediation": {
         "en": "Install Android again from Settings → Storage.",
-        "ja": "設定 → ストレージから Android をもう一度インストールしてください。"
+        "ja": "設定 → ストレージから Android を再インストールしてください。"
       },
       "action": "openStorageSettings",
       "cliExit": 1,
@@ -878,11 +909,11 @@
       ],
       "message": {
         "en": "Android didn't come up healthy after the update; the previous system was restored.",
-        "ja": "更新後の Android が正常に起動しなかったため、以前のシステムを復元しました。"
+        "ja": "アップデート後に Android が正常に起動しなかったため、以前のシステムを復元しました。"
       },
       "remediation": {
         "en": "Report a Problem; the update can be retried later.",
-        "ja": "Report a Problem で問題を報告してください。更新は後で再試行できます。"
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 1,
@@ -898,11 +929,11 @@
       "parameters": [],
       "message": {
         "en": "The Android update was interrupted; the previous Android system was restored.",
-        "ja": "Android の更新が中断されたため、以前の Android システムを復元しました。"
+        "ja": "Android のアップデートが中断されたため、以前の Android システムを復元しました。"
       },
       "remediation": {
         "en": "No action needed; the update can be retried.",
-        "ja": "対応は不要です。更新は再試行できます。"
+        "ja": "対応は不要です。アップデートはやり直せます。"
       },
       "action": "none",
       "cliExit": 1,
@@ -921,11 +952,11 @@
       ],
       "message": {
         "en": "Android {source} is too old to update directly; {minimum} or later is required.",
-        "ja": "Android {source} は直接アップデートできません。{minimum} 以上が必要です。"
+        "ja": "Android {source} は直接アップデートするには古すぎます。{minimum} 以降が必要です。"
       },
       "remediation": {
         "en": "Update Android to {minimum} first, then retry.",
-        "ja": "まず Android を {minimum} に更新してからやり直してください。"
+        "ja": "まず Android を {minimum} にアップデートしてください。"
       },
       "action": "openStorageSettings",
       "cliExit": 1,
@@ -943,11 +974,11 @@
       ],
       "message": {
         "en": "Some Android system files are missing.",
-        "ja": "Android システムのファイルの一部が見つかりません。"
+        "ja": "一部の Android システムファイルが見つかりません。"
       },
       "remediation": {
         "en": "Install Android again from Settings → Storage. To check every file, run: apkrun doctor --deep",
-        "ja": "設定 → ストレージから Android をもう一度インストールしてください。すべてのファイルを確認するには apkrun doctor --deep を実行してください。"
+        "ja": "設定 → ストレージから Android を再インストールしてください。"
       },
       "action": "openStorageSettings",
       "cliExit": 1,
@@ -963,11 +994,11 @@
       "parameters": [],
       "message": {
         "en": "No Android system is installed yet.",
-        "ja": "Android システムはまだインストールされていません。"
+        "ja": "Android システムがまだインストールされていません。"
       },
       "remediation": {
         "en": "Install an Android system from Settings → Storage. Developers run: apkrun dev image install <bundle>",
-        "ja": "設定 → ストレージから Android システムをインストールしてください。開発者は apkrun dev image install <bundle> を実行してください。"
+        "ja": "設定 → ストレージから Android システムをインストールしてください。開発者は `apkrun image install` を実行します。"
       },
       "action": "openStorageSettings",
       "cliExit": 1,
@@ -989,7 +1020,7 @@
       },
       "remediation": {
         "en": "Install Android again from the official source. The files may have been changed after they were signed.",
-        "ja": "正式な配布元から Android をもう一度インストールしてください。署名後にファイルが変更された可能性があります。"
+        "ja": "正規の提供元から Android を再インストールしてください。"
       },
       "action": "openStorageSettings",
       "cliExit": 1,
@@ -1007,11 +1038,11 @@
       ],
       "message": {
         "en": "Some files in this Android system are not part of it.",
-        "ja": "この Android システムに含まれていないファイルがあります。"
+        "ja": "この Android システムに含まれないファイルがあります。"
       },
       "remediation": {
         "en": "Install Android again from the official source. To check every file, run: apkrun doctor --deep",
-        "ja": "正式な配布元から Android をもう一度インストールしてください。すべてのファイルを確認するには apkrun doctor --deep を実行してください。"
+        "ja": "正規の提供元から Android を再インストールしてください。"
       },
       "action": "openStorageSettings",
       "cliExit": 1,
@@ -1029,11 +1060,11 @@
       ],
       "message": {
         "en": "This Android system is signed by a key this Mac does not trust.",
-        "ja": "この Android システムは、この Mac が信頼していない鍵で署名されています。"
+        "ja": "この Android システムはこの Mac が信頼しない鍵で署名されています。"
       },
       "remediation": {
         "en": "Install Android again from the official source. In development, sign the bundle with a key this Mac trusts: python3 -m apkrun_image keygen, then bundle again.",
-        "ja": "正式な配布元から Android をもう一度インストールしてください。開発中は、この Mac が信頼する鍵で bundle に署名してください。"
+        "ja": "正規の提供元から Android を再インストールしてください。"
       },
       "action": "openStorageSettings",
       "cliExit": 1,
@@ -1052,11 +1083,11 @@
       ],
       "message": {
         "en": "Android cannot boot this device's data layout (schema {schema}); it supports {supported}.",
-        "ja": "Android はこのデバイスのデータレイアウト (スキーマ {schema}) を起動できません。対応するスキーマは {supported} です。"
+        "ja": "Android はこのデバイスのデータレイアウト（スキーマ {schema}）を起動できません。サポートは {supported} です。"
       },
       "remediation": {
         "en": "Reset Android to migrate the data, or stay on the current Android system.",
-        "ja": "Reset Android でデータを移行するか、現在の Android システムを使い続けてください。"
+        "ja": "Android をリセットしてください。"
       },
       "action": "openStorageSettings",
       "cliExit": 1,
@@ -1075,11 +1106,11 @@
       ],
       "message": {
         "en": "The copied item is too large for Android ({bytes}; the limit is {limit}).",
-        "ja": "コピーした項目は Android には大きすぎます（{bytes}、上限は {limit}）。"
+        "ja": "コピーされた項目が Android に対して大きすぎます（{bytes}。上限は {limit}）。"
       },
       "remediation": {
         "en": "Copy a smaller item.",
-        "ja": "小さい項目をコピーしてください。"
+        "ja": "より小さい項目をコピーしてください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -1099,7 +1130,7 @@
       ],
       "message": {
         "en": "{integration} is turned off for {app}.",
-        "ja": "{app} の {integration} はオフになっています。"
+        "ja": "{app} で {integration} がオフになっています。"
       },
       "remediation": {
         "en": "Turn it on in the app's settings in APKRun.",
@@ -1134,11 +1165,11 @@
         "notFocused": {
           "message": {
             "en": "{app} can use {integration} only while you use its window.",
-            "ja": "{app} が {integration} を使えるのは、そのウィンドウを使用中だけです。"
+            "ja": "{app} が {integration} を使用できるのはそのウインドウの使用中のみです。"
           },
           "remediation": {
             "en": "Click the app's window, then try again.",
-            "ja": "アプリのウィンドウをクリックしてから、もう一度お試しください。"
+            "ja": "アプリのウインドウをクリックしてからもう一度お試しください。"
           },
           "action": "none",
           "doc": {
@@ -1150,11 +1181,11 @@
         "noSession": {
           "message": {
             "en": "{app} isn't open.",
-            "ja": "{app} は開いていません。"
+            "ja": "{app} が開いていません。"
           },
           "remediation": {
             "en": "Open {app}, then try again.",
-            "ja": "{app} を開いてから、もう一度お試しください。"
+            "ja": "{app} を開いてからもう一度お試しください。"
           },
           "action": "none",
           "doc": {
@@ -1166,11 +1197,11 @@
         "notSupported": {
           "message": {
             "en": "This version of Android doesn't support {integration}.",
-            "ja": "このバージョンの Android は {integration} に対応していません。"
+            "ja": "このバージョンの Android は {integration} をサポートしていません。"
           },
           "remediation": {
             "en": "Update Android.",
-            "ja": "Android を更新してください。"
+            "ja": "Android をアップデートしてください。"
           },
           "action": "updateAndroid",
           "doc": {
@@ -1182,11 +1213,11 @@
         "rateLimited": {
           "message": {
             "en": "{app} is doing this too often.",
-            "ja": "{app} の実行が頻繁すぎます。"
+            "ja": "{app} がこの操作を頻繁に行いすぎています。"
           },
           "remediation": {
             "en": "Wait a moment, then try again.",
-            "ja": "しばらく待ってから、もう一度お試しください。"
+            "ja": "しばらくしてからもう一度お試しください。"
           },
           "action": "retry",
           "doc": {
@@ -1243,11 +1274,11 @@
         "volumeRoot": {
           "message": {
             "en": "APKRun doesn't share a whole disk.",
-            "ja": "ディスク全体は共有できません。"
+            "ja": "APKRun はディスク全体を共有しません。"
           },
           "remediation": {
             "en": "Choose a folder on the disk instead.",
-            "ja": "ディスク内のフォルダを選んでください。"
+            "ja": "ディスク内のフォルダを選択してください。"
           },
           "action": "none",
           "doc": {
@@ -1259,11 +1290,11 @@
         "homeFolder": {
           "message": {
             "en": "APKRun doesn't share your whole home folder.",
-            "ja": "ホームフォルダ全体は共有できません。"
+            "ja": "APKRun はホームフォルダ全体を共有しません。"
           },
           "remediation": {
             "en": "Choose a folder inside it, such as Documents or Downloads.",
-            "ja": "Documents や Downloads など、その中のフォルダを選んでください。"
+            "ja": "書類やダウンロードなど、その中のフォルダを選択してください。"
           },
           "action": "none",
           "doc": {
@@ -1275,11 +1306,11 @@
         "insideLibrary": {
           "message": {
             "en": "APKRun doesn't share folders in your Library.",
-            "ja": "Library 内のフォルダは共有できません。"
+            "ja": "APKRun はライブラリ内のフォルダを共有しません。"
           },
           "remediation": {
             "en": "Choose a folder outside ~/Library.",
-            "ja": "~/Library の外にあるフォルダを選んでください。"
+            "ja": "~/Library の外にあるフォルダを選択してください。"
           },
           "action": "none",
           "doc": {
@@ -1291,11 +1322,11 @@
         "hidden": {
           "message": {
             "en": "APKRun doesn't share hidden folders.",
-            "ja": "隠しフォルダは共有できません。"
+            "ja": "APKRun は非表示フォルダを共有しません。"
           },
           "remediation": {
             "en": "Choose a folder that isn't hidden.",
-            "ja": "隠しフォルダでないフォルダを選んでください。"
+            "ja": "非表示でないフォルダを選択してください。"
           },
           "action": "none",
           "doc": {
@@ -1307,7 +1338,7 @@
         "limitReached": {
           "message": {
             "en": "You can share at most 32 folders.",
-            "ja": "共有できるのは 32 フォルダまでです。"
+            "ja": "共有できるフォルダは最大 32 個です。"
           },
           "remediation": {
             "en": "Remove a shared folder in Settings → Files first.",
@@ -1329,7 +1360,7 @@
       ],
       "message": {
         "en": "APKRun can't access the shared folder {file}.",
-        "ja": "共有フォルダ {file} にアクセスできません。"
+        "ja": "APKRun は共有フォルダ {file} にアクセスできません。"
       },
       "action": "none",
       "cliExit": 1,
@@ -1360,7 +1391,7 @@
         "privacyDenied": {
           "message": {
             "en": "macOS doesn't allow APKRun to access the shared folder {file}.",
-            "ja": "macOS は APKRun の共有フォルダ {file} へのアクセスを許可していません。"
+            "ja": "macOS が APKRun による共有フォルダ {file} へのアクセスを許可しません。"
           },
           "remediation": {
             "en": "Allow APKRun in System Settings → Privacy & Security → Files and Folders.",
@@ -1380,7 +1411,7 @@
           },
           "remediation": {
             "en": "Connect the drive or network volume that contains it.",
-            "ja": "そのフォルダを含むドライブやネットワークボリュームを接続してください。"
+            "ja": "そのフォルダを含むドライブまたはネットワークボリュームを接続してください。"
           },
           "action": "none",
           "doc": {
@@ -1396,11 +1427,11 @@
       "parameters": [],
       "message": {
         "en": "The Guest Agent in Android isn't connected.",
-        "ja": "Android 内のゲストエージェントが接続されていません。"
+        "ja": "Android 内の Guest Agent が接続されていません。"
       },
       "remediation": {
         "en": "APKRun reconnects automatically. Try again in a moment.",
-        "ja": "APKRun は自動的に再接続します。しばらくしてからもう一度お試しください。"
+        "ja": "APKRun が自動的に再接続します。しばらくしてからもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 75,
@@ -1419,7 +1450,7 @@
       ],
       "message": {
         "en": "APKRun didn't open a link from {app}.",
-        "ja": "{app} からのリンクを APKRun は開きませんでした。"
+        "ja": "APKRun は {app} からのリンクを開きませんでした。"
       },
       "action": "none",
       "cliExit": 5,
@@ -1434,7 +1465,7 @@
         "scheme": {
           "message": {
             "en": "APKRun opens only web and mail links from Android apps.",
-            "ja": "APKRun が Android アプリから開くのは Web とメールのリンクだけです。"
+            "ja": "APKRun は Android アプリからの Web とメールのリンクのみ開きます。"
           },
           "action": "none",
           "doc": {
@@ -1458,7 +1489,7 @@
         "notFocused": {
           "message": {
             "en": "APKRun opens links from {app} only while you use its window.",
-            "ja": "{app} からのリンクを開けるのは、そのウィンドウを使用中だけです。"
+            "ja": "APKRun が {app} からのリンクを開けるのはそのウインドウの使用中のみです。"
           },
           "action": "none",
           "doc": {
@@ -1470,7 +1501,7 @@
         "rateLimited": {
           "message": {
             "en": "{app} opened too many links at once.",
-            "ja": "{app} が一度に開いたリンクが多すぎます。"
+            "ja": "{app} が一度に多くのリンクを開きすぎました。"
           },
           "action": "none",
           "doc": {
@@ -1486,11 +1517,11 @@
       "parameters": [],
       "message": {
         "en": "Android needs to restart to change the microphone.",
-        "ja": "マイクの設定を反映するには Android の再起動が必要です。"
+        "ja": "マイクの変更には Android の再起動が必要です。"
       },
       "remediation": {
         "en": "Restart Android from the app's Integrations section or run `apkrun stop --android`.",
-        "ja": "アプリの Integrations セクションから Android を再起動するか、`apkrun stop --android` を実行してください。"
+        "ja": "アプリの連携設定から Android を再起動してください。"
       },
       "action": "restartAndroid",
       "cliExit": 1,
@@ -1507,11 +1538,11 @@
       "parameters": [],
       "message": {
         "en": "APKRun does not have microphone access.",
-        "ja": "APKRun にマイクへのアクセスが許可されていません。"
+        "ja": "APKRun にマイクのアクセス権がありません。"
       },
       "remediation": {
         "en": "Open System Settings → Privacy & Security → Microphone and turn on APKRun.",
-        "ja": "システム設定 → プライバシーとセキュリティ → マイクで APKRun をオンにしてください。"
+        "ja": "システム設定 → プライバシーとセキュリティ → マイクで APKRun を許可してください。"
       },
       "action": "openMicrophoneSettings",
       "cliExit": 1,
@@ -1530,11 +1561,11 @@
       ],
       "message": {
         "en": "This version of Android doesn't support this ({capability}).",
-        "ja": "このバージョンの Android はこれに対応していません（{capability}）。"
+        "ja": "このバージョンの Android はこの機能（{capability}）をサポートしていません。"
       },
       "remediation": {
         "en": "Update Android.",
-        "ja": "Android を更新してください。"
+        "ja": "Android をアップデートしてください。"
       },
       "action": "updateAndroid",
       "cliExit": 1,
@@ -1555,7 +1586,7 @@
       },
       "remediation": {
         "en": "The Guest Agent restores the access automatically; restart Android if the warning stays.",
-        "ja": "ゲストエージェントが自動的にアクセスを復元します。警告が消えない場合は Android を再起動してください。"
+        "ja": "Guest Agent が自動的に復元します。"
       },
       "action": "none",
       "cliExit": 1,
@@ -1572,7 +1603,7 @@
       "parameters": [],
       "message": {
         "en": "Android asked for a file that APKRun doesn't share.",
-        "ja": "APKRun が共有しないファイルを Android が要求しました。"
+        "ja": "Android が APKRun の共有していないファイルを要求しました。"
       },
       "action": "none",
       "cliExit": 5,
@@ -1614,7 +1645,7 @@
       ],
       "message": {
         "en": "The link from {app} was cancelled because the question wasn't answered.",
-        "ja": "{app} からのリンクは、質問への回答がなかったためキャンセルされました。"
+        "ja": "質問に回答されなかったため、{app} からのリンクはキャンセルされました。"
       },
       "action": "none",
       "cliExit": 1,
@@ -1633,11 +1664,11 @@
       ],
       "message": {
         "en": "{app} can only read files in the shared folders.",
-        "ja": "{app} が共有フォルダでできるのは読み取りだけです。"
+        "ja": "{app} は共有フォルダ内のファイルを読み取りのみできます。"
       },
       "remediation": {
         "en": "To allow changes, set Shared folders to Read and write in the app's settings, and give the folder Read and write access in Settings → Files.",
-        "ja": "変更を許可するには、アプリの設定で共有フォルダを「読み書き」にし、設定 → ファイルでフォルダに「読み書き」アクセスを与えてください。"
+        "ja": "変更を許可するには、アプリの設定で共有フォルダを「読み書き」にしてください。"
       },
       "action": "none",
       "cliExit": 5,
@@ -1657,11 +1688,11 @@
       ],
       "message": {
         "en": "Too many files at once ({count}).",
-        "ja": "一度にドロップするファイルが多すぎます（{count}）。"
+        "ja": "一度にドロップするファイルが多すぎます（{count} 件）。"
       },
       "remediation": {
         "en": "Drop at most 20 files at a time.",
-        "ja": "一度にドロップするのは 20 ファイルまでです。"
+        "ja": "一度に最大 20 件までドロップしてください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -1700,10 +1731,12 @@
       "code": "maintenance.cancelled",
       "parameters": [],
       "message": {
-        "en": "The update was cancelled."
+        "en": "The update was cancelled.",
+        "ja": "アップデートがキャンセルされました。"
       },
       "remediation": {
-        "en": "Start the update again when you are ready."
+        "en": "Start the update again when you are ready.",
+        "ja": "準備ができたらアップデートを再度開始してください。"
       },
       "action": "retry",
       "cliExit": 75,
@@ -1718,10 +1751,12 @@
       "code": "maintenance.criticalUpdateWaiting",
       "parameters": [],
       "message": {
-        "en": "A critical APKRun update has waited more than three days."
+        "en": "A critical APKRun update has waited more than three days.",
+        "ja": "重要な APKRun アップデートが 3 日以上待機しています。"
       },
       "remediation": {
-        "en": "Open APKRun and install the update."
+        "en": "Open APKRun and install the update.",
+        "ja": "APKRun を開いてアップデートをインストールしてください。"
       },
       "action": "updateAPKRun",
       "cliExit": 0,
@@ -1740,10 +1775,12 @@
         "supported"
       ],
       "message": {
-        "en": "This data was created by a newer version of APKRun."
+        "en": "This data was created by a newer version of APKRun.",
+        "ja": "このデータはより新しいバージョンの APKRun で作成されました。"
       },
       "remediation": {
-        "en": "Install the latest version of APKRun."
+        "en": "Install the latest version of APKRun.",
+        "ja": "最新バージョンの APKRun をインストールしてください。"
       },
       "action": "updateAPKRun",
       "cliExit": 70,
@@ -1758,10 +1795,12 @@
       "code": "maintenance.hostDowngraded",
       "parameters": [],
       "message": {
-        "en": "APKRun.app on disk is older than the running background service."
+        "en": "APKRun.app on disk is older than the running background service.",
+        "ja": "ディスク上の APKRun.app が実行中のバックグラウンドサービスより古いです。"
       },
       "remediation": {
-        "en": "Reinstall the newer APKRun build, or restart the service to match."
+        "en": "Reinstall the newer APKRun build, or restart the service to match.",
+        "ja": "新しい APKRun ビルドを再インストールしてください。"
       },
       "action": "updateAPKRun",
       "cliExit": 0,
@@ -1776,10 +1815,12 @@
       "code": "maintenance.hostUpdateAbandoned",
       "parameters": [],
       "message": {
-        "en": "An APKRun update stalled before it finished."
+        "en": "An APKRun update stalled before it finished.",
+        "ja": "APKRun のアップデートが完了前に中断されました。"
       },
       "remediation": {
-        "en": "Restart APKRun. If it keeps failing, create a diagnostics report."
+        "en": "Restart APKRun. If it keeps failing, create a diagnostics report.",
+        "ja": "APKRun を再起動してください。失敗が続く場合は診断レポートを作成してください。"
       },
       "action": "updateAPKRun",
       "cliExit": 0,
@@ -1799,10 +1840,12 @@
         "detail"
       ],
       "message": {
-        "en": "APKRun could not update its saved data to the new format."
+        "en": "APKRun could not update its saved data to the new format.",
+        "ja": "APKRun が保存データを新しい形式に更新できませんでした。"
       },
       "remediation": {
-        "en": "Report the problem. The original file was kept next to the migrated one."
+        "en": "Report the problem. The original file was kept next to the migrated one.",
+        "ja": "問題を報告してください。元のファイルは保持されています。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -1817,10 +1860,12 @@
       "code": "maintenance.selfUpdateCheckOverdue",
       "parameters": [],
       "message": {
-        "en": "APKRun hasn't checked for updates in over a week."
+        "en": "APKRun hasn't checked for updates in over a week.",
+        "ja": "APKRun は 1 週間以上アップデートを確認していません。"
       },
       "remediation": {
-        "en": "Open APKRun or run `apkrun self-update check`."
+        "en": "Open APKRun or run `apkrun self-update check`.",
+        "ja": "APKRun を開くか `apkrun self-update check` を実行してください。"
       },
       "action": "updateAPKRun",
       "cliExit": 0,
@@ -1837,10 +1882,12 @@
         "detail"
       ],
       "message": {
-        "en": "The update feed answered something APKRun can't use."
+        "en": "The update feed answered something APKRun can't use.",
+        "ja": "アップデートフィードが APKRun の利用できない内容を返しました。"
       },
       "remediation": {
-        "en": "Try again later. If it keeps failing, create a diagnostics report."
+        "en": "Try again later. If it keeps failing, create a diagnostics report.",
+        "ja": "あとでもう一度お試しください。失敗が続く場合は診断レポートを作成してください。"
       },
       "action": "retry",
       "cliExit": 70,
@@ -1857,10 +1904,12 @@
         "detail"
       ],
       "message": {
-        "en": "APKRun couldn't reach the update feed."
+        "en": "APKRun couldn't reach the update feed.",
+        "ja": "APKRun がアップデートフィードに到達できませんでした。"
       },
       "remediation": {
-        "en": "Check your internet connection and try again."
+        "en": "Check your internet connection and try again.",
+        "ja": "インターネット接続を確認してもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 69,
@@ -1875,10 +1924,12 @@
       "code": "maintenance.selfUpdateNotNewer",
       "parameters": [],
       "message": {
-        "en": "The update is not newer than the running build."
+        "en": "The update is not newer than the running build.",
+        "ja": "そのアップデートは実行中のビルドより新しくありません。"
       },
       "remediation": {
-        "en": "Pick a newer update and try again."
+        "en": "Pick a newer update and try again.",
+        "ja": "より新しいアップデートを選んでください。"
       },
       "action": "none",
       "cliExit": 64,
@@ -1893,10 +1944,12 @@
       "code": "maintenance.serviceVersionMismatch",
       "parameters": [],
       "message": {
-        "en": "APKRun.app was replaced; the background service still runs the old build."
+        "en": "APKRun.app was replaced; the background service still runs the old build.",
+        "ja": "APKRun.app が置き換えられましたが、バックグラウンドサービスは古いビルドのままです。"
       },
       "remediation": {
-        "en": "Run `apkrun self-update finish` or restart APKRun."
+        "en": "Run `apkrun self-update finish` or restart APKRun.",
+        "ja": "`apkrun self-update` を実行してください。"
       },
       "action": "updateAPKRun",
       "cliExit": 0,
@@ -1926,10 +1979,12 @@
         "status"
       ],
       "message": {
-        "en": "The Android debug command {command} failed."
+        "en": "The Android debug command {command} failed.",
+        "ja": "Android のデバッグコマンド {command} が失敗しました。"
       },
       "remediation": {
-        "en": "Try again. If it fails again, restart Android."
+        "en": "Try again. If it fails again, restart Android.",
+        "ja": "もう一度お試しください。再度失敗する場合は Android を再起動してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -1947,10 +2002,12 @@
         "seconds"
       ],
       "message": {
-        "en": "The Android debug command {command} didn't finish within {seconds} seconds."
+        "en": "The Android debug command {command} didn't finish within {seconds} seconds.",
+        "ja": "Android のデバッグコマンド {command} が {seconds} 秒以内に完了しませんでした。"
       },
       "remediation": {
-        "en": "Try again. If it fails again, restart Android."
+        "en": "Try again. If it fails again, restart Android.",
+        "ja": "もう一度お試しください。失敗が続く場合は Android を再起動してください。"
       },
       "action": "retry",
       "cliExit": 75,
@@ -1965,10 +2022,12 @@
       "code": "runtime.adbConnectionUnavailable",
       "parameters": [],
       "message": {
-        "en": "APKRun couldn't reach Android over ADB."
+        "en": "APKRun couldn't reach Android over ADB.",
+        "ja": "APKRun は ADB 経由で Android に到達できませんでした。"
       },
       "remediation": {
-        "en": "Start Android in developer mode with apkrun dev boot, then try again."
+        "en": "Start Android in developer mode with apkrun dev boot, then try again.",
+        "ja": "`apkrun dev boot` で開発者モードの Android を起動してください。"
       },
       "action": "retry",
       "cliExit": 75,
@@ -1983,10 +2042,12 @@
       "code": "runtime.adbExecutableMissing",
       "parameters": [],
       "message": {
-        "en": "APKRun can't find the Android debug bridge (adb)."
+        "en": "APKRun can't find the Android debug bridge (adb).",
+        "ja": "APKRun は Android デバッグブリッジ（adb）を見つけられません。"
       },
       "remediation": {
-        "en": "Install the Android SDK platform-tools, set ANDROID_HOME to the SDK folder, then try again. See environment-setup.md §2.5."
+        "en": "Install the Android SDK platform-tools, set ANDROID_HOME to the SDK folder, then try again. See environment-setup.md §2.5.",
+        "ja": "Android SDK platform-tools をインストールしてください。"
       },
       "action": "none",
       "cliExit": 69,
@@ -2003,10 +2064,12 @@
         "command"
       ],
       "message": {
-        "en": "APKRun refused an invalid argument for the Android debug command {command}."
+        "en": "APKRun refused an invalid argument for the Android debug command {command}.",
+        "ja": "APKRun は Android デバッグコマンド {command} の不正な引数を拒否しました。"
       },
       "remediation": {
-        "en": "Report the problem."
+        "en": "Report the problem.",
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -2021,10 +2084,12 @@
       "code": "runtime.adbLaunchFailed",
       "parameters": [],
       "message": {
-        "en": "APKRun couldn't start the Android debug bridge (adb)."
+        "en": "APKRun couldn't start the Android debug bridge (adb).",
+        "ja": "APKRun は Android デバッグブリッジ（adb）を起動できませんでした。"
       },
       "remediation": {
-        "en": "Check that the platform-tools folder of the Android SDK is complete, then try again."
+        "en": "Check that the platform-tools folder of the Android SDK is complete, then try again.",
+        "ja": "platform-tools フォルダのパスと権限を確認してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -2042,10 +2107,12 @@
         "reason"
       ],
       "message": {
-        "en": "Android didn't complete the package command {command}: {reason}."
+        "en": "Android didn't complete the package command {command}: {reason}.",
+        "ja": "Android はパッケージコマンド {command} を完了しませんでした: {reason}。"
       },
       "remediation": {
-        "en": "Check the reason, fix the app or the device, then try again."
+        "en": "Check the reason, fix the app or the device, then try again.",
+        "ja": "理由を確認し、アプリを修正してからもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -2062,10 +2129,12 @@
         "command"
       ],
       "message": {
-        "en": "Android answered the debug command {command} in an unexpected way."
+        "en": "Android answered the debug command {command} in an unexpected way.",
+        "ja": "Android はデバッグコマンド {command} に予期しない応答を返しました。"
       },
       "remediation": {
-        "en": "Try again. If it happens again, report the problem."
+        "en": "Try again. If it happens again, report the problem.",
+        "ja": "もう一度お試しください。再発する場合は問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -2083,11 +2152,11 @@
       ],
       "message": {
         "en": "Android failed to start.",
-        "ja": "Android を起動できませんでした。"
+        "ja": "Android の起動に失敗しました。"
       },
       "remediation": {
         "en": "Restart Android. If it happens again, create a diagnostics report.",
-        "ja": "Android を再起動してください。再び発生する場合は、診断レポートを作成してください。"
+        "ja": "Android を再起動してください。再発する場合は診断レポートを作成してください。"
       },
       "action": "restartAndroid",
       "cliExit": 1,
@@ -2103,11 +2172,11 @@
       "parameters": [],
       "message": {
         "en": "APKRun needs to be restarted.",
-        "ja": "APKRun を再起動してください。"
+        "ja": "APKRun を再起動する必要があります。"
       },
       "remediation": {
         "en": "Quit and reopen APKRun.",
-        "ja": "APKRun を終了してから再度開いてください。"
+        "ja": "APKRun を終了して開き直してください。"
       },
       "action": "retry",
       "cliExit": 69,
@@ -2125,11 +2194,11 @@
       ],
       "message": {
         "en": "Android stopped making progress while starting ({phase}).",
-        "ja": "Android が起動中に進まなくなりました（{phase}）。"
+        "ja": "Android の起動が途中（{phase}）で止まりました。"
       },
       "remediation": {
         "en": "Restart Android. If it happens again, create a diagnostics report.",
-        "ja": "Android を再起動してください。再び発生する場合は、診断レポートを作成してください。"
+        "ja": "Android を再起動してください。再発する場合は診断レポートを作成してください。"
       },
       "action": "restartAndroid",
       "cliExit": 1,
@@ -2151,7 +2220,7 @@
       },
       "remediation": {
         "en": "Restart Android. If it happens again, create a diagnostics report.",
-        "ja": "Android を再起動してください。再び発生する場合は、診断レポートを作成してください。"
+        "ja": "Android を再起動してください。再発する場合は診断レポートを作成してください。"
       },
       "action": "restartAndroid",
       "cliExit": 1,
@@ -2166,10 +2235,12 @@
       "code": "runtime.busy",
       "parameters": [],
       "message": {
-        "en": "APKRun's background service is busy."
+        "en": "APKRun's background service is busy.",
+        "ja": "APKRun のバックグラウンドサービスがビジーです。"
       },
       "remediation": {
-        "en": "Wait a moment and try again."
+        "en": "Wait a moment and try again.",
+        "ja": "しばらくしてからもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 75,
@@ -2185,7 +2256,7 @@
       "parameters": [],
       "message": {
         "en": "The operation was cancelled.",
-        "ja": "操作をキャンセルしました。"
+        "ja": "操作がキャンセルされました。"
       },
       "action": "none",
       "cliExit": 130,
@@ -2201,11 +2272,11 @@
       "parameters": [],
       "message": {
         "en": "APKRun could not release the Linux VM. It is keeping the instance lock while cleanup continues.",
-        "ja": "Linux VM を解放できなかったため、後処理が続く間インスタンスロックを保持しています。"
+        "ja": "APKRun は Linux VM を解放できませんでした。クリーンアップが続く間インスタンスロックを保持しています。"
       },
       "remediation": {
         "en": "The terminal has been restored. Wait for cleanup to finish before starting another VM.",
-        "ja": "端末設定は復元されました。後処理が終わるまで別の VM を起動しないでください。"
+        "ja": "クリーンアップの完了を待ってください。"
       },
       "action": "none",
       "cliExit": 0,
@@ -2221,11 +2292,11 @@
       "parameters": [],
       "message": {
         "en": "The Linux guest failed during the interactive console session.",
-        "ja": "対話コンソールの使用中に Linux ゲストで障害が発生しました。"
+        "ja": "対話コンソールセッション中に Linux ゲストが失敗しました。"
       },
       "remediation": {
         "en": "Inspect the VM console log and run apkrun doctor for the subsystem health checks.",
-        "ja": "VM コンソールログを確認し、apkrun doctor でサブシステムの状態を調べてください。"
+        "ja": "VM のコンソールログを確認してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -2241,11 +2312,11 @@
       "parameters": [],
       "message": {
         "en": "Console input could not be delivered during the interactive session.",
-        "ja": "対話コンソールの使用中に入力をゲストへ送信できませんでした。"
+        "ja": "対話セッション中にコンソール入力を送信できませんでした。"
       },
       "remediation": {
         "en": "Check the terminal and VM console log, then run the command again.",
-        "ja": "ターミナルと VM コンソールログを確認してから、コマンドをもう一度実行してください。"
+        "ja": "端末を確認してからもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -2262,10 +2333,12 @@
         "console"
       ],
       "message": {
-        "en": "No Android {console} console is open, because no `apkrun dev boot` is running."
+        "en": "No Android {console} console is open, because no `apkrun dev boot` is running.",
+        "ja": "`apkrun dev boot` が実行されていないため、Android {console} コンソールは開いていません。"
       },
       "remediation": {
-        "en": "Start Android with `apkrun dev boot --bundle <dir>` in another terminal, then run this command again."
+        "en": "Start Android with `apkrun dev boot --bundle <dir>` in another terminal, then run this command again.",
+        "ja": "まず `apkrun dev boot` で Android を起動してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -2283,11 +2356,11 @@
       ],
       "message": {
         "en": "The interactive console dropped at least {bytes} bytes, so terminal output is incomplete.",
-        "ja": "対話コンソールで少なくとも {bytes} バイトが失われたため、端末出力は不完全です。"
+        "ja": "対話コンソールが {bytes} バイト以上を破棄したため、端末出力が不完全です。"
       },
       "remediation": {
         "en": "Inspect the VM console log and reduce guest output before repeating the session.",
-        "ja": "VM コンソールログを確認し、ゲスト出力を減らしてから再実行してください。"
+        "ja": "もう一度お試しください。"
       },
       "action": "none",
       "cliExit": 0,
@@ -2302,10 +2375,12 @@
       "code": "runtime.devConsoleSocketUnavailable",
       "parameters": [],
       "message": {
-        "en": "APKRun could not open the developer console socket for Android."
+        "en": "APKRun could not open the developer console socket for Android.",
+        "ja": "APKRun は Android の開発者コンソールソケットを開けませんでした。"
       },
       "remediation": {
-        "en": "Check permissions for APKRun's data folder, then start `apkrun dev boot` again."
+        "en": "Check permissions for APKRun's data folder, then start `apkrun dev boot` again.",
+        "ja": "権限を確認してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -2321,11 +2396,11 @@
       "parameters": [],
       "message": {
         "en": "The Linux guest artifact directory must be an absolute path.",
-        "ja": "Linux テストゲストの成果物ディレクトリには絶対パスを指定してください。"
+        "ja": "Linux ゲストのアーティファクトディレクトリは絶対パスである必要があります。"
       },
       "remediation": {
         "en": "Use an absolute path such as /tmp/apkrun-test-linux.",
-        "ja": "/tmp/apkrun-test-linux のような絶対パスを指定してください。"
+        "ja": "絶対パスを使用してください。"
       },
       "action": "none",
       "cliExit": 64,
@@ -2345,7 +2420,7 @@
       },
       "remediation": {
         "en": "Inspect the guest console output, then fix or retry the requested check.",
-        "ja": "ゲストのコンソール出力を確認し、チェックを修正するか再実行してください。"
+        "ja": "ゲストのコンソール出力を確認し、修正してから再試行してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -2365,7 +2440,7 @@
       },
       "remediation": {
         "en": "Inspect the guest console output and run the test again.",
-        "ja": "ゲストのコンソール出力を確認し、テストをもう一度実行してください。"
+        "ja": "ゲストのコンソール出力を確認してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -2381,11 +2456,11 @@
       "parameters": [],
       "message": {
         "en": "The Linux development command options are invalid.",
-        "ja": "Linux 開発コマンドのオプションが正しくありません。"
+        "ja": "Linux 開発コマンドのオプションが不正です。"
       },
       "remediation": {
         "en": "Use a timeout from 1 to 86400 seconds and comma-separated test names containing only letters, digits, hyphens, and underscores.",
-        "ja": "タイムアウトは 1～86400 秒にし、テスト名は英数字、ハイフン、アンダースコアだけの名前をカンマ区切りで指定してください。"
+        "ja": "タイムアウトは 1〜86400 秒の範囲で指定してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -2407,7 +2482,7 @@
       },
       "remediation": {
         "en": "Inspect the guest console output and run the test again.",
-        "ja": "ゲストのコンソール出力を確認し、テストをもう一度実行してください。"
+        "ja": "ゲストのコンソール出力を確認してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -2422,10 +2497,12 @@
       "code": "runtime.developerModeRequired",
       "parameters": [],
       "message": {
-        "en": "This request needs developer mode."
+        "en": "This request needs developer mode.",
+        "ja": "このリクエストには開発者モードが必要です。"
       },
       "remediation": {
-        "en": "Turn on Developer mode in Settings → Advanced, or run: apkrun config set developer.enabled true"
+        "en": "Turn on Developer mode in Settings → Advanced, or run: apkrun config set developer.enabled true",
+        "ja": "設定 → 詳細設定で開発者モードをオンにしてください。"
       },
       "action": "none",
       "cliExit": 5,
@@ -2443,11 +2520,11 @@
       ],
       "message": {
         "en": "Android can't use the {profile} graphics profile in this version of APKRun.",
-        "ja": "このバージョンの APKRun では、{profile} のグラフィックスプロファイルを使えません。"
+        "ja": "Android はこのバージョンの APKRun で {profile} グラフィックスプロファイルを使用できません。"
       },
       "remediation": {
         "en": "Start Android in Graphics Safe Mode. If that doesn't help, update APKRun and create a diagnostics report.",
-        "ja": "グラフィックスセーフモードでAndroidを起動してください。解決しない場合は、APKRunをアップデートして診断レポートを作成してください。"
+        "ja": "Android を起動してください。"
       },
       "action": "startGraphicsSafeMode",
       "cliExit": 1,
@@ -2486,10 +2563,12 @@
       "code": "runtime.guestAgentBundleMissing",
       "parameters": [],
       "message": {
-        "en": "APKRun can't find the Guest Agent for Android."
+        "en": "APKRun can't find the Guest Agent for Android.",
+        "ja": "APKRun は Android 用 Guest Agent を見つけられません。"
       },
       "remediation": {
-        "en": "Build the Guest Agent with scripts/build-guest.sh, or set APKRUN_GUEST_DIR to the folder that holds apkrun-guest.apk and apkrun-guest.json, then try again."
+        "en": "Build the Guest Agent with scripts/build-guest.sh, or set APKRUN_GUEST_DIR to the folder that holds apkrun-guest.apk and apkrun-guest.json, then try again.",
+        "ja": "`scripts/build-guest.sh` で Guest Agent をビルドしてください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -2504,10 +2583,12 @@
       "code": "runtime.guestAgentConnectTimedOut",
       "parameters": [],
       "message": {
-        "en": "APKRun couldn't connect to the Guest Agent within 30 seconds."
+        "en": "APKRun couldn't connect to the Guest Agent within 30 seconds.",
+        "ja": "APKRun は 30 秒以内に Guest Agent に接続できませんでした。"
       },
       "remediation": {
-        "en": "Restart Android with apkrun dev boot. If it happens again, create a diagnostics report."
+        "en": "Restart Android with apkrun dev boot. If it happens again, create a diagnostics report.",
+        "ja": "`apkrun dev boot` で Android を再起動してください。"
       },
       "action": "restartAndroid",
       "cliExit": 75,
@@ -2524,10 +2605,12 @@
         "reason"
       ],
       "message": {
-        "en": "The Guest Agent refused the connection: {reason}."
+        "en": "The Guest Agent refused the connection: {reason}.",
+        "ja": "Guest Agent が接続を拒否しました: {reason}。"
       },
       "remediation": {
-        "en": "Update APKRun and Android so that both speak the same guest protocol version, then try again."
+        "en": "Update APKRun and Android so that both speak the same guest protocol version, then try again.",
+        "ja": "APKRun と Android の両方をアップデートしてください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -2544,10 +2627,12 @@
         "reason"
       ],
       "message": {
-        "en": "Android didn't install the Guest Agent: {reason}."
+        "en": "Android didn't install the Guest Agent: {reason}.",
+        "ja": "Android は Guest Agent をインストールしませんでした: {reason}。"
       },
       "remediation": {
-        "en": "Check the reason, fix the device, then try again."
+        "en": "Check the reason, fix the device, then try again.",
+        "ja": "理由を確認し、デバイスを修正してからもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -2564,10 +2649,12 @@
         "reason"
       ],
       "message": {
-        "en": "The Guest Agent didn't complete the request: {reason}."
+        "en": "The Guest Agent didn't complete the request: {reason}.",
+        "ja": "Guest Agent がリクエストを完了しませんでした: {reason}。"
       },
       "remediation": {
-        "en": "Try again. If it fails again, restart Android."
+        "en": "Try again. If it fails again, restart Android.",
+        "ja": "もう一度お試しください。再度失敗する場合は Android を再起動してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -2582,10 +2669,12 @@
       "code": "runtime.guestAgentStartFailed",
       "parameters": [],
       "message": {
-        "en": "The Guest Agent didn't start."
+        "en": "The Guest Agent didn't start.",
+        "ja": "Guest Agent が起動しませんでした。"
       },
       "remediation": {
-        "en": "Restart Android with apkrun dev boot. If it happens again, create a diagnostics report."
+        "en": "Restart Android with apkrun dev boot. If it happens again, create a diagnostics report.",
+        "ja": "`apkrun dev boot` で Android を再起動してください。再発する場合は診断レポートを作成してください。"
       },
       "action": "restartAndroid",
       "cliExit": 1,
@@ -2600,10 +2689,12 @@
       "code": "runtime.guestAgentStopped",
       "parameters": [],
       "message": {
-        "en": "The Guest Agent start was stopped before the agent answered."
+        "en": "The Guest Agent start was stopped before the agent answered.",
+        "ja": "エージェントが応答する前に Guest Agent の起動が停止されました。"
       },
       "remediation": {
-        "en": "Start Android again with apkrun dev boot."
+        "en": "Start Android again with apkrun dev boot.",
+        "ja": "`apkrun dev boot` で Android を再度起動してください。"
       },
       "action": "restartAndroid",
       "cliExit": 1,
@@ -2626,7 +2717,7 @@
       },
       "remediation": {
         "en": "Follow the instructions for each reported requirement.",
-        "ja": "表示された各要件の指示に従ってください。"
+        "ja": "報告された各要件の指示に従ってください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -2640,7 +2731,7 @@
         "appleSilicon": {
           "message": {
             "en": "APKRun needs a Mac with Apple silicon.",
-            "ja": "APKRun には Apple silicon 搭載の Mac が必要です。"
+            "ja": "APKRun には Apple silicon の Mac が必要です。"
           },
           "action": "none",
           "doc": {
@@ -2694,11 +2785,11 @@
       "parameters": [],
       "message": {
         "en": "APKRun's background service is stopping.",
-        "ja": "APKRun のバックグラウンドサービスを停止しています。"
+        "ja": "APKRun のバックグラウンドサービスが停止中です。"
       },
       "remediation": {
         "en": "Try again in a moment.",
-        "ja": "少し待ってからもう一度お試しください。"
+        "ja": "しばらくしてからもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 75,
@@ -2718,7 +2809,7 @@
       },
       "remediation": {
         "en": "Run apkrun runtime status for details, then follow the reported error's instructions.",
-        "ja": "詳細を確認するには apkrun runtime status を実行し、表示されたエラーの指示に従ってください。"
+        "ja": "詳細は `apkrun runtime status` を実行してください。"
       },
       "action": "openTroubleshooting",
       "cliExit": 69,
@@ -2733,10 +2824,12 @@
       "code": "runtime.hostUpdating",
       "parameters": [],
       "message": {
-        "en": "APKRun is restarting to finish an update."
+        "en": "APKRun is restarting to finish an update.",
+        "ja": "APKRun がアップデート完了のため再起動しています。"
       },
       "remediation": {
-        "en": "Wait a moment and try again."
+        "en": "Wait a moment and try again.",
+        "ja": "しばらくしてからもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 75,
@@ -2767,11 +2860,11 @@
       ],
       "message": {
         "en": "Pointer and keyboard input are not bound to Android. {cause}",
-        "ja": "ポインタとキーボードの入力は Android に接続されていません。{cause}"
+        "ja": "ポインタとキーボード入力が Android にバインドされていません。{cause}"
       },
       "remediation": {
         "en": "Pointer and keyboard input stay off for this boot until the Guest Agent is running. Restart the boot with `apkrun dev boot --window`.",
-        "ja": "Guest Agent が起動するまで、このブートではポインタとキーボードの入力は無効のままです。`apkrun dev boot --window` でブートをやり直してください。"
+        "ja": "ポインタとキーボード入力は現在オフのままです。"
       },
       "action": "none",
       "cliExit": 0,
@@ -2779,7 +2872,7 @@
         "guestAgentNotRunning": {
           "message": {
             "en": "Pointer and keyboard input are not bound to Android, because the Guest Agent is not running.",
-            "ja": "Guest Agent が動作していないため、ポインタとキーボードの入力は Android に接続されていません。"
+            "ja": "Guest Agent が動作していないため、ポインタとキーボード入力は Android にバインドされていません。"
           },
           "doc": {
             "when": "after Android is ready, the boot has no running Guest Agent, so there is no input channel to bind",
@@ -2800,11 +2893,11 @@
       "parameters": [],
       "message": {
         "en": "APKRun couldn't reserve the Android instance.",
-        "ja": "APKRun が Android インスタンスを確保できませんでした。"
+        "ja": "APKRun は Android インスタンスを確保できませんでした。"
       },
       "remediation": {
         "en": "Check permissions for APKRun's data folder, then try again.",
-        "ja": "APKRun データフォルダのアクセス権を確認してから、もう一度お試しください。"
+        "ja": "APKRun のデータフォルダの権限を確認してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -2822,11 +2915,11 @@
       ],
       "message": {
         "en": "Another APKRun process is using Android.",
-        "ja": "別の APKRun プロセスが Android を使用しています。"
+        "ja": "別の APKRun プロセスが Android を使用中です。"
       },
       "remediation": {
         "en": "Try again when it has finished.",
-        "ja": "処理が終わってからもう一度お試しください。"
+        "ja": "終了してからもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 75,
@@ -2840,11 +2933,11 @@
         "apkrund": {
           "message": {
             "en": "APKRun's background service is using Android.",
-            "ja": "APKRun のバックグラウンドサービスが Android を使用しています。"
+            "ja": "APKRun のバックグラウンドサービスが Android を使用中です。"
           },
           "remediation": {
             "en": "Quit APKRun and its Mac apps, or set APKRUN_HOME to another folder.",
-            "ja": "APKRun と Mac アプリを終了するか、別のフォルダを指すように APKRUN_HOME を設定してください。"
+            "ja": "APKRun とその Mac アプリを終了するか、APKRUN_HOME を別のフォルダに設定してください。"
           },
           "action": "none",
           "doc": {
@@ -2856,11 +2949,11 @@
         "apkrunDev": {
           "message": {
             "en": "A development session (apkrun dev) is using Android.",
-            "ja": "開発セッション（apkrun dev）が Android を使用しています。"
+            "ja": "開発セッション（apkrun dev）が Android を使用中です。"
           },
           "remediation": {
             "en": "Stop the development session, then try again.",
-            "ja": "開発セッションを停止してから、もう一度お試しください。"
+            "ja": "開発セッションを停止してからもう一度お試しください。"
           },
           "action": "retry",
           "doc": {
@@ -2876,7 +2969,7 @@
       "parameters": [],
       "message": {
         "en": "Something went wrong in APKRun's background service.",
-        "ja": "APKRun のバックグラウンドサービスで予期しない問題が発生しました。"
+        "ja": "APKRun のバックグラウンドサービスで問題が発生しました。"
       },
       "remediation": {
         "en": "Try again. If it happens again, report the problem.",
@@ -2898,10 +2991,12 @@
         "value"
       ],
       "message": {
-        "en": "{value} is not a valid value for {key}."
+        "en": "{value} is not a valid value for {key}.",
+        "ja": "{value} は {key} の有効な値ではありません。"
       },
       "remediation": {
-        "en": "Check the accepted values for the setting in the configuration reference."
+        "en": "Check the accepted values for the setting in the configuration reference.",
+        "ja": "設定リファレンスで許可される値を確認してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -2918,10 +3013,12 @@
         "key"
       ],
       "message": {
-        "en": "The value for {key} is not valid."
+        "en": "The value for {key} is not valid.",
+        "ja": "{key} の値が不正です。"
       },
       "remediation": {
-        "en": "Send a boolean or null for this setting."
+        "en": "Send a boolean or null for this setting.",
+        "ja": "この設定には真偽値または null を送信してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -2941,7 +3038,7 @@
       },
       "remediation": {
         "en": "Restart Android. If it happens again, create a diagnostics report.",
-        "ja": "Android を再起動してください。再び発生する場合は、診断レポートを作成してください。"
+        "ja": "Android を再起動してください。再発する場合は診断レポートを作成してください。"
       },
       "action": "restartAndroid",
       "cliExit": 1,
@@ -2977,7 +3074,7 @@
       "parameters": [],
       "message": {
         "en": "This part of APKRun isn't allowed to control the runtime.",
-        "ja": "この APKRun コンポーネントにはランタイムを操作する権限がありません。"
+        "ja": "APKRun のこの部分はランタイムの制御を許可されていません。"
       },
       "remediation": {
         "en": "Report the problem.",
@@ -3001,7 +3098,7 @@
       },
       "remediation": {
         "en": "Open APKRun to finish setup, or run: apkrun setup",
-        "ja": "APKRun を開いてセットアップを完了するか、apkrun setup を実行してください。"
+        "ja": "APKRun を開いてセットアップを完了するか、`apkrun setup` を実行してください。"
       },
       "action": "none",
       "cliExit": 69,
@@ -3017,11 +3114,11 @@
       "parameters": [],
       "message": {
         "en": "That operation doesn't exist or has expired.",
-        "ja": "その操作は存在しないか、有効期限が切れています。"
+        "ja": "その操作は存在しないか期限切れです。"
       },
       "remediation": {
         "en": "List current operations with: `apkrun operations list`",
-        "ja": "現在の操作を `apkrun operations list` で一覧表示してください。"
+        "ja": "`apkrun operations list` で現在の操作を確認してください。"
       },
       "action": "none",
       "cliExit": 4,
@@ -3037,11 +3134,11 @@
       "parameters": [],
       "message": {
         "en": "APKRun couldn't confirm whether the install completed.",
-        "ja": "インストールが完了したか APKRun で確認できませんでした。"
+        "ja": "APKRun はインストールが完了したか確認できませんでした。"
       },
       "remediation": {
         "en": "Check `apkrun info <package>` before retrying; Android may have completed the install.",
-        "ja": "再試行する前に `apkrun info <package>` で確認してください。Android ではインストールが完了している可能性があります。"
+        "ja": "まず `apkrun info <package>` で確認してください。"
       },
       "action": "retry",
       "cliExit": 75,
@@ -3057,7 +3154,7 @@
       "parameters": [],
       "message": {
         "en": "APKRun's background service didn't answer in time.",
-        "ja": "APKRun のバックグラウンドサービスから時間内に応答がありませんでした。"
+        "ja": "APKRun のバックグラウンドサービスが時間内に応答しませんでした。"
       },
       "remediation": {
         "en": "Try again.",
@@ -3078,10 +3175,12 @@
         "agent"
       ],
       "message": {
-        "en": "The {agent} in Android isn't available."
+        "en": "The {agent} in Android isn't available.",
+        "ja": "Android 内の {agent} が利用できません。"
       },
       "remediation": {
-        "en": "Restart Android."
+        "en": "Restart Android.",
+        "ja": "Android を再起動してください。"
       },
       "action": "restartAndroid",
       "cliExit": 1,
@@ -3097,7 +3196,7 @@
       "parameters": [],
       "message": {
         "en": "APKRun's background service isn't running.",
-        "ja": "APKRun のバックグラウンドサービスが起動していません。"
+        "ja": "APKRun のバックグラウンドサービスが動作していません。"
       },
       "remediation": {
         "en": "Open APKRun once, or restart its background service.",
@@ -3117,11 +3216,11 @@
       "parameters": [],
       "message": {
         "en": "Android's locale or time settings may differ from this Mac.",
-        "ja": "Android の言語または時刻の設定がこの Mac と異なる可能性があります。"
+        "ja": "Android のロケールや時刻設定がこの Mac と異なる場合があります。"
       },
       "remediation": {
         "en": "Check Settings → Language & Region. Restart Android if the problem continues.",
-        "ja": "設定 → 言語と地域を確認してください。問題が続く場合は Android を再起動してください。"
+        "ja": "設定 → 言語と地域を確認してください。"
       },
       "action": "restartAndroid",
       "cliExit": 1,
@@ -3138,10 +3237,12 @@
         "key"
       ],
       "message": {
-        "en": "Unknown setting {key}."
+        "en": "Unknown setting {key}.",
+        "ja": "不明な設定 {key} です。"
       },
       "remediation": {
-        "en": "Run `apkrun config get` to list the settings keys."
+        "en": "Run `apkrun config get` to list the settings keys.",
+        "ja": "`apkrun config get` で設定キーの一覧を確認してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3158,10 +3259,12 @@
         "operationID"
       ],
       "message": {
-        "en": "The operation ended without a result."
+        "en": "The operation ended without a result.",
+        "ja": "操作が結果なしで終了しました。"
       },
       "remediation": {
-        "en": "Try again. Report the operation ID if it keeps happening."
+        "en": "Try again. Report the operation ID if it keeps happening.",
+        "ja": "もう一度お試しください。続く場合は操作 ID を添えて報告してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -3178,10 +3281,12 @@
         "key"
       ],
       "message": {
-        "en": "Unknown setting {key}."
+        "en": "Unknown setting {key}.",
+        "ja": "不明な設定 {key} です。"
       },
       "remediation": {
-        "en": "Check the setting name in the configuration reference; only the documented keys are writable."
+        "en": "Check the setting name in the configuration reference; only the documented keys are writable.",
+        "ja": "設定リファレンスで設定名を確認してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3262,11 +3367,11 @@
         "entryCount": {
           "message": {
             "en": "This file contains more than 512 entries.",
-            "ja": "このファイルには 512 を超えるエントリが含まれています。"
+            "ja": "このファイルには 512 個を超えるエントリが含まれています。"
           },
           "remediation": {
             "en": "Download the app again from its developer.",
-            "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+            "ja": "開発者からアプリを再度ダウンロードしてください。"
           },
           "doc": {
             "when": "more than 512 entries",
@@ -3276,11 +3381,11 @@
         "apkCount": {
           "message": {
             "en": "This file contains more than 256 APKs.",
-            "ja": "このファイルには 256 を超える APK が含まれています。"
+            "ja": "このファイルには 256 個を超える APK が含まれています。"
           },
           "remediation": {
             "en": "Download the app again from its developer.",
-            "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+            "ja": "開発者からアプリを再度ダウンロードしてください。"
           },
           "doc": {
             "when": "more than 256 APKs",
@@ -3294,7 +3399,7 @@
           },
           "remediation": {
             "en": "Download the app again from its developer.",
-            "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+            "ja": "開発者からアプリを再度ダウンロードしてください。"
           },
           "doc": {
             "when": "an extracted file above 2 GiB",
@@ -3308,7 +3413,7 @@
           },
           "remediation": {
             "en": "Download the app again from its developer.",
-            "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+            "ja": "開発者からアプリを再度ダウンロードしてください。"
           },
           "doc": {
             "when": "extracted files above 8 GiB in total",
@@ -3322,7 +3427,7 @@
           },
           "remediation": {
             "en": "Download the app again from its developer.",
-            "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+            "ja": "開発者からアプリを再度ダウンロードしてください。"
           },
           "doc": {
             "when": "an entry above 100:1",
@@ -3336,7 +3441,7 @@
           },
           "remediation": {
             "en": "Download the app again from its developer.",
-            "ja": "開発者からアプリをもう一度ダウンロードしてください。"
+            "ja": "開発者からアプリを再度ダウンロードしてください。"
           },
           "doc": {
             "when": "a name that is not UTF-8 or relative, contains .., or is a symlink or device entry",
@@ -3353,7 +3458,7 @@
       ],
       "message": {
         "en": "Version {candidate} is older than installed version {installed}.",
-        "ja": "バージョン {candidate} はインストール済みのバージョン {installed} より古いです。"
+        "ja": "バージョン {candidate} はインストール済みの {installed} より古いです。"
       },
       "action": "none",
       "cliExit": 5,
@@ -3366,7 +3471,7 @@
       },
       "remediation": {
         "en": "Choose a newer APK, or uninstall the app first.",
-        "ja": "より新しい APK を選択するか、先にアプリをアンインストールしてください。"
+        "ja": "より新しい APK を選ぶか、先にアンインストールしてください。"
       }
     },
     {
@@ -3376,7 +3481,7 @@
       ],
       "message": {
         "en": "The split {split} appears more than once.",
-        "ja": "スプリット {split} が複数回現れています。"
+        "ja": "スプリット {split} が複数回含まれています。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3389,7 +3494,7 @@
       },
       "remediation": {
         "en": "Add each split APK only once.",
-        "ja": "各スプリット APK は 1 回だけ追加してください。"
+        "ja": "各スプリット APK は一度だけ追加してください。"
       }
     },
     {
@@ -3397,7 +3502,7 @@
       "parameters": [],
       "message": {
         "en": "This file includes expansion files (OBB), which APKRun doesn't support yet.",
-        "ja": "このファイルには APKRun がまだサポートしていない拡張ファイル（OBB）が含まれています。"
+        "ja": "このファイルには APKRun がまだサポートしない拡張ファイル（OBB）が含まれています。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3410,7 +3515,7 @@
       },
       "remediation": {
         "en": "Get a build of the app without expansion files.",
-        "ja": "拡張ファイルのないアプリのビルドを入手してください。"
+        "ja": "拡張ファイルのないビルドを入手してください。"
       }
     },
     {
@@ -3420,7 +3525,7 @@
       ],
       "message": {
         "en": "This set is missing parts that the app needs: {split}.",
-        "ja": "このセットにはアプリが必要とする部分がありません: {split}。"
+        "ja": "このセットにはアプリに必要な部分が不足しています: {split}。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3433,7 +3538,7 @@
       },
       "remediation": {
         "en": "Use the complete .apks, .xapk, or .apkm file of the app.",
-        "ja": "アプリの完全な .apks、.xapk、.apkm ファイルを使用してください。"
+        "ja": "完全な .apks、.xapk、または .apkm を使用してください。"
       }
     },
     {
@@ -3444,7 +3549,7 @@
       ],
       "message": {
         "en": "The APKs in this set don't belong together.",
-        "ja": "このセットの APK は同一のアプリではありません。"
+        "ja": "このセットの APK は同一バージョンのものではありません。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3457,7 +3562,7 @@
       },
       "remediation": {
         "en": "Add the APKs of one app version from one source.",
-        "ja": "1 つの提供元の、1 つのアプリバージョンの APK を追加してください。"
+        "ja": "同一提供元の同一バージョンの APK を追加してください。"
       },
       "variants": {
         "package": {
@@ -3467,7 +3572,7 @@
           },
           "remediation": {
             "en": "Add the APKs of one app version from one source.",
-            "ja": "1 つの提供元の、1 つのアプリバージョンの APK を追加してください。"
+            "ja": "同一提供元の同一バージョンの APK を追加してください。"
           },
           "doc": {
             "when": "a file of another package",
@@ -3481,7 +3586,7 @@
           },
           "remediation": {
             "en": "Add the APKs of one app version from one source.",
-            "ja": "1 つの提供元の、1 つのアプリバージョンの APK を追加してください。"
+            "ja": "同一提供元の同一バージョンの APK を追加してください。"
           },
           "doc": {
             "when": "a file of another VersionCode",
@@ -3491,11 +3596,11 @@
         "signer": {
           "message": {
             "en": "{file} is signed by a different developer.",
-            "ja": "{file} は別の開発者によって署名されています。"
+            "ja": "{file} は別の開発者が署名しています。"
           },
           "remediation": {
             "en": "Add the APKs of one app version from one source.",
-            "ja": "1 つの提供元の、1 つのアプリバージョンの APK を追加してください。"
+            "ja": "同一提供元の同一バージョンの APK を追加してください。"
           },
           "doc": {
             "when": "a file with another signer set",
@@ -3525,7 +3630,7 @@
       },
       "remediation": {
         "en": "Allowed values: {allowed}.",
-        "ja": "設定できる値: {allowed}"
+        "ja": "許可される値: {allowed}"
       }
     },
     {
@@ -3536,7 +3641,7 @@
       ],
       "message": {
         "en": "The signature of {file} isn't valid.",
-        "ja": "{file} の署名が正しくありません。"
+        "ja": "{file} の署名が不正です。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3549,7 +3654,7 @@
       },
       "remediation": {
         "en": "The file may have been changed after signing. Download it again from the app's developer.",
-        "ja": "署名後にファイルが変更された可能性があります。開発者からもう一度ダウンロードしてください。"
+        "ja": "署名後に変更された可能性があります。再度ダウンロードしてください。"
       }
     },
     {
@@ -3559,7 +3664,7 @@
       ],
       "message": {
         "en": "This app uses an old signature format that Android doesn't accept for apps that target API {target}.",
-        "ja": "このアプリは Android が API {target} を対象とするアプリに受け付けない古い署名形式を使用しています。"
+        "ja": "このアプリは Android が受け付けない古い署名形式を使用しています。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3572,7 +3677,7 @@
       },
       "remediation": {
         "en": "Get a newer build of the app from its developer.",
-        "ja": "開発者からアプリの新しいビルドを入手してください。"
+        "ja": "新しい署名形式で署名されたビルドを入手してください。"
       }
     },
     {
@@ -3583,7 +3688,7 @@
       ],
       "message": {
         "en": "This app needs Android API {required} or later. Android in APKRun has API {guest}.",
-        "ja": "このアプリは Android API {required} 以降が必要です。APKRun の Android は API {guest} です。"
+        "ja": "このアプリは Android API {required} 以降を必要としますが、APKRun の Android は API {guest} です。"
       },
       "action": "updateAndroid",
       "cliExit": 1,
@@ -3596,7 +3701,7 @@
       },
       "remediation": {
         "en": "Update Android, or get an older build of the app.",
-        "ja": "Android を更新するか、古いビルドのアプリを入手してください。"
+        "ja": "Android をアップデートするか、対応するビルドを入手してください。"
       }
     },
     {
@@ -3604,7 +3709,7 @@
       "parameters": [],
       "message": {
         "en": "The base APK is missing from this set.",
-        "ja": "このセットにベース APK がありません。"
+        "ja": "このセットにベース APK が含まれていません。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3617,7 +3722,7 @@
       },
       "remediation": {
         "en": "Add the base APK too, or use the complete .apks, .xapk, or .apkm file.",
-        "ja": "ベース APK も追加するか、完全な .apks、.xapk、.apkm ファイルを使用してください。"
+        "ja": "ベース APK も追加するか、完全な .apks、.xapk、.apkm を使用してください。"
       }
     },
     {
@@ -3638,7 +3743,7 @@
       },
       "remediation": {
         "en": "Add the APKs of one app version only.",
-        "ja": "1 つのアプリバージョンの APK のみを追加してください。"
+        "ja": "同一バージョンの APK のみを追加してください。"
       }
     },
     {
@@ -3661,7 +3766,7 @@
       },
       "remediation": {
         "en": "Choose the app's .apk, .apks, .xapk, or .apkm file.",
-        "ja": "アプリの .apk、.apks、.xapk、.apkm ファイルを選択してください。"
+        "ja": "アプリの .apk、.apks、.xapk、または .apkm ファイルを選択してください。"
       }
     },
     {
@@ -3669,7 +3774,7 @@
       "parameters": [],
       "message": {
         "en": "APKRun can only repair a package marked broken, and it needs the retained APK files.",
-        "ja": "修復できるのは破損として記録されたパッケージだけです。保持されている APK ファイルも必要です。"
+        "ja": "APKRun が修復できるのは破損としてマークされたパッケージのみで、保持された APK ファイルが必要です。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3682,7 +3787,7 @@
       },
       "remediation": {
         "en": "Uninstall the package, then install it again from a new APK file.",
-        "ja": "パッケージをアンインストールしてから、新しい APK ファイルで再インストールしてください。"
+        "ja": "パッケージをアンインストールしてから再インストールしてください。"
       }
     },
     {
@@ -3690,7 +3795,7 @@
       "parameters": [],
       "message": {
         "en": "This package is already managed by APKRun.",
-        "ja": "このパッケージはすでに APKRun の管理下にあります。"
+        "ja": "このパッケージはすでに APKRun が管理しています。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3703,7 +3808,7 @@
       },
       "remediation": {
         "en": "The package needs no adoption. See it with `apkrun list`.",
-        "ja": "このパッケージは引き取り不要です。`apkrun list` で確認できます。"
+        "ja": "adopt は不要です。`apkrun list` で確認できます。"
       }
     },
     {
@@ -3713,7 +3818,7 @@
       ],
       "message": {
         "en": "{app} is in use.",
-        "ja": "{app} は使用中です。"
+        "ja": "{app} が使用中です。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3726,7 +3831,7 @@
       },
       "remediation": {
         "en": "Close the app's windows and try the update again.",
-        "ja": "アプリのウインドウを閉じてから、もう一度更新をお試しください。"
+        "ja": "アプリのウインドウを閉じてからアップデートをやり直してください。"
       }
     },
     {
@@ -3734,7 +3839,7 @@
       "parameters": [],
       "message": {
         "en": "The package is not managed by APKRun.",
-        "ja": "このパッケージは APKRun の管理下にありません。"
+        "ja": "そのパッケージは APKRun が管理していません。"
       },
       "action": "none",
       "cliExit": 4,
@@ -3747,7 +3852,7 @@
       },
       "remediation": {
         "en": "Use `apkrun list` to see managed packages.",
-        "ja": "`apkrun list` で管理対象を確認できます。"
+        "ja": "`apkrun list` で管理対象を確認してください。"
       }
     },
     {
@@ -3757,7 +3862,7 @@
       ],
       "message": {
         "en": "{package} is part of Android or APKRun and can't be added as an app.",
-        "ja": "{package} は Android または APKRun の一部であり、アプリとして追加できません。"
+        "ja": "{package} は Android または APKRun の一部のため、アプリとして追加できません。"
       },
       "action": "none",
       "cliExit": 5,
@@ -3793,7 +3898,7 @@
       },
       "remediation": {
         "en": "Get a build of the app made with current Android build tools from its developer.",
-        "ja": "開発者から現行の Android ビルドツールで作成されたアプリのビルドを入手してください。"
+        "ja": "正しくパッケージ化されたビルドを入手してください。"
       }
     },
     {
@@ -3801,7 +3906,7 @@
       "parameters": [],
       "message": {
         "en": "The previous version cannot be restored automatically.",
-        "ja": "前のバージョンを自動で復元できません。"
+        "ja": "以前のバージョンを自動で復元できません。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3814,7 +3919,7 @@
       },
       "remediation": {
         "en": "Rollback is possible only after an update. On images without rollback support, retry with `apkrun rollback <package> --allow-data-loss` (the app's data is deleted).",
-        "ja": "ロールバックは更新後にのみ可能です。ロールバック非対応のイメージでは `apkrun rollback <package> --allow-data-loss` で再試行してください（アプリデータは削除されます）。"
+        "ja": "ロールバックはアップデート直後のみ可能です。"
       }
     },
     {
@@ -3824,7 +3929,7 @@
       ],
       "message": {
         "en": "This file is signed by a different developer than the installed app.",
-        "ja": "このファイルはインストール済みアプリとは別の開発者によって署名されています。"
+        "ja": "このファイルはインストール済みのアプリとは別の開発者が署名しています。"
       },
       "action": "none",
       "cliExit": 5,
@@ -3837,7 +3942,7 @@
       },
       "remediation": {
         "en": "Install updates of {app} from its original developer, or uninstall {app} first.",
-        "ja": "{app} の更新は元の開発者からインストールするか、先に {app} をアンインストールしてください。"
+        "ja": "同一提供元の {app} のアップデートをインストールしてください。"
       }
     },
     {
@@ -3845,7 +3950,7 @@
       "parameters": [],
       "message": {
         "en": "No verified update is staged for this package.",
-        "ja": "このパッケージにはステージ済みの更新がありません。"
+        "ja": "このパッケージに検証済みの保留アップデートはありません。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3858,7 +3963,7 @@
       },
       "remediation": {
         "en": "Run `apkrun update check` to download and stage an update first.",
-        "ja": "先に `apkrun update check` で更新をダウンロードしてステージしてください。"
+        "ja": "`apkrun update check` でダウンロードして保留してください。"
       }
     },
     {
@@ -3869,7 +3974,7 @@
       ],
       "message": {
         "en": "This app targets API {target}. Android in APKRun installs only apps that target API {floor} or later.",
-        "ja": "このアプリは API {target} を対象としています。APKRun の Android は API {floor} 以降を対象とするアプリのみインストールできます。"
+        "ja": "このアプリは API {target} を対象としています。APKRun の Android は API {floor} 以降を対象とするアプリのみインストールします。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3882,7 +3987,7 @@
       },
       "remediation": {
         "en": "Get a newer build of the app from its developer.",
-        "ja": "開発者からアプリの新しいビルドを入手してください。"
+        "ja": "新しい対象 API のビルドを入手してください。"
       }
     },
     {
@@ -3893,7 +3998,7 @@
       ],
       "message": {
         "en": "This app is too large ({bytes}; the limit is {limit}).",
-        "ja": "このアプリは大きすぎます（{bytes}、上限は {limit}）。"
+        "ja": "このアプリは大きすぎます（{bytes}。上限は {limit}）。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3906,7 +4011,7 @@
       },
       "remediation": {
         "en": "Get a smaller build of the app, for example one for fewer device types.",
-        "ja": "より小さいビルド（例: 対象デバイスが少ないもの）を入手してください。"
+        "ja": "より小さいビルドを入手してください。"
       }
     },
     {
@@ -3916,7 +4021,7 @@
       ],
       "message": {
         "en": "There is no app setting named {key}.",
-        "ja": "{key} という設定はありません。"
+        "ja": "{key} というアプリ設定はありません。"
       },
       "action": "none",
       "cliExit": 4,
@@ -3929,7 +4034,7 @@
       },
       "remediation": {
         "en": "List the app's settings with: apkrun settings <package> list",
-        "ja": "`apkrun settings <package> list` で設定名を確認できます。"
+        "ja": "`apkrun settings <package> list` で設定一覧を確認してください。"
       }
     },
     {
@@ -3939,7 +4044,7 @@
       ],
       "message": {
         "en": "This file couldn't be read. It may be damaged or incomplete.",
-        "ja": "このファイルを読み取れませんでした。破損しているか不完全な可能性があります。"
+        "ja": "このファイルを読み取れませんでした。破損または不完全な可能性があります。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3952,7 +4057,7 @@
       },
       "remediation": {
         "en": "Download the file again.",
-        "ja": "もう一度ファイルをダウンロードしてください。"
+        "ja": "ファイルを再度ダウンロードしてください。"
       }
     },
     {
@@ -3975,7 +4080,7 @@
       },
       "remediation": {
         "en": "Android installs only signed apps. Get a signed copy from the app's developer.",
-        "ja": "Android は署名済みアプリのみインストールします。開発者から署名済みのものを入手してください。"
+        "ja": "Android は署名済みアプリのみインストールします。開発者から署名済みのコピーを入手してください。"
       }
     },
     {
@@ -3986,7 +4091,7 @@
       ],
       "message": {
         "en": "This app is built only for {found}, but Android in APKRun needs {supported}.",
-        "ja": "このアプリは {found} 向けにのみビルドされていますが、APKRun の Android は {supported} が必要です。"
+        "ja": "このアプリは {found} 専用にビルドされていますが、APKRun の Android は {supported} を必要とします。"
       },
       "action": "none",
       "cliExit": 1,
@@ -3999,7 +4104,7 @@
       },
       "remediation": {
         "en": "Get a build of the app for {supported}.",
-        "ja": "{supported} 向けのアプリのビルドを入手してください。"
+        "ja": "arm64 対応のビルドを入手してください。"
       }
     },
     {
@@ -4009,7 +4114,7 @@
       ],
       "message": {
         "en": "APKRun can't add this kind of file.",
-        "ja": "この種類のファイルは APKRun に追加できません。"
+        "ja": "APKRun はこの種類のファイルを追加できません。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4022,17 +4127,17 @@
       },
       "remediation": {
         "en": "APKRun can add .apk, .apks, .xapk, and .apkm files, and .zip files that contain only APKs.",
-        "ja": "APKRun には .apk、.apks、.xapk、.apkm、そして APK のみを含む .zip を追加できます。"
+        "ja": "APKRun が追加できるのは .apk、.apks、.xapk、.apkm ファイルです。"
       },
       "variants": {
         "appBundle": {
           "message": {
             "en": "This file is an Android App Bundle (.aab), which can't be installed directly.",
-            "ja": "このファイルは Android App Bundle (.aab) であり、直接インストールできません。"
+            "ja": "このファイルは Android App Bundle（.aab）で、直接インストールできません。"
           },
           "remediation": {
             "en": "Get an .apk or .apks file from the app's developer. Converting a bundle would change its signature and break updates.",
-            "ja": "アプリの開発者から .apk または .apks ファイルを入手してください。バンドルを変換すると署名が変わり、更新が壊れます。"
+            "ja": "開発者から .apk または .apks ファイルを入手してください。"
           },
           "doc": {
             "when": "an .aab (ZIP with BundleConfig.pb)",
@@ -4046,7 +4151,7 @@
           },
           "remediation": {
             "en": "Download the app as an unencrypted file, for example an .apk.",
-            "ja": "暗号化されていない形式（例: .apk）でアプリをダウンロードしてください。"
+            "ja": ".apk など暗号化されていない形式でアプリをダウンロードしてください。"
           },
           "doc": {
             "when": "an encrypted or non-ZIP .apkm",
@@ -4062,11 +4167,11 @@
       ],
       "message": {
         "en": "The update provider offers more than one matching asset: {detail}.",
-        "ja": "更新プロバイダに一致するアセットが複数あります: {detail}。"
+        "ja": "アップデート提供元に複数の一致アセットがあります: {detail}。"
       },
       "remediation": {
         "en": "Narrow the provider's asset pattern.",
-        "ja": "プロバイダのアセットパターンを絞り込んでください。"
+        "ja": "提供元のアセットパターンを絞ってください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4083,11 +4188,11 @@
       "parameters": [],
       "message": {
         "en": "This package's update authority does not allow APKRun updates.",
-        "ja": "このパッケージの更新権限では APKRun による更新が許可されていません。"
+        "ja": "このパッケージのアップデート権限は APKRun によるアップデートを許可していません。"
       },
       "remediation": {
         "en": "Update the app with its own update authority.",
-        "ja": "アプリ自身の更新権限で更新してください。"
+        "ja": "アプリ自身の方法でアップデートしてください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4104,11 +4209,11 @@
       "parameters": [],
       "message": {
         "en": "The update was cancelled.",
-        "ja": "更新はキャンセルされました。"
+        "ja": "アップデートがキャンセルされました。"
       },
       "remediation": {
         "en": "Retry the update.",
-        "ja": "更新をやり直してください。"
+        "ja": "アップデートを再試行してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4127,11 +4232,11 @@
       ],
       "message": {
         "en": "The update download failed: {reason}.",
-        "ja": "更新のダウンロードに失敗しました: {reason}。"
+        "ja": "アップデートのダウンロードに失敗しました: {reason}。"
       },
       "remediation": {
         "en": "Check the network connection and try again.",
-        "ja": "ネットワーク接続を確認してやり直してください。"
+        "ja": "ネットワーク接続を確認してもう一度お試しください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4150,11 +4255,11 @@
       ],
       "message": {
         "en": "The downloaded artifact {artifact} does not match its declared hash.",
-        "ja": "ダウンロードしたアーティファクト {artifact} が宣言されたハッシュと一致しません。"
+        "ja": "ダウンロードした {artifact} が宣言されたハッシュと一致しません。"
       },
       "remediation": {
         "en": "Do not install this update.",
-        "ja": "この更新はインストールしないでください。"
+        "ja": "このアップデートはインストールしないでください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4173,11 +4278,11 @@
       ],
       "message": {
         "en": "The updated app failed its health check: {detail}.",
-        "ja": "更新されたアプリがヘルスチェックに失敗しました: {detail}。"
+        "ja": "アップデート後のアプリがヘルスチェックに失敗しました: {detail}。"
       },
       "remediation": {
         "en": "The update is rolled back automatically.",
-        "ja": "更新は自動的にロールバックされます。"
+        "ja": "アップデートは自動的にロールバックされます。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4196,7 +4301,7 @@
       ],
       "message": {
         "en": "The update install failed: {detail}.",
-        "ja": "更新のインストールに失敗しました: {detail}。"
+        "ja": "アップデートのインストールに失敗しました: {detail}。"
       },
       "remediation": {
         "en": "Check `apkrun update history` for details.",
@@ -4219,11 +4324,11 @@
       ],
       "message": {
         "en": "The update provider has no compatible artifact ({reason}).",
-        "ja": "更新プロバイダに互換性のあるアーティファクトがありません（{reason}）。"
+        "ja": "アップデート提供元に互換性のあるアーティファクトがありません（{reason}）。"
       },
       "remediation": {
         "en": "Check that the provider offers a build for this app.",
-        "ja": "このアプリ向けのビルドをプロバイダが提供しているか確認してください。"
+        "ja": "提供元が対応するアセットを提供しているか確認してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4242,11 +4347,11 @@
       ],
       "message": {
         "en": "The update provider answered HTTP {status}.",
-        "ja": "更新プロバイダが HTTP {status} を返しました。"
+        "ja": "アップデート提供元が HTTP {status} を返しました。"
       },
       "remediation": {
         "en": "Retry later; if the status persists, check the provider.",
-        "ja": "しばらくしてからやり直してください。続く場合はプロバイダを確認してください。"
+        "ja": "あとで再試行してください。続く場合は提供元の設定を確認してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4265,11 +4370,11 @@
       ],
       "message": {
         "en": "The update provider metadata is invalid: {detail}.",
-        "ja": "更新プロバイダのメタデータが無効です: {detail}。"
+        "ja": "アップデート提供元のメタデータが不正です: {detail}。"
       },
       "remediation": {
         "en": "Check the provider configuration.",
-        "ja": "プロバイダ設定を確認してください。"
+        "ja": "提供元の設定を確認してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4286,11 +4391,11 @@
       "parameters": [],
       "message": {
         "en": "No update provider is configured for this package.",
-        "ja": "このパッケージには更新プロバイダが設定されていません。"
+        "ja": "このパッケージにはアップデート提供元が設定されていません。"
       },
       "remediation": {
         "en": "Attach a provider with `apkrun update policy <package> --provider <spec>`.",
-        "ja": "`apkrun update policy <package> --provider <spec>` でプロバイダを設定してください。"
+        "ja": "`apkrun update policy` で提供元を設定してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4307,11 +4412,11 @@
       "parameters": [],
       "message": {
         "en": "The update provider is rate-limiting requests.",
-        "ja": "更新プロバイダがリクエストをレート制限しています。"
+        "ja": "アップデート提供元がリクエストをレート制限しています。"
       },
       "remediation": {
         "en": "Wait for the next scheduled check.",
-        "ja": "次回の定期チェックをお待ちください。"
+        "ja": "次の定期確認を待ってください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4330,11 +4435,11 @@
       ],
       "message": {
         "en": "The update signature check failed: {detail}.",
-        "ja": "更新の署名チェックに失敗しました: {detail}。"
+        "ja": "アップデートの署名チェックに失敗しました: {detail}。"
       },
       "remediation": {
         "en": "Do not install this update.",
-        "ja": "この更新はインストールしないでください。"
+        "ja": "このアップデートはインストールしないでください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4353,11 +4458,11 @@
       ],
       "message": {
         "en": "The update provider cannot be reached: {reason}.",
-        "ja": "更新プロバイダに接続できません: {reason}。"
+        "ja": "アップデート提供元に到達できません: {reason}。"
       },
       "remediation": {
         "en": "Check the network connection and try again.",
-        "ja": "ネットワーク接続を確認してやり直してください。"
+        "ja": "ネットワーク接続を確認してもう一度お試しください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4376,11 +4481,11 @@
       ],
       "message": {
         "en": "The update rollback failed: {detail}.",
-        "ja": "更新のロールバックに失敗しました: {detail}。"
+        "ja": "アップデートのロールバックに失敗しました: {detail}。"
       },
       "remediation": {
         "en": "Reinstall the app to recover.",
-        "ja": "復旧するにはアプリを再インストールしてください。"
+        "ja": "アプリを再インストールして復旧してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4400,11 +4505,11 @@
       ],
       "message": {
         "en": "The update is {bytes} bytes, above the {limit}-byte limit.",
-        "ja": "更新サイズは {bytes} バイトで、上限 {limit} バイトを超えています。"
+        "ja": "アップデートは {bytes} バイトで、上限 {limit} バイトを超えています。"
       },
       "remediation": {
         "en": "Free disk space or use a provider with smaller artifacts.",
-        "ja": "ディスク容量を確保するか、より小さいアーティファクトのプロバイダを使用してください。"
+        "ja": "ディスク容量を空けるか、より小さいアセットの提供元を使用してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4423,11 +4528,11 @@
       ],
       "message": {
         "en": "The update did not pass validation: {detail}.",
-        "ja": "更新が検証を通過しませんでした: {detail}。"
+        "ja": "アップデートが検証を通過しませんでした: {detail}。"
       },
       "remediation": {
         "en": "Do not install this update.",
-        "ja": "この更新はインストールしないでください。"
+        "ja": "このアップデートはインストールしないでください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -4443,10 +4548,12 @@
       "code": "vm.commandLineInvalid",
       "parameters": [],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "Android's configuration is not valid.",
+        "ja": "Android の構成が不正です。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。コード番号が失敗した規則を示します。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -4463,10 +4570,12 @@
         "items"
       ],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "Android's configuration is not valid.",
+        "ja": "Android の構成が不正です。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。コード番号が失敗した規則を示します。"
       },
       "action": "reportProblem",
       "cliExit": 1,
@@ -4482,10 +4591,12 @@
       "code": "vm.consoleLogWriteFailed",
       "parameters": [],
       "message": {
-        "en": "APKRun couldn't write Android's console log."
+        "en": "APKRun couldn't write Android's console log.",
+        "ja": "APKRun は Android のコンソールログを書き込めませんでした。"
       },
       "remediation": {
-        "en": "Check the free disk space. Settings → Storage shows what APKRun uses."
+        "en": "Check the free disk space. Settings → Storage shows what APKRun uses.",
+        "ja": "空き容量を確認してください。設定 → ストレージで確認できます。"
       },
       "action": "openStorageSettings",
       "cliExit": 1,
@@ -4504,10 +4615,12 @@
         "allowed"
       ],
       "message": {
-        "en": "Android can't use a CPU count of {requested}; the allowed range is {allowed}."
+        "en": "Android can't use a CPU count of {requested}; the allowed range is {allowed}.",
+        "ja": "Android は CPU 数 {requested} を使用できません。許可範囲は {allowed} です。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -4525,10 +4638,12 @@
         "reason"
       ],
       "message": {
-        "en": "Custom device {name} is invalid."
+        "en": "Custom device {name} is invalid.",
+        "ja": "カスタムデバイス {name} が不正です。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -4543,10 +4658,12 @@
       "code": "vm.diskIdentifierInvalid",
       "parameters": [],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "Android's configuration is not valid.",
+        "ja": "Android の構成が不正です。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -4563,10 +4680,12 @@
         "role"
       ],
       "message": {
-        "en": "The {role} disk uses Android's unsupported sparse image format."
+        "en": "The {role} disk uses Android's unsupported sparse image format.",
+        "ja": "{role} ディスクは Android の未サポートのスパースイメージ形式です。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -4583,10 +4702,12 @@
         "role"
       ],
       "message": {
-        "en": "The {role} disk file is missing."
+        "en": "The {role} disk file is missing.",
+        "ja": "{role} ディスクファイルが見つかりません。"
       },
       "remediation": {
-        "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting."
+        "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting.",
+        "ja": "APKRun を終了して開き直してください。再発する場合は設定で Android をリセットしてください。"
       },
       "action": "openTroubleshooting",
       "cliExit": 1,
@@ -4603,10 +4724,12 @@
         "role"
       ],
       "message": {
-        "en": "APKRun can't read the {role} disk."
+        "en": "APKRun can't read the {role} disk.",
+        "ja": "APKRun は {role} ディスクを読み取れません。"
       },
       "remediation": {
-        "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting."
+        "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting.",
+        "ja": "APKRun を終了して開き直してください。再発する場合は設定で Android をリセットしてください。"
       },
       "action": "openTroubleshooting",
       "cliExit": 1,
@@ -4623,10 +4746,12 @@
         "role"
       ],
       "message": {
-        "en": "APKRun can't write to the {role} disk."
+        "en": "APKRun can't write to the {role} disk.",
+        "ja": "APKRun は {role} ディスクに書き込めません。"
       },
       "remediation": {
-        "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting."
+        "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting.",
+        "ja": "APKRun を終了して開き直してください。再発する場合は設定で Android をリセットしてください。"
       },
       "action": "openTroubleshooting",
       "cliExit": 1,
@@ -4643,10 +4768,12 @@
         "role"
       ],
       "message": {
-        "en": "The {role} disk uses a test-only synchronization mode."
+        "en": "The {role} disk uses a test-only synchronization mode.",
+        "ja": "{role} ディスクはテスト専用の同期モードを使用しています。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -4663,10 +4790,12 @@
         "role"
       ],
       "message": {
-        "en": "The {role} disk is listed more than once."
+        "en": "The {role} disk is listed more than once.",
+        "ja": "{role} ディスクが複数回登録されています。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -4681,10 +4810,12 @@
       "code": "vm.frameworkRejected",
       "parameters": [],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "Android's configuration is not valid.",
+        "ja": "Android の構成が不正です。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -4699,10 +4830,12 @@
       "code": "vm.initrdMissing",
       "parameters": [],
       "message": {
-        "en": "Files that Android needs are missing, or APKRun can't read or write them."
+        "en": "Files that Android needs are missing, or APKRun can't read or write them.",
+        "ja": "Android に必要なファイルが見つからないか、APKRun が読み書きできません。"
       },
       "remediation": {
-        "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting."
+        "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting.",
+        "ja": "APKRun を終了して開き直してください。"
       },
       "action": "openTroubleshooting",
       "cliExit": 1,
@@ -4717,10 +4850,12 @@
       "code": "vm.initrdTooLarge",
       "parameters": [],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "Android's configuration is not valid.",
+        "ja": "Android の構成が不正です。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -4735,10 +4870,12 @@
       "code": "vm.invalidMACAddress",
       "parameters": [],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "Android's configuration is not valid.",
+        "ja": "Android の構成が不正です。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -4756,10 +4893,12 @@
         "to"
       ],
       "message": {
-        "en": "Android is in an unexpected state."
+        "en": "Android is in an unexpected state.",
+        "ja": "Android が予期しない状態です。"
       },
       "remediation": {
-        "en": "Restart Android. If this happens again, report the problem."
+        "en": "Restart Android. If this happens again, report the problem.",
+        "ja": "Android を再起動してください。再発する場合は問題を報告してください。"
       },
       "action": "restartAndroid",
       "cliExit": 70,
@@ -4775,10 +4914,12 @@
       "code": "vm.kernelMissing",
       "parameters": [],
       "message": {
-        "en": "Files that Android needs are missing, or APKRun can't read or write them."
+        "en": "Files that Android needs are missing, or APKRun can't read or write them.",
+        "ja": "Android に必要なファイルが見つからないか、APKRun が読み書きできません。"
       },
       "remediation": {
-        "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting."
+        "en": "Quit and reopen APKRun. If it happens again, reset Android in Settings → Troubleshooting.",
+        "ja": "APKRun を終了して開き直してください。"
       },
       "action": "openTroubleshooting",
       "cliExit": 1,
@@ -4795,10 +4936,12 @@
         "detected"
       ],
       "message": {
-        "en": "The kernel image has an unsupported format ({detected})."
+        "en": "The kernel image has an unsupported format ({detected}).",
+        "ja": "カーネルイメージが未サポートの形式です（{detected}）。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -4815,10 +4958,12 @@
         "port"
       ],
       "message": {
-        "en": "APKRun couldn't open developer debugging port {port} on this Mac."
+        "en": "APKRun couldn't open developer debugging port {port} on this Mac.",
+        "ja": "APKRun はこの Mac で開発者デバッグポート {port} を開けませんでした。"
       },
       "remediation": {
-        "en": "Check that no security tool blocks local connections, then start Android again. Android starts without ADB until then."
+        "en": "Check that no security tool blocks local connections, then start Android again. Android starts without ADB until then.",
+        "ja": "セキュリティツールがブロックしていないか確認してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -4836,10 +4981,12 @@
         "port"
       ],
       "message": {
-        "en": "APKRun couldn't open developer debugging port {port}, because another program is using it."
+        "en": "APKRun couldn't open developer debugging port {port}, because another program is using it.",
+        "ja": "開発者デバッグポート {port} は別のプログラムが使用中のため開けません。"
       },
       "remediation": {
-        "en": "Quit the program that uses port {port}, then start Android again. Android starts without ADB until then."
+        "en": "Quit the program that uses port {port}, then start Android again. Android starts without ADB until then.",
+        "ja": "そのプログラムを終了してください。"
       },
       "action": "retry",
       "cliExit": 75,
@@ -4855,10 +5002,12 @@
       "code": "vm.machineIdentifierInvalid",
       "parameters": [],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "Android's configuration is not valid.",
+        "ja": "Android の構成が不正です。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -4875,10 +5024,12 @@
         "cap"
       ],
       "message": {
-        "en": "Android's memory allocation exceeds this Mac's {cap} limit."
+        "en": "Android's memory allocation exceeds this Mac's {cap} limit.",
+        "ja": "Android のメモリ割り当てがこの Mac の上限 {cap} を超えています。"
       },
       "remediation": {
-        "en": "Choose less memory for Android in Settings → Runtime."
+        "en": "Choose less memory for Android in Settings → Runtime.",
+        "ja": "設定で Android のメモリを減らしてください。"
       },
       "action": "openRuntimeSettings",
       "cliExit": 1,
@@ -4893,10 +5044,12 @@
       "code": "vm.memoryOutOfRange",
       "parameters": [],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "Android's configuration is not valid.",
+        "ja": "Android の構成が不正です。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -4911,10 +5064,12 @@
       "code": "vm.microphoneUsageDescriptionMissing",
       "parameters": [],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "Android's configuration is not valid.",
+        "ja": "Android の構成が不正です。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -4929,10 +5084,12 @@
       "code": "vm.missingSystemConsole",
       "parameters": [],
       "message": {
-        "en": "Android's configuration is not valid."
+        "en": "Android's configuration is not valid.",
+        "ja": "Android の構成が不正です。"
       },
       "remediation": {
-        "en": "Report the problem. The code identifies the rule that failed."
+        "en": "Report the problem. The code identifies the rule that failed.",
+        "ja": "問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 70,
@@ -4948,11 +5105,11 @@
       "parameters": [],
       "message": {
         "en": "Android lost its network connection.",
-        "ja": "Androidのネットワーク接続が切断されました。"
+        "ja": "Android がネットワーク接続を失いました。"
       },
       "remediation": {
         "en": "Restart Android. If it happens again, create a diagnostics report.",
-        "ja": "Androidを再起動してください。再発する場合は診断レポートを作成してください。"
+        "ja": "Android を再起動してください。再発する場合は診断レポートを作成してください。"
       },
       "action": "restartAndroid",
       "cliExit": 1,
@@ -4968,10 +5125,12 @@
       "code": "vm.pauseFailed",
       "parameters": [],
       "message": {
-        "en": "Android couldn't be paused."
+        "en": "Android couldn't be paused.",
+        "ja": "Android を一時停止できませんでした。"
       },
       "remediation": {
-        "en": "Restart Android if apps stop responding."
+        "en": "Restart Android if apps stop responding.",
+        "ja": "アプリが応答しなくなった場合は Android を再起動してください。"
       },
       "action": "restartAndroid",
       "cliExit": 1,
@@ -4987,10 +5146,12 @@
       "code": "vm.resumeFailed",
       "parameters": [],
       "message": {
-        "en": "Android couldn't resume."
+        "en": "Android couldn't resume.",
+        "ja": "Android を再開できませんでした。"
       },
       "remediation": {
-        "en": "Restart Android."
+        "en": "Restart Android.",
+        "ja": "Android を再起動してください。"
       },
       "action": "restartAndroid",
       "cliExit": 1,
@@ -5006,10 +5167,12 @@
       "code": "vm.startFailed",
       "parameters": [],
       "message": {
-        "en": "Android couldn't start."
+        "en": "Android couldn't start.",
+        "ja": "Android を起動できませんでした。"
       },
       "remediation": {
-        "en": "Try again. If it fails again, create a diagnostics report."
+        "en": "Try again. If it fails again, create a diagnostics report.",
+        "ja": "もう一度お試しください。再度失敗する場合は診断レポートを作成してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -5025,10 +5188,12 @@
       "code": "vm.stopTimedOut",
       "parameters": [],
       "message": {
-        "en": "Android didn't stop in time."
+        "en": "Android didn't stop in time.",
+        "ja": "Android が時間内に停止しませんでした。"
       },
       "remediation": {
-        "en": "Try again. If it fails again, quit and reopen APKRun."
+        "en": "Try again. If it fails again, quit and reopen APKRun.",
+        "ja": "もう一度お試しください。再度失敗する場合は APKRun を終了して開き直してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -5044,10 +5209,12 @@
       "code": "vm.stoppedWithError",
       "parameters": [],
       "message": {
-        "en": "Android stopped unexpectedly."
+        "en": "Android stopped unexpectedly.",
+        "ja": "Android が予期せず停止しました。"
       },
       "remediation": {
-        "en": "Restart Android."
+        "en": "Restart Android.",
+        "ja": "Android を再起動してください。"
       },
       "action": "restartAndroid",
       "cliExit": 1,
@@ -5063,10 +5230,12 @@
       "code": "vm.virtualizationUnavailable",
       "parameters": [],
       "message": {
-        "en": "Virtualization is not available on this Mac."
+        "en": "Virtualization is not available on this Mac.",
+        "ja": "この Mac では仮想化を利用できません。"
       },
       "remediation": {
-        "en": "APKRun can't run inside a virtual machine. On a real Mac, reinstall APKRun."
+        "en": "APKRun can't run inside a virtual machine. On a real Mac, reinstall APKRun.",
+        "ja": "APKRun は仮想マシン内では実行できません。Apple silicon Mac 上で実行してください。"
       },
       "action": "openTroubleshooting",
       "cliExit": 1,
@@ -5084,10 +5253,12 @@
         "port"
       ],
       "message": {
-        "en": "APKRun couldn't connect to Android."
+        "en": "APKRun couldn't connect to Android.",
+        "ja": "APKRun は Android に接続できませんでした。"
       },
       "remediation": {
-        "en": "Restart Android."
+        "en": "Restart Android.",
+        "ja": "Android を再起動してください。"
       },
       "action": "restartAndroid",
       "cliExit": 1,
@@ -5105,10 +5276,12 @@
         "port"
       ],
       "message": {
-        "en": "Android didn't answer in time."
+        "en": "Android didn't answer in time.",
+        "ja": "Android が時間内に応答しませんでした。"
       },
       "remediation": {
-        "en": "Try again. If it fails again, restart Android."
+        "en": "Try again. If it fails again, restart Android.",
+        "ja": "もう一度お試しください。再度失敗する場合は Android を再起動してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -5124,10 +5297,12 @@
       "code": "vm.vsockDeviceNotConfigured",
       "parameters": [],
       "message": {
-        "en": "Android's host connection isn't enabled."
+        "en": "Android's host connection isn't enabled.",
+        "ja": "Android のホスト接続が有効になっていません。"
       },
       "remediation": {
-        "en": "Enable vsock in the VM definition before connecting. If APKRun created this VM, update the caller to request vsock and restart the VM."
+        "en": "Enable vsock in the VM definition before connecting. If APKRun created this VM, update the caller to request vsock and restart the VM.",
+        "ja": "接続前に VM 定義で vsock を有効にしてください。"
       },
       "action": "openTroubleshooting",
       "cliExit": 70,
@@ -5143,10 +5318,12 @@
       "code": "vm.vsockDeviceUnavailable",
       "parameters": [],
       "message": {
-        "en": "Android's host connection is unavailable."
+        "en": "Android's host connection is unavailable.",
+        "ja": "Android のホスト接続が利用できません。"
       },
       "remediation": {
-        "en": "Restart Android. If this happens again, create a diagnostics report."
+        "en": "Restart Android. If this happens again, create a diagnostics report.",
+        "ja": "Android を再起動してください。再発する場合は診断レポートを作成してください。"
       },
       "action": "restartAndroid",
       "cliExit": 70,
@@ -5164,10 +5341,12 @@
         "port"
       ],
       "message": {
-        "en": "Android isn't ready yet."
+        "en": "Android isn't ready yet.",
+        "ja": "Android の準備がまだできていません。"
       },
       "remediation": {
-        "en": "Try again in a moment."
+        "en": "Try again in a moment.",
+        "ja": "しばらくしてからもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 75,
@@ -5185,10 +5364,12 @@
         "app"
       ],
       "message": {
-        "en": "APKRun did not allow {app} to open."
+        "en": "APKRun did not allow {app} to open.",
+        "ja": "APKRun は {app} が開くことを許可しませんでした。"
       },
       "remediation": {
-        "en": "To allow it, remove it from Mac apps you didn't allow in Settings → Privacy, then open {app} again."
+        "en": "To allow it, remove it from Mac apps you didn't allow in Settings → Privacy, then open {app} again.",
+        "ja": "許可するには、設定の「許可しなかった Mac アプリ」から削除してください。"
       },
       "action": "openPrivacySettings",
       "cliExit": 5,
@@ -5204,10 +5385,12 @@
       "code": "wrapper.approvalNotFound",
       "parameters": [],
       "message": {
-        "en": "This request to open a Mac app was already answered or has expired."
+        "en": "This request to open a Mac app was already answered or has expired.",
+        "ja": "この Mac アプリを開くリクエストはすでに回答済みか期限切れです。"
       },
       "remediation": {
-        "en": "No action is needed. To ask again, open the Mac app again."
+        "en": "No action is needed. To ask again, open the Mac app again.",
+        "ja": "対応は不要です。"
       },
       "action": "none",
       "cliExit": 4,
@@ -5225,10 +5408,12 @@
         "app"
       ],
       "message": {
-        "en": "APKRun did not allow {app} to open."
+        "en": "APKRun did not allow {app} to open.",
+        "ja": "APKRun は {app} が開くことを許可しませんでした。"
       },
       "remediation": {
-        "en": "The request wasn't answered within 10 minutes. Open {app} again to ask again."
+        "en": "The request wasn't answered within 10 minutes. Open {app} again to ask again.",
+        "ja": "リクエストが 10 分以内に回答されませんでした。{app} を再度開いてください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -5246,10 +5431,12 @@
         "reason"
       ],
       "message": {
-        "en": "The portable Mac app's bundled app failed a check ({reason})."
+        "en": "The portable Mac app's bundled app failed a check ({reason}).",
+        "ja": "ポータブル Mac アプリの内蔵アプリがチェックに失敗しました（{reason}）。"
       },
       "remediation": {
-        "en": "The file may be damaged. Get a fresh copy of the Mac app."
+        "en": "The file may be damaged. Get a fresh copy of the Mac app.",
+        "ja": "ファイルが破損している可能性があります。新しいコピーを入手してください。"
       },
       "action": "none",
       "cliExit": 4,
@@ -5267,10 +5454,12 @@
         "reason"
       ],
       "message": {
-        "en": "This Mac app cannot install the app right now ({reason})."
+        "en": "This Mac app cannot install the app right now ({reason}).",
+        "ja": "この Mac アプリは現在アプリをインストールできません（{reason}）。"
       },
       "remediation": {
-        "en": "Approve the Mac app first, or uninstall the app before reinstalling it from this bundle."
+        "en": "Approve the Mac app first, or uninstall the app before reinstalling it from this bundle.",
+        "ja": "先に Mac アプリを承認するか、アンインストールしてください。"
       },
       "action": "none",
       "cliExit": 4,
@@ -5288,10 +5477,12 @@
         "file"
       ],
       "message": {
-        "en": "{file} isn't a valid APKRun Mac app."
+        "en": "{file} isn't a valid APKRun Mac app.",
+        "ja": "{file} は有効な APKRun Mac アプリではありません。"
       },
       "remediation": {
-        "en": "Get a new copy from where it came from, or create the Mac app again in APKRun."
+        "en": "Get a new copy from where it came from, or create the Mac app again in APKRun.",
+        "ja": "入手元から新しいコピーを取得するか、Mac アプリを作成し直してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5307,10 +5498,12 @@
       "code": "wrapper.customIconInvalid",
       "parameters": [],
       "message": {
-        "en": "This image can't be used as an icon."
+        "en": "This image can't be used as an icon.",
+        "ja": "この画像はアイコンに使用できません。"
       },
       "remediation": {
-        "en": "Choose a PNG, JPEG, HEIC, or .icns file of at least 512 × 512 pixels."
+        "en": "Choose a PNG, JPEG, HEIC, or .icns file of at least 512 × 512 pixels.",
+        "ja": "512×512 以上の PNG、JPEG、HEIC、または .icns ファイルを選択してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5329,10 +5522,12 @@
         "stagingToken"
       ],
       "message": {
-        "en": "APKRun's background service can't access the folder {file}."
+        "en": "APKRun's background service can't access the folder {file}.",
+        "ja": "APKRun のバックグラウンドサービスはフォルダ {file} にアクセスできません。"
       },
       "remediation": {
-        "en": "Choose Another Location… and select the folder, so APKRun can save the Mac app there."
+        "en": "Choose Another Location… and select the folder, so APKRun can save the Mac app there.",
+        "ja": "「別の場所を選択…」で別の場所を選んでください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5350,10 +5545,12 @@
         "file"
       ],
       "message": {
-        "en": "APKRun can't save the Mac app in the folder {file}."
+        "en": "APKRun can't save the Mac app in the folder {file}.",
+        "ja": "APKRun はフォルダ {file} に Mac アプリを保存できません。"
       },
       "remediation": {
-        "en": "Choose another location, for example Applications (for me)."
+        "en": "Choose another location, for example Applications (for me).",
+        "ja": "別の場所を選択してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5369,10 +5566,12 @@
       "code": "wrapper.iconConversionFailed",
       "parameters": [],
       "message": {
-        "en": "APKRun couldn't create the icon of the Mac app."
+        "en": "APKRun couldn't create the icon of the Mac app.",
+        "ja": "APKRun は Mac アプリのアイコンを作成できませんでした。"
       },
       "remediation": {
-        "en": "Try again. If it fails again, choose another icon or report the problem."
+        "en": "Try again. If it fails again, choose another icon or report the problem.",
+        "ja": "もう一度お試しください。再度失敗する場合は別の画像を選択してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -5388,10 +5587,12 @@
       "code": "wrapper.invalidName",
       "parameters": [],
       "message": {
-        "en": "This name can't be used for a Mac app."
+        "en": "This name can't be used for a Mac app.",
+        "ja": "この名前は Mac アプリに使用できません。"
       },
       "remediation": {
-        "en": "Choose a name that contains letters or digits."
+        "en": "Choose a name that contains letters or digits.",
+        "ja": "文字または数字を含む名前を選択してください。"
       },
       "action": "none",
       "cliExit": 64,
@@ -5407,10 +5608,12 @@
       "code": "wrapper.launchServicesMissing",
       "parameters": [],
       "message": {
-        "en": "LaunchServices no longer knows one or more APKRun Mac apps."
+        "en": "LaunchServices no longer knows one or more APKRun Mac apps.",
+        "ja": "LaunchServices が 1 つ以上の APKRun Mac アプリを認識しなくなりました。"
       },
       "remediation": {
-        "en": "Open each Mac app once from its folder so macOS registers it again."
+        "en": "Open each Mac app once from its folder so macOS registers it again.",
+        "ja": "各 Mac アプリを一度開いてください。"
       },
       "action": "retry",
       "cliExit": 0,
@@ -5426,10 +5629,12 @@
       "code": "wrapper.launcherTemplateInvalid",
       "parameters": [],
       "message": {
-        "en": "APKRun's template for Mac apps is damaged."
+        "en": "APKRun's template for Mac apps is damaged.",
+        "ja": "APKRun の Mac アプリ用テンプレートが破損しています。"
       },
       "remediation": {
-        "en": "Download APKRun again and replace it in the Applications folder."
+        "en": "Download APKRun again and replace it in the Applications folder.",
+        "ja": "APKRun を再ダウンロードしてアプリケーションフォルダ内を置き換えてください。"
       },
       "action": "openDownloadsPage",
       "cliExit": 1,
@@ -5447,10 +5652,12 @@
         "file"
       ],
       "message": {
-        "en": "An item named {file} already exists there."
+        "en": "An item named {file} already exists there.",
+        "ja": "{file} という名前の項目がすでに存在します。"
       },
       "remediation": {
-        "en": "Choose another name or location. APKRun never replaces it."
+        "en": "Choose another name or location. APKRun never replaces it.",
+        "ja": "別の名前または場所を選択してください。APKRun は既存の項目を置き換えません。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5468,10 +5675,12 @@
         "app"
       ],
       "message": {
-        "en": "{app} isn't installed in APKRun."
+        "en": "{app} isn't installed in APKRun.",
+        "ja": "{app} は APKRun にインストールされていません。"
       },
       "remediation": {
-        "en": "Install {app} first. apkrun wrap installs it too when you add --install."
+        "en": "Install {app} first. apkrun wrap installs it too when you add --install.",
+        "ja": "先に {app} をインストールしてください。`apkrun wrap` に --install を付けるとインストールも行います。"
       },
       "action": "none",
       "cliExit": 4,
@@ -5490,10 +5699,12 @@
         "stagingToken"
       ],
       "message": {
-        "en": "macOS didn't allow APKRun to update the Mac app."
+        "en": "macOS didn't allow APKRun to update the Mac app.",
+        "ja": "macOS が APKRun による Mac アプリの更新を許可しませんでした。"
       },
       "remediation": {
-        "en": "Allow APKRun in System Settings > Privacy & Security > App Management, then try again."
+        "en": "Allow APKRun in System Settings > Privacy & Security > App Management, then try again.",
+        "ja": "システム設定 → プライバシーとセキュリティで APKRun を許可してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -5509,10 +5720,12 @@
       "code": "wrapper.registrationFailed",
       "parameters": [],
       "message": {
-        "en": "The Mac app was created, but macOS hasn't registered it yet."
+        "en": "The Mac app was created, but macOS hasn't registered it yet.",
+        "ja": "Mac アプリは作成されましたが、macOS にまだ登録されていません。"
       },
       "remediation": {
-        "en": "Finder registers it when it shows the folder. To register it now, run: apkrun doctor --fix"
+        "en": "Finder registers it when it shows the folder. To register it now, run: apkrun doctor --fix",
+        "ja": "Finder で表示すると登録されます。"
       },
       "action": "none",
       "cliExit": 0,
@@ -5528,10 +5741,12 @@
       "code": "wrapper.registryUnavailable",
       "parameters": [],
       "message": {
-        "en": "APKRun can't read its list of Mac apps, so they can't open."
+        "en": "APKRun can't read its list of Mac apps, so they can't open.",
+        "ja": "APKRun は Mac アプリの一覧を読み取れないため、開けません。"
       },
       "remediation": {
-        "en": "Choose Re-register Mac Apps on the APKRun home screen."
+        "en": "Choose Re-register Mac Apps on the APKRun home screen.",
+        "ja": "トラブルシューティングで「Mac アプリを再登録」を選択してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5550,10 +5765,12 @@
         "status"
       ],
       "message": {
-        "en": "APKRun couldn't sign the Mac app."
+        "en": "APKRun couldn't sign the Mac app.",
+        "ja": "APKRun は Mac アプリに署名できませんでした。"
       },
       "remediation": {
-        "en": "Try again. If it fails again, create a diagnostics report."
+        "en": "Try again. If it fails again, create a diagnostics report.",
+        "ja": "もう一度お試しください。再度失敗する場合は診断レポートを作成してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -5569,10 +5786,12 @@
       "code": "wrapper.stagingExpired",
       "parameters": [],
       "message": {
-        "en": "The prepared Mac app is no longer available."
+        "en": "The prepared Mac app is no longer available.",
+        "ja": "準備された Mac アプリは利用できなくなりました。"
       },
       "remediation": {
-        "en": "Create or update the Mac app again."
+        "en": "Create or update the Mac app again.",
+        "ja": "Mac アプリを再度作成またはアップデートしてください。"
       },
       "action": "none",
       "cliExit": 4,
@@ -5588,10 +5807,12 @@
       "code": "wrapper.verificationFailed",
       "parameters": [],
       "message": {
-        "en": "The new Mac app didn't pass its signature check."
+        "en": "The new Mac app didn't pass its signature check.",
+        "ja": "新しい Mac アプリが署名チェックを通過しませんでした。"
       },
       "remediation": {
-        "en": "Try again. If it fails again, report the problem."
+        "en": "Try again. If it fails again, report the problem.",
+        "ja": "もう一度お試しください。再度失敗する場合は問題を報告してください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -5611,10 +5832,12 @@
         "package"
       ],
       "message": {
-        "en": "{app} already has a Mac app ({file})."
+        "en": "{app} already has a Mac app ({file}).",
+        "ja": "{app} にはすでに Mac アプリがあります（{file}）。"
       },
       "remediation": {
-        "en": "Use Update Mac App, or run: apkrun wrap {package} --replace"
+        "en": "Use Update Mac App, or run: apkrun wrap {package} --replace",
+        "ja": "「Mac アプリをアップデート」を使うか、`apkrun wrap {package} --replace` を実行してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5632,10 +5855,12 @@
         "app"
       ],
       "message": {
-        "en": "{app} has no Mac app."
+        "en": "{app} has no Mac app.",
+        "ja": "{app} には Mac アプリがありません。"
       },
       "remediation": {
-        "en": "Create one with Create Mac App."
+        "en": "Create one with Create Mac App.",
+        "ja": "「Mac アプリを作成」で作成してください。"
       },
       "action": "createMacApp",
       "cliExit": 4,
@@ -5653,10 +5878,12 @@
         "packageID"
       ],
       "message": {
-        "en": "{packageID} is open, so its Mac app cannot be replaced."
+        "en": "{packageID} is open, so its Mac app cannot be replaced.",
+        "ja": "{packageID} が開いているため、Mac アプリを置き換えられません。"
       },
       "remediation": {
-        "en": "Quit the Mac app, then try again."
+        "en": "Quit the Mac app, then try again.",
+        "ja": "Mac アプリを終了してからもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 75,
@@ -5672,10 +5899,12 @@
       "code": "image.imageFeedSignatureInvalid",
       "parameters": [],
       "message": {
-        "en": "The Android system update feed could not be verified."
+        "en": "The Android system update feed could not be verified.",
+        "ja": "Android システムのアップデートフィードを検証できませんでした。"
       },
       "remediation": {
-        "en": "Update APKRun. If this keeps happening, report a problem."
+        "en": "Update APKRun. If this keeps happening, report a problem.",
+        "ja": "APKRun をアップデートしてください。続く場合は問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 1,
@@ -5693,10 +5922,12 @@
         "highest"
       ],
       "message": {
-        "en": "The Android system update feed is older than the one already accepted."
+        "en": "The Android system update feed is older than the one already accepted.",
+        "ja": "Android システムのアップデートフィードがすでに受理済みのものより古いです。"
       },
       "remediation": {
-        "en": "Try again later."
+        "en": "Try again later.",
+        "ja": "あとでもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -5711,10 +5942,12 @@
       "code": "image.imageFeedExpired",
       "parameters": [],
       "message": {
-        "en": "The Android system update feed has expired."
+        "en": "The Android system update feed has expired.",
+        "ja": "Android システムのアップデートフィードの有効期限が切れています。"
       },
       "remediation": {
-        "en": "Try again later."
+        "en": "Try again later.",
+        "ja": "あとでもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -5731,10 +5964,12 @@
         "detail"
       ],
       "message": {
-        "en": "The Android system update feed is malformed."
+        "en": "The Android system update feed is malformed.",
+        "ja": "Android システムのアップデートフィードが不正です。"
       },
       "remediation": {
-        "en": "Update APKRun. If this keeps happening, report a problem."
+        "en": "Update APKRun. If this keeps happening, report a problem.",
+        "ja": "APKRun をアップデートしてください。続く場合は問題を報告してください。"
       },
       "action": "reportProblem",
       "cliExit": 1,
@@ -5749,10 +5984,12 @@
       "code": "image.noCompatibleImage",
       "parameters": [],
       "message": {
-        "en": "No Android image update can run with this version of APKRun."
+        "en": "No Android image update can run with this version of APKRun.",
+        "ja": "このバージョンの APKRun で実行できる Android イメージアップデートはありません。"
       },
       "remediation": {
-        "en": "Install the previous APKRun release from the download page."
+        "en": "Install the previous APKRun release from the download page.",
+        "ja": "以前の APKRun リリースをインストールしてください。"
       },
       "action": "openDownloadsPage",
       "cliExit": 1,
@@ -5770,10 +6007,12 @@
         "received"
       ],
       "message": {
-        "en": "The Android system download was the wrong size."
+        "en": "The Android system download was the wrong size.",
+        "ja": "Android システムのダウンロードのサイズが正しくありません。"
       },
       "remediation": {
-        "en": "Try again."
+        "en": "Try again.",
+        "ja": "もう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -5788,10 +6027,12 @@
       "code": "image.imageArchiveHashMismatch",
       "parameters": [],
       "message": {
-        "en": "The Android system download failed verification."
+        "en": "The Android system download failed verification.",
+        "ja": "Android システムのダウンロードが検証に失敗しました。"
       },
       "remediation": {
-        "en": "Try again. The download starts over."
+        "en": "Try again. The download starts over.",
+        "ja": "もう一度お試しください。ダウンロードはやり直されます。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -5808,10 +6049,12 @@
         "detail"
       ],
       "message": {
-        "en": "The Android system download failed."
+        "en": "The Android system download failed.",
+        "ja": "Android システムのダウンロードに失敗しました。"
       },
       "remediation": {
-        "en": "Check the network and try again."
+        "en": "Check the network and try again.",
+        "ja": "ネットワークを確認してもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -5827,11 +6070,11 @@
       "parameters": [],
       "message": {
         "en": "No recovery point exists to roll back to.",
-        "ja": "ロールバック先の復旧ポイントがありません。"
+        "ja": "ロールバック先の復元ポイントがありません。"
       },
       "remediation": {
         "en": "Rollback is possible only right after an Android system update. Reinstall the previous image from a file if needed.",
-        "ja": "ロールバックは Android システム更新直後にのみ可能です。必要なら以前のイメージをファイルから再インストールしてください。"
+        "ja": "ロールバックは Android システムのアップデート直後のみ可能です。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5845,10 +6088,12 @@
     {
       "code": "diagnostics.appNotInApplications",
       "message": {
-        "en": "APKRun is not installed in /Applications."
+        "en": "APKRun is not installed in /Applications.",
+        "ja": "APKRun が /Applications にインストールされていません。"
       },
       "remediation": {
-        "en": "Move APKRun.app to /Applications."
+        "en": "Move APKRun.app to /Applications.",
+        "ja": "APKRun.app を /Applications に移動してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5863,10 +6108,12 @@
     {
       "code": "diagnostics.appSignatureInvalid",
       "message": {
-        "en": "The APKRun.app signature is invalid."
+        "en": "The APKRun.app signature is invalid.",
+        "ja": "APKRun.app の署名が不正です。"
       },
       "remediation": {
-        "en": "Reinstall APKRun from a signed download."
+        "en": "Reinstall APKRun from a signed download.",
+        "ja": "署名済みのダウンロードから APKRun を再インストールしてください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5881,10 +6128,12 @@
     {
       "code": "diagnostics.componentVersionMismatch",
       "message": {
-        "en": "An APKRun component has a different version than the app."
+        "en": "An APKRun component has a different version than the app.",
+        "ja": "APKRun のコンポーネントのバージョンがアプリと異なります。"
       },
       "remediation": {
-        "en": "Update or reinstall APKRun so every component has the same build."
+        "en": "Update or reinstall APKRun so every component has the same build.",
+        "ja": "APKRun をアップデートまたは再インストールしてください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5899,10 +6148,12 @@
     {
       "code": "diagnostics.lowDiskSpace",
       "message": {
-        "en": "The data volume is low on disk space."
+        "en": "The data volume is low on disk space.",
+        "ja": "データボリュームの空き容量が不足しています。"
       },
       "remediation": {
-        "en": "Free disk space or remove unused images and packages."
+        "en": "Free disk space or remove unused images and packages.",
+        "ja": "ディスク容量を空けるか、未使用のイメージやパッケージを削除してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5917,10 +6168,12 @@
     {
       "code": "diagnostics.lowMemory",
       "message": {
-        "en": "The Mac is low on memory."
+        "en": "The Mac is low on memory.",
+        "ja": "Mac のメモリが不足しています。"
       },
       "remediation": {
-        "en": "Close other apps to free memory."
+        "en": "Close other apps to free memory.",
+        "ja": "他のアプリを閉じてメモリを空けてください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5935,10 +6188,12 @@
     {
       "code": "diagnostics.crashLoop",
       "message": {
-        "en": "apkrund is crashing repeatedly."
+        "en": "apkrund is crashing repeatedly.",
+        "ja": "apkrund が繰り返しクラッシュしています。"
       },
       "remediation": {
-        "en": "Reinstall APKRun; if it keeps crashing, collect a diagnostics bundle and report it."
+        "en": "Reinstall APKRun; if it keeps crashing, collect a diagnostics bundle and report it.",
+        "ja": "APKRun を再インストールしてください。続く場合は診断バンドルを収集してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5953,10 +6208,12 @@
     {
       "code": "graphics.deviceSetupFailed",
       "message": {
-        "en": "The virtual GPU could not be set up."
+        "en": "The virtual GPU could not be set up.",
+        "ja": "仮想 GPU をセットアップできませんでした。"
       },
       "remediation": {
-        "en": "Restart the runtime; if it persists, reinstall APKRun."
+        "en": "Restart the runtime; if it persists, reinstall APKRun.",
+        "ja": "ランタイムを再起動してください。続く場合は APKRun を再インストールしてください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5971,10 +6228,12 @@
     {
       "code": "graphics.softwareRendering",
       "message": {
-        "en": "Graphics are running on slow software rendering."
+        "en": "Graphics are running on slow software rendering.",
+        "ja": "グラフィックスが低速なソフトウェアレンダリングで動作しています。"
       },
       "remediation": {
-        "en": "Restart the runtime so the GPU device is used."
+        "en": "Restart the runtime so the GPU device is used.",
+        "ja": "GPU デバイスが使用されるようランタイムを再起動してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -5989,10 +6248,12 @@
     {
       "code": "graphics.presentationSlowPath",
       "message": {
-        "en": "Frame presentation fell back to a slow path."
+        "en": "Frame presentation fell back to a slow path.",
+        "ja": "フレーム表示が低速パスにフォールバックしました。"
       },
       "remediation": {
-        "en": "Restart the runtime; if it persists, report a diagnostics bundle."
+        "en": "Restart the runtime; if it persists, report a diagnostics bundle.",
+        "ja": "ランタイムを再起動してください。続く場合は問題を報告してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -6007,10 +6268,12 @@
     {
       "code": "graphics.memoryLimitReached",
       "message": {
-        "en": "The graphics memory limit was reached."
+        "en": "The graphics memory limit was reached.",
+        "ja": "グラフィックスメモリの上限に達しました。"
       },
       "remediation": {
-        "en": "Close some Android app windows and try again."
+        "en": "Close some Android app windows and try again.",
+        "ja": "一部の Android アプリウインドウを閉じてからもう一度お試しください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -6025,10 +6288,12 @@
     {
       "code": "graphics.safeModeOn",
       "message": {
-        "en": "Graphics safe mode is on."
+        "en": "Graphics safe mode is on.",
+        "ja": "グラフィックスセーフモードがオンです。"
       },
       "remediation": {
-        "en": "Turn off safe mode in Settings > Advanced, then restart the runtime."
+        "en": "Turn off safe mode in Settings > Advanced, then restart the runtime.",
+        "ja": "設定 → 詳細設定でセーフモードをオフにしてからランタイムを再起動してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -6043,10 +6308,12 @@
     {
       "code": "runtime.inputMethodNotSelected",
       "message": {
-        "en": "The APKRun input method is not selected in Android."
+        "en": "The APKRun input method is not selected in Android.",
+        "ja": "APKRun の入力方式が Android で選択されていません。"
       },
       "remediation": {
-        "en": "Run `apkrun doctor --fix` or reselect the APKRun keyboard inside Android settings."
+        "en": "Run `apkrun doctor --fix` or reselect the APKRun keyboard inside Android settings.",
+        "ja": "`apkrun doctor --fix` を実行するか、入力方式を選び直してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -6061,10 +6328,12 @@
     {
       "code": "runtime.adbEnabledUnexpectedly",
       "message": {
-        "en": "ADB is enabled in Android although production mode does not need it."
+        "en": "ADB is enabled in Android although production mode does not need it.",
+        "ja": "本番モードでは不要な ADB が Android で有効になっています。"
       },
       "remediation": {
-        "en": "Disable ADB in the guest (development only)."
+        "en": "Disable ADB in the guest (development only).",
+        "ja": "ゲスト内で ADB を無効にしてください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -6079,10 +6348,12 @@
     {
       "code": "runtime.inputDegraded",
       "message": {
-        "en": "Input injection is degraded; events are being rejected."
+        "en": "Input injection is degraded; events are being rejected.",
+        "ja": "入力注入が劣化しており、イベントが拒否されています。"
       },
       "remediation": {
-        "en": "Restart the runtime; if it persists, report a diagnostics bundle."
+        "en": "Restart the runtime; if it persists, report a diagnostics bundle.",
+        "ja": "ランタイムを再起動してください。続く場合は問題を報告してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -6097,10 +6368,12 @@
     {
       "code": "diagnostics.unknownHealthCheck",
       "message": {
-        "en": "A health check named in the request is not registered."
+        "en": "A health check named in the request is not registered.",
+        "ja": "リクエストで指定されたヘルスチェックは登録されていません。"
       },
       "remediation": {
-        "en": "Update APKRun; the check IDs differ between components."
+        "en": "Update APKRun; the check IDs differ between components.",
+        "ja": "APKRun をアップデートしてください。チェック ID が異なります。"
       },
       "action": "none",
       "cliExit": 1,
@@ -6115,10 +6388,12 @@
     {
       "code": "diagnostics.fixNotAvailable",
       "message": {
-        "en": "No automatic fix exists for this check."
+        "en": "No automatic fix exists for this check.",
+        "ja": "このチェックに対する自動修復はありません。"
       },
       "remediation": {
-        "en": "Follow the remediation shown for the check."
+        "en": "Follow the remediation shown for the check.",
+        "ja": "チェックに表示された対処法に従ってください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -6133,10 +6408,12 @@
     {
       "code": "diagnostics.fixFailed",
       "message": {
-        "en": "The automatic fix did not complete."
+        "en": "The automatic fix did not complete.",
+        "ja": "自動修復が完了しませんでした。"
       },
       "remediation": {
-        "en": "Follow the remediation shown for the check."
+        "en": "Follow the remediation shown for the check.",
+        "ja": "チェックに表示された対処法に従ってください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -6151,10 +6428,12 @@
     {
       "code": "diagnostics.writeFailed",
       "message": {
-        "en": "The diagnostics report could not be written."
+        "en": "The diagnostics report could not be written.",
+        "ja": "診断レポートを書き込めませんでした。"
       },
       "remediation": {
-        "en": "Check the output folder and free disk space, then try again."
+        "en": "Check the output folder and free disk space, then try again.",
+        "ja": "出力フォルダと空き容量を確認してからもう一度お試しください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -6169,10 +6448,12 @@
     {
       "code": "diagnostics.failed",
       "message": {
-        "en": "The diagnostics report could not be collected."
+        "en": "The diagnostics report could not be collected.",
+        "ja": "診断レポートを収集できませんでした。"
       },
       "remediation": {
-        "en": "Try again; if it keeps failing, collect host logs manually."
+        "en": "Try again; if it keeps failing, collect host logs manually.",
+        "ja": "もう一度お試しください。続く場合はホストログを手動で収集してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -6190,10 +6471,12 @@
         "tool"
       ],
       "message": {
-        "en": "APKRun couldn't find the ‹tool› tool on this Mac."
+        "en": "APKRun couldn't find the ‹tool› tool on this Mac.",
+        "ja": "APKRun はこの Mac で ‹tool› ツールを見つけられませんでした。"
       },
       "remediation": {
-        "en": "Install the Xcode Command Line Tools (xcode-select --install), then try again."
+        "en": "Install the Xcode Command Line Tools (xcode-select --install), then try again.",
+        "ja": "Xcode Command Line Tools をインストールしてください。"
       },
       "action": "retry",
       "cliExit": 1,
@@ -6211,10 +6494,12 @@
         "identity"
       ],
       "message": {
-        "en": "The signing identity ‹identity› isn't installed on this Mac."
+        "en": "The signing identity ‹identity› isn't installed on this Mac.",
+        "ja": "署名 identity ‹identity› がこの Mac にインストールされていません。"
       },
       "remediation": {
-        "en": "Run `security find-identity -v -p codesigning` and pass --identity with one of those names."
+        "en": "Run `security find-identity -v -p codesigning` and pass --identity with one of those names.",
+        "ja": "`security find-identity -v` で利用可能な identity を確認してください。"
       },
       "action": "none",
       "cliExit": 1,
@@ -6233,10 +6518,12 @@
         "summary"
       ],
       "message": {
-        "en": "Apple's notary service rejected the Mac app."
+        "en": "Apple's notary service rejected the Mac app.",
+        "ja": "Apple の公証サービスが Mac アプリを拒否しました。"
       },
       "remediation": {
-        "en": "Fix the problem the notarization log lists and try again."
+        "en": "Fix the problem the notarization log lists and try again.",
+        "ja": "公証ログに記載された問題を修正してからもう一度お試しください。"
       },
       "action": "retry",
       "cliExit": 1,

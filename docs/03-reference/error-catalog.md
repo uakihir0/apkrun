@@ -317,6 +317,11 @@ Owner: GraphicsCore. Design: [graphics.md](../02-design/graphics.md) §13.1. Use
 | `rendererLost(reason)` | `graphics.rendererLost` | context loss or GPU removal. RuntimeCore restarts Android | GraphicsBridge | "Android's graphics stopped working." | "Android restarts automatically. If this happens often, start Android in Graphics Safe Mode." `startGraphicsSafeMode` | 1 | §8 |
 | `rendererOperationFailed(operation, detail)` | `graphics.rendererOperationFailed` | a renderer operation fails, including a call made from the wrong thread | GraphicsBridge | "A graphics operation could not be completed." | "Restart Android. If the problem continues, create a diagnostics report." `reportProblem` | 1 | §5.2, §13.1 |
 | `scanoutInvalid(ScanoutID)` | `graphics.scanoutInvalid` | a host request names a scanout outside 0…15. A bug | ScanoutTable | "Android's display configuration is not valid." | "Report the problem." `reportProblem` | 70 | §6.1 |
+| `deviceSetupFailed()` | `graphics.deviceSetupFailed` | a health check reports this condition | apkrund | "The virtual GPU could not be set up." | "Restart the runtime; if it persists, reinstall APKRun." `none` | 1 | diagnostics.md §7 |
+| `softwareRendering()` | `graphics.softwareRendering` | a health check reports this condition | apkrund | "Graphics are running on slow software rendering." | "Restart the runtime so the GPU device is used." `none` | 1 | diagnostics.md §7 |
+| `presentationSlowPath()` | `graphics.presentationSlowPath` | a health check reports this condition | apkrund | "Frame presentation fell back to a slow path." | "Restart the runtime; if it persists, report a diagnostics bundle." `none` | 1 | diagnostics.md §7 |
+| `memoryLimitReached()` | `graphics.memoryLimitReached` | a health check reports this condition | apkrund | "The graphics memory limit was reached." | "Close some Android app windows and try again." `none` | 1 | diagnostics.md §7 |
+| `safeModeOn()` | `graphics.safeModeOn` | a health check reports this condition | apkrund | "Graphics safe mode is on." | "Turn off safe mode in Settings > Advanced, then restart the runtime." `none` | 1 | diagnostics.md §7 |
 <!-- errorgen:end graphics -->
 
 - Reinstalling APKRun is the fix for `graphics.libraryMissing`, so its action is `openDownloadsPage`, as for the host checks `host.appSignature` and `host.componentVersions` (§15, §20.2).
@@ -484,6 +489,9 @@ Items of `runtime.hostRequirementsNotMet` (variant keys, with texts from [runtim
 | `unknownSetting(String)` | `runtime.unknownSetting` | a configuration update names a group or key the runtime does not implement | apkrund | "Unknown setting {key}." | "Check the setting name in the configuration reference; only the documented keys are writable." `none` | 1 | [../03-reference/configuration.md](../03-reference/configuration.md) |
 | `vm(VMFailure)` | `runtime.vm` | the VM fails to start or fails while booting | RuntimeSupervisor | "" | — `none` | cause | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 step 4 |
 | `vmConfiguration(VMConfigurationFailure)` | `runtime.vmConfiguration` | `VMDefinitionValidator` rejects the Android definition | RuntimeSupervisor | "" | — `none` | cause | [../02-design/runtime-daemon.md](../02-design/runtime-daemon.md) §3.2 step 4 |
+| `inputMethodNotSelected()` | `runtime.inputMethodNotSelected` | a health check reports this condition | apkrund | "The APKRun input method is not selected in Android." | "Run `apkrun doctor --fix` or reselect the APKRun keyboard inside Android settings." `none` | 1 | diagnostics.md §7 |
+| `adbEnabledUnexpectedly()` | `runtime.adbEnabledUnexpectedly` | a health check reports this condition | apkrund | "ADB is enabled in Android although production mode does not need it." | "Disable ADB in the guest (development only)." `none` | 1 | diagnostics.md §7 |
+| `inputDegraded()` | `runtime.inputDegraded` | a health check reports this condition | apkrund | "Input injection is degraded; events are being rejected." | "Restart the runtime; if it persists, report a diagnostics bundle." `none` | 1 | diagnostics.md §7 |
 <!-- errorgen:end runtime -->
 
 ---

@@ -5799,6 +5799,312 @@
         "raisedBy": "ImageMigrationService",
         "ref": "[../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.8"
       }
+    },
+    {
+      "code": "diagnostics.appNotInApplications",
+      "message": {
+        "en": "APKRun is not installed in /Applications."
+      },
+      "remediation": {
+        "en": "Move APKRun.app to /Applications."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "appNotInApplications()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "diagnostics.appSignatureInvalid",
+      "message": {
+        "en": "The APKRun.app signature is invalid."
+      },
+      "remediation": {
+        "en": "Reinstall APKRun from a signed download."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "appSignatureInvalid()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "diagnostics.componentVersionMismatch",
+      "message": {
+        "en": "An APKRun component has a different version than the app."
+      },
+      "remediation": {
+        "en": "Update or reinstall APKRun so every component has the same build."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "componentVersionMismatch()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "diagnostics.lowDiskSpace",
+      "message": {
+        "en": "The data volume is low on disk space."
+      },
+      "remediation": {
+        "en": "Free disk space or remove unused images and packages."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "lowDiskSpace()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "diagnostics.lowMemory",
+      "message": {
+        "en": "The Mac is low on memory."
+      },
+      "remediation": {
+        "en": "Close other apps to free memory."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "lowMemory()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "diagnostics.crashLoop",
+      "message": {
+        "en": "apkrund is crashing repeatedly."
+      },
+      "remediation": {
+        "en": "Reinstall APKRun; if it keeps crashing, collect a diagnostics bundle and report it."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "crashLoop()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "graphics.deviceSetupFailed",
+      "message": {
+        "en": "The virtual GPU could not be set up."
+      },
+      "remediation": {
+        "en": "Restart the runtime; if it persists, reinstall APKRun."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "deviceSetupFailed()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "graphics.softwareRendering",
+      "message": {
+        "en": "Graphics are running on slow software rendering."
+      },
+      "remediation": {
+        "en": "Restart the runtime so the GPU device is used."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "softwareRendering()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "graphics.presentationSlowPath",
+      "message": {
+        "en": "Frame presentation fell back to a slow path."
+      },
+      "remediation": {
+        "en": "Restart the runtime; if it persists, report a diagnostics bundle."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "presentationSlowPath()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "graphics.memoryLimitReached",
+      "message": {
+        "en": "The graphics memory limit was reached."
+      },
+      "remediation": {
+        "en": "Close some Android app windows and try again."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "memoryLimitReached()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "graphics.safeModeOn",
+      "message": {
+        "en": "Graphics safe mode is on."
+      },
+      "remediation": {
+        "en": "Turn off safe mode in Settings > Advanced, then restart the runtime."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "safeModeOn()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "runtime.inputMethodNotSelected",
+      "message": {
+        "en": "The APKRun input method is not selected in Android."
+      },
+      "remediation": {
+        "en": "Run `apkrun doctor --fix` or reselect the APKRun keyboard inside Android settings."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "inputMethodNotSelected()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "runtime.adbEnabledUnexpectedly",
+      "message": {
+        "en": "ADB is enabled in Android although production mode does not need it."
+      },
+      "remediation": {
+        "en": "Disable ADB in the guest (development only)."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "adbEnabledUnexpectedly()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "runtime.inputDegraded",
+      "message": {
+        "en": "Input injection is degraded; events are being rejected."
+      },
+      "remediation": {
+        "en": "Restart the runtime; if it persists, report a diagnostics bundle."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "inputDegraded()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "diagnostics.unknownHealthCheck",
+      "message": {
+        "en": "A health check named in the request is not registered."
+      },
+      "remediation": {
+        "en": "Update APKRun; the check IDs differ between components."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "unknownHealthCheck()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "diagnostics.fixNotAvailable",
+      "message": {
+        "en": "No automatic fix exists for this check."
+      },
+      "remediation": {
+        "en": "Follow the remediation shown for the check."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "fixNotAvailable()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
+    },
+    {
+      "code": "diagnostics.fixFailed",
+      "message": {
+        "en": "The automatic fix did not complete."
+      },
+      "remediation": {
+        "en": "Follow the remediation shown for the check."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "fixFailed()",
+        "when": "a health check reports this condition",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §7"
+      },
+      "parameters": []
     }
   ]
 }

@@ -9,6 +9,7 @@ import Foundation
 /// The decoder keeps a read offset instead of removing each frame from the front of the buffer.
 /// The consumed bytes are dropped once they are at least half of the buffer, so reading many
 /// frames from one buffer costs time proportional to the number of bytes, not its square.
+/// SECURITY: untrusted guest input; fuzzed by `guest-frame-swift` (#92).
 public struct FrameDecoder: Sendable {
     private var buffer = Data()
     /// The index of the first byte that has not been returned as part of a body.

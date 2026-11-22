@@ -284,6 +284,7 @@ public struct FDroidIndexReader: Sendable {
     /// decoded; other members are scanned byte-wise and skipped.
     /// - Throws: `providerMetadataInvalid` when the document is malformed or
     ///   over the byte budget.
+    /// SECURITY: untrusted repository index; fuzzed by `fdroid-index` (#92).
     public func packages(in data: Data, keep: Set<PackageID>) throws(UpdateFailure) -> [PackageID:
         FDroidPackage]
     {

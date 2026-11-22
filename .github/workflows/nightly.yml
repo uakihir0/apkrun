@@ -183,3 +183,55 @@ jobs:
               --key build/notary/key.p8 \
               --key-id "$APKRUN_NOTARY_KEY_ID" \
               --issuer "$APKRUN_NOTARY_ISSUER"
+
+  fuzz-long:
+    name: fuzz-long (all targets, 1h)
+    if: github.ref == 'refs/heads/main'
+    runs-on: xcode-27
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install pinned repository tools
+        run: scripts/bootstrap
+      - name: Restore verified graphics libraries
+        uses: actions/cache@0400d5f644dc74513175e3b8b85b7f6cf5f0f400 # v4
+        with:
+          path: ThirdParty/out
+          key: apkrun-third-party-${{ runner.os }}-${{ hashFiles('ThirdParty/ThirdParty.lock.json') }}
+      - name: Install the pinned fuzz toolchain
+        run: |
+          source scripts/tool-versions.env
+          toolchain_dir="$HOME/Library/Developer/Toolchains"
+          mkdir -p "$toolchain_dir"
+          if ! compgen -G "$toolchain_dir/${SWIFT_FUZZ_TOOLCHAIN}*.xctoolchain" > /dev/null; then
+            tag="$(python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("https://www.swift.org/api/v1/install/releases.json"))["releases"][-1]["tag"])')"
+            pkg="swift-${tag#swift-}-osx.pkg"
+            curl -fsSL -o /tmp/swift.pkg "https://download.swift.org/${tag#swift-}/xcode/$pkg"
+            sudo installer -pkg /tmp/swift.pkg -target /
+          fi
+      - name: Restore the growing corpus
+        uses: actions/cache@0400d5f644dc74513175e3b8b85b7f6cf5f0f400 # v4
+        with:
+          path: Tests/Fixtures/fuzz/
+          key: apkrun-fuzz-corpus-${{ github.ref_name }}
+          restore-keys: apkrun-fuzz-corpus-
+      - name: Fuzz every parser
+        run: |
+          for target in virtio-gpu-request resource-table guest-frame-swift container-reader apk-signing-block aapt2-badging direct-manifest fdroid-index github-releases; do
+            scripts/run-fuzz.sh "$target" --seconds 400
+            # Merge new coverage into the seed corpus so it grows nightly.
+            for seed in build/fuzz/$target/*; do
+              cp "$seed" "Tests/Fixtures/fuzz/$target/" 2>/dev/null || true
+            done
+          done
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: fuzz-artifacts-nightly-${{ github.sha }}
+          path: build/fuzz/
+          if-no-files-found: warn
+          retention-days: 30

@@ -4,6 +4,7 @@ import Foundation
 /// The Codable model of `direct-provider-manifest.md`. The published JSON
 /// Schema (docs/03-reference/schemas/direct-provider-manifest.schema.json)
 /// defines structure; `check` below applies the reader rules D1–D9.
+/// SECURITY: untrusted manifest (1 MiB budget); fuzzed by `direct-manifest` (#92).
 public struct DirectManifest: Codable, Sendable {
     /// The format version; only 1 is defined.
     public var schemaVersion: Int

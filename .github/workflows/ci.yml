@@ -229,3 +229,43 @@ jobs:
         run: |
           Images/tools/.venv/bin/ruff check Images/tools
           Images/tools/.venv/bin/ruff format --check Images/tools
+
+  fuzz-short:
+    name: fuzz-short (changed targets, 60s)
+    if: github.event_name == 'pull_request'
+    runs-on: xcode-27
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned repository tools
+        run: scripts/bootstrap
+      - name: Restore verified graphics libraries
+        uses: actions/cache@0400d5f644dc74513175e3b8b85b7f6cf5f0f400 # v4
+        with:
+          path: ThirdParty/out
+          key: apkrun-third-party-${{ runner.os }}-${{ hashFiles('ThirdParty/ThirdParty.lock.json') }}
+      - name: Install the pinned fuzz toolchain
+        run: |
+          source scripts/tool-versions.env
+          toolchain_dir="$HOME/Library/Developer/Toolchains"
+          mkdir -p "$toolchain_dir"
+          if ! compgen -G "$toolchain_dir/${SWIFT_FUZZ_TOOLCHAIN}*.xctoolchain" > /dev/null; then
+            tag="$(python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("https://www.swift.org/api/v1/install/releases.json"))["releases"][-1]["tag"])')"
+            pkg="swift-${tag#swift-}-osx.pkg"
+            curl -fsSL -o /tmp/swift.pkg "https://download.swift.org/${tag#swift-}/xcode/$pkg"
+            sudo installer -pkg /tmp/swift.pkg -target /
+          fi
+      - name: Fuzz the changed parsers
+        run: scripts/run-fuzz.sh --changed --seconds 60
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: fuzz-artifacts-${{ github.event.pull_request.number }}
+          path: build/fuzz/
+          if-no-files-found: warn
+          retention-days: 30

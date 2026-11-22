@@ -44,7 +44,7 @@ struct ImageFeedTests {
              "requirements":{"minimumRuntimeVersion":"\(minRuntime)",
                              "guestProtocol":{"min":\(protoMin),"max":\(protoMax)}},
              "userdata":{"schemaVersion":\(schema),"upgradableFrom":[\(upgradable)]},
-             "minimumSourceVersion":"\(minSource)",
+             "upgradeFrom":{"minimumImageVersion":"\(minSource)"},
              "critical":\(critical),"rolloutPercent":\(rollout)}
             """
     }
@@ -108,7 +108,7 @@ struct ImageFeedTests {
              "requirements":{"minimumRuntimeVersion":"1.0",
                              "guestProtocol":{"min":1,"max":1}},
              "userdata":{"schemaVersion":1,"upgradableFrom":[1]},
-             "minimumSourceVersion":"0.0"}
+             "upgradeFrom":{"minimumImageVersion":"0.0"}}
             """#
         #expect(throws: ImageFailure.self) {
             try ImageFeed.parse(Self.feedJSON(entries: [entry]))

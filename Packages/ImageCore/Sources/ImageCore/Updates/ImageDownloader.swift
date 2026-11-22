@@ -164,17 +164,17 @@ public actor ImageDownloader {
             buffer.append(byte)
             if buffer.count >= (1 << 16) {
                 try writeChunk(&buffer, into: &active)
-                if expected > 0, resumeFrom + active.received > expected {
+                if expected > 0, active.received > expected {
                     throw ImageFailure.imageArchiveSizeMismatch(
-                        expected: expected, received: resumeFrom + active.received
+                        expected: expected, received: active.received
                     )
                 }
-                progress(Progress(received: resumeFrom + active.received, total: expected))
+                progress(Progress(received: active.received, total: expected))
             }
         }
         try writeChunk(&buffer, into: &active)
 
-        let received = resumeFrom + active.received
+        let received = active.received
         if expected > 0, received != expected {
             throw ImageFailure.imageArchiveSizeMismatch(expected: expected, received: received)
         }

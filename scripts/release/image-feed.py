@@ -79,7 +79,7 @@ def entry(args: argparse.Namespace, archive_url: str) -> dict:
             "size": archive.stat().st_size,
             "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
         },
-        "expandedSize": args.expanded_size,
+        "expandedSize": args.expanded_size or archive.stat().st_size,
         "requirements": {
             "minimumRuntimeVersion": args.minimum_runtime_version,
             "guestProtocol": {"min": args.proto_min, "max": args.proto_max},
@@ -88,7 +88,7 @@ def entry(args: argparse.Namespace, archive_url: str) -> dict:
             "schemaVersion": args.schema_version,
             "upgradableFrom": [int(v) for v in args.upgradable_from.split(",")],
         },
-        "minimumSourceVersion": args.minimum_source_version,
+        "upgradeFrom": {"minimumImageVersion": args.minimum_source_version},
         "critical": args.critical,
         "rolloutPercent": args.rollout_percent,
     }

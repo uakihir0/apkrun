@@ -127,6 +127,10 @@ extension RuntimeHost {
         }
         let cacheDirectory = paths.cachesRoot.appendingPathComponent("images", isDirectory: true)
         await imageUpdateCoordinator.noteDownloadStarted(candidate)
+        // Hold the daemon alive: a download can outlive the idle window, and
+        // without an assertion the daemon would exit mid-download.
+        let activity = await updateIdleController.assertActivity(.imageDownload)
+        defer { activity.release() }
         let downloader = ImageDownloader()
         do {
             let archive = try await downloader.download(
@@ -210,6 +214,14 @@ extension RuntimeHost {
     /// Evaluates the gate and applies the ready image when it opens. Called on
     /// gate events (session ended, activity released) and the periodic tick.
     func maybeApplyReadyImage(userInitiated: Bool) async {
+        // `maintenance.installImages = ask` turns off automatic apply; the
+        // user starts it from Settings or `apkrun image install --latest`.
+        if !userInitiated,
+            GlobalSettings.load(from: paths.settingsFile)
+                .extraValue("maintenance.installImages") == "ask"
+        {
+            return
+        }
         let state = await imageUpdateCoordinator.stateSnapshot()
         guard case .ready(let version) = state.phase,
             let current = image?.version,
@@ -250,6 +262,13 @@ extension RuntimeHost {
         guard let current = image?.version else {
             throw ImageFailure.noCurrentImage
         }
+        guard await maintenanceSessionPackageIDs().isEmpty,
+            await maintenanceBackgroundTaskPackageIDs().isEmpty
+        else {
+            // A CLI apply cannot ask for consent to close apps; the GUI
+            // dialog of §4.6 does. Leave the image ready instead.
+            return "Image \(version) is installed; close running Android apps, then run this again."
+        }
         guard await imageApplyGateOpen(userInitiated: true) else {
             return "Image \(version) is installed; it will be applied when the runtime is idle."
         }
@@ -274,7 +293,7 @@ extension RuntimeHost {
     /// §4.6). Wired from the existing maintenance wake.
     func imageUpdateTick() async {
         let state = await imageUpdateCoordinator.stateSnapshot()
-        if let next = state.nextCheckAt, next <= Date() {
+        if state.nextCheckAt.map({ $0 <= Date() }) ?? true {
             await checkImageUpdates(userInitiated: false)
         }
         await maybeApplyReadyImage(userInitiated: false)

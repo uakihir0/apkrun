@@ -57,6 +57,9 @@ public struct ActivityKind: RawRepresentable, Sendable, Hashable {
     /// An image migration.
     public static let migration = Self(rawValue: "migration")
 
+    /// An Android image download in the background.
+    public static let imageDownload = Self(rawValue: "imageDownload")
+
     /// First-run provisioning.
     public static let provisioning = Self(rawValue: "provisioning")
 
@@ -73,6 +76,7 @@ public struct ActivityKind: RawRepresentable, Sendable, Hashable {
         .storeOperation,
         .diagnostics,
         .migration,
+        .imageDownload,
         .provisioning,
         .adbClient,
         .cli,

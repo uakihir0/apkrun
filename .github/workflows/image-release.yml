@@ -39,8 +39,10 @@ jobs:
       - name: Decode the signing key
         env:
           IMAGE_FEED_KEY: ${{ secrets.IMAGE_FEED_ED25519_KEY }}
+        env:
+          RELEASE_MODE: ${{ inputs.mode }}
         run: |
-          if [ "${{ inputs.mode }}" = "dry-run" ]; then
+          if [ "$RELEASE_MODE" = "dry-run" ]; then
             openssl genpkey -algorithm ED25519 -out /tmp/feed-key.pem
           else
             echo "$IMAGE_FEED_KEY" | base64 -d > /tmp/feed-key.pem
@@ -48,15 +50,19 @@ jobs:
           chmod 600 /tmp/feed-key.pem
 
       - name: Build and sign the feed
+        env:
+          IMAGE_VERSION: ${{ inputs.image-version }}
+          IMAGE_CHANNEL: ${{ inputs.channel }}
+          IMAGE_SEQUENCE: ${{ inputs.sequence }}
         run: |
           mkdir -p /tmp/image-release
-          cp "Images/out/${{ inputs.image-version }}.aar" /tmp/image-release/ 2>/dev/null \
-            || dd if=/dev/zero of="/tmp/image-release/${{ inputs.image-version }}.aar" bs=1024 count=1
+          cp "Images/out/${IMAGE_VERSION}.aar" /tmp/image-release/ 2>/dev/null \
+            || dd if=/dev/zero of="/tmp/image-release/${IMAGE_VERSION}.aar" bs=1024 count=1
           python3 scripts/release/image-feed.py \
-            --image-version "${{ inputs.image-version }}" \
-            --archive "/tmp/image-release/${{ inputs.image-version }}.aar" \
-            --channel "${{ inputs.channel }}" \
-            --sequence "${{ inputs.sequence }}" \
+            --image-version "${IMAGE_VERSION}" \
+            --archive "/tmp/image-release/${IMAGE_VERSION}.aar" \
+            --channel "${IMAGE_CHANNEL}" \
+            --sequence "${IMAGE_SEQUENCE}" \
             --key /tmp/feed-key.pem \
             --out out/feed/apkrun/images
 

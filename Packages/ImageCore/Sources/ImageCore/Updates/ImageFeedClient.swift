@@ -68,7 +68,15 @@ public actor ImageFeedClient {
         }
         let (body, response) = try await get(request, limit: Self.feedLimit, what: "feed")
         if response.statusCode == 304 {
-            return .notModified
+            // A cached feed still has to validate: an expired one is not a
+            // usable answer, and a still-valid one is re-evaluated so
+            // candidate selection sees context changes (§9.4).
+            guard let cached else { return .notModified }
+            let cachedFeed = try ImageFeed.parse(cached.feed)
+            guard cachedFeed.expiresAt > now() else {
+                throw .imageFeedExpired
+            }
+            return .feed(cachedFeed)
         }
         guard response.statusCode == 200 else {
             throw .imageDownloadFailed(detail: "feed status \(response.statusCode)")
@@ -115,9 +123,9 @@ public actor ImageFeedClient {
     private func get(
         _ request: URLRequest, limit: Int, what: String
     ) async throws(ImageFailure) -> (Data, HTTPURLResponse) {
-        let result: (Data, URLResponse)
+        let result: (URLSession.AsyncBytes, URLResponse)
         do {
-            result = try await session.data(for: request)
+            result = try await session.bytes(for: request)
         } catch {
             throw .imageDownloadFailed(detail: "\(what): \(error.localizedDescription)")
         }
@@ -127,10 +135,24 @@ public actor ImageFeedClient {
         if http.expectedContentLength > Int64(limit) {
             throw .imageFeedInvalid(detail: "\(what) larger than \(limit) bytes")
         }
-        guard result.0.count <= limit else {
-            throw .imageFeedInvalid(detail: "\(what) larger than \(limit) bytes")
+        // The limit applies while the body streams in: a source that sends
+        // more than `limit` bytes is cut off before it fills memory.
+        var body = Data()
+        body.reserveCapacity(min(limit, 1 << 16))
+        do {
+            for try await byte in result.0 {
+                body.append(byte)
+                if body.count > limit {
+                    throw ImageFailure.imageFeedInvalid(
+                        detail: "\(what) larger than \(limit) bytes")
+                }
+            }
+        } catch let failure as ImageFailure {
+            throw failure
+        } catch {
+            throw .imageDownloadFailed(detail: "\(what): \(error.localizedDescription)")
         }
-        return (result.0, http)
+        return (body, http)
     }
 
     private func loadCache() -> Cache? {

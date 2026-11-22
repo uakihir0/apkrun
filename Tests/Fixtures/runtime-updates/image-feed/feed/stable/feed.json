@@ -13,7 +13,6 @@
       "expandedSize": 131072,
       "imageVersion": "2026.11.1",
       "kind": "apkrun",
-      "minimumSourceVersion": "0.0",
       "publishedAt": "2026-11-21T19:12:44Z",
       "requirements": {
         "guestProtocol": {
@@ -23,6 +22,9 @@
         "minimumRuntimeVersion": "1.0"
       },
       "rolloutPercent": 100,
+      "upgradeFrom": {
+        "minimumImageVersion": "0.0"
+      },
       "userdata": {
         "schemaVersion": 1,
         "upgradableFrom": [

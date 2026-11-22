@@ -135,6 +135,10 @@ struct DiagnosticsReportSheet: View {
     @Bindable var model: DiagnosticsReportModel
     @Environment(\.dismiss) private var dismiss
 
+    private static let issueTrackerURL =
+        URL(string: "https://github.com/uakihir0/apkrun/issues")
+        ?? URL(fileURLWithPath: "/")
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Create Diagnostics Report")
@@ -159,8 +163,7 @@ struct DiagnosticsReportSheet: View {
                 }
                 Link(
                     "Report it on the issue tracker",
-                    destination: URL(
-                        string: "https://github.com/uakihir0/apkrun/issues")!)
+                    destination: Self.issueTrackerURL)
                 Button("Done") { dismiss() }
             case .failed(let message):
                 Text(message).foregroundStyle(.red)

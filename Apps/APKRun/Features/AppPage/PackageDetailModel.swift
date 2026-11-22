@@ -153,6 +153,13 @@ final class PackageDetailModel {
                 settings = try await service().updatePackageSettings(
                     packageID,
                     patch: RuntimePackageSettingsPatch(set: set, clear: clear))
+                // A microphone toggle flips `microphoneNeedsRestart`
+                // (desktop-integration.md §8.2); re-read the status so the
+                // Restart Android Now button appears (and clears).
+                if Set(set.keys).union(clear).contains("integrations.microphone") {
+                    integrations = try? await service().integrationStatus(
+                        packageID: packageID)
+                }
                 let changed = Set(set.keys).union(clear)
                 appliesNextOpenNotice =
                     settings?.entries.contains {
@@ -175,6 +182,9 @@ final class PackageDetailModel {
         Task {
             do {
                 _ = try await service().restartRuntime()
+                // The restarted guest no longer needs the prompt (§8.2).
+                integrations = try? await service().integrationStatus(
+                    packageID: packageID)
             } catch {
                 loadError = Self.describe(error)
             }

@@ -63,15 +63,24 @@ def all_issue_states():
 # --- 1. Requirements ---------------------------------------------------
 must_tasks = {}
 version_re = re.compile(r"^\d+(?:\.\d+)+$")
+range_re = re.compile(r"#(\d+)\s*[–-]\s*#?(\d+)")
 requirements = (root / "docs/00-product/requirements.md").read_text(encoding="utf-8")
+columns = {}
 for line in requirements.splitlines():
     cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-    if len(cells) < 5 or not cells[0].startswith(("FR-", "NFR-")):
+    if "ID" in cells and "Pri" in cells:
+        # Each requirements table places Pri/Ver/Tasks at its own offsets.
+        columns = {name: cells.index(name) for name in ("Pri", "Ver", "Tasks") if name in cells}
         continue
-    pri, ver, tasks = cells[2], cells[3], cells[4]
+    if len(cells) < 5 or not cells[0].startswith(("FR-", "NFR-")) or len(columns) < 3:
+        continue
+    pri, ver, tasks = cells[columns["Pri"]], cells[columns["Ver"]], cells[columns["Tasks"]]
     if pri != "Must" or not version_re.match(ver) or float(ver) > 1.0:
         continue
-    for number in re.findall(r"#(\d+)", tasks):
+    for lo, hi in range_re.findall(tasks):
+        for number in range(int(lo), int(hi) + 1):
+            must_tasks[number] = cells[0]
+    for number in re.findall(r"#(\d+)", range_re.sub("", tasks)):
         must_tasks[int(number)] = cells[0]
 
 states = all_issue_states()
@@ -119,14 +128,18 @@ try:
 except (OSError, json.JSONDecodeError, KeyError):
     entries = {}
 
-fixtures = sorted(
-    path.name for path in (root / "Tests/Fixtures/AndroidApps").iterdir()
-    if path.is_dir() and (path / "build.gradle.kts").exists()
-)
+application_re = re.compile(r'applicationId\s*=\s*"([^"]+)"')
+fixtures = []
+for path in sorted((root / "Tests/Fixtures/AndroidApps").iterdir()):
+    gradle = path / "build.gradle.kts"
+    if not (path.is_dir() and gradle.exists()):
+        continue
+    match = application_re.search(gradle.read_text(encoding="utf-8"))
+    if match:
+        fixtures.append((path.name, match.group(1)))
 missing = []
 not_native = []
-for fixture in fixtures:
-    package_id = f"io.apkrun.fixture.{fixture.lower()}"
+for fixture, package_id in fixtures:
     entry = entries.get(package_id)
     if entry is None:
         missing.append(fixture)
@@ -150,7 +163,10 @@ for line in security_model.splitlines():
     cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
     if len(cells) >= 4 and cells[0].startswith("SR-"):
         status = cells[3].lower()
-        if not (status.startswith("closed") or status.startswith("follow-up")):
+        # A follow-up must name its tracking task; a bare follow-up is open.
+        if status.startswith("follow-up") and not re.search(r"#\d+", cells[3]):
+            sr_open.append(f"{cells[0]} (follow-up has no task)")
+        elif not (status.startswith("closed") or status.startswith("follow-up")):
             sr_open.append(cells[0])
 if security_issues is None:
     report("MANUAL", 5, "Security",

@@ -19,6 +19,7 @@ checks+=(
     "scripts/check-docs.sh"
     "scripts/check-compatibility-db.sh"
     "scripts/check-readback.sh"
+    "scripts/check-sepolicy.sh"
     "scripts/check-raw-adb.sh"
     "scripts/check-strings.sh"
     "scripts/check-launcher.sh"

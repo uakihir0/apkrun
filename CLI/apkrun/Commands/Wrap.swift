@@ -262,6 +262,8 @@
                         identity: identity ?? "",
                         notarize: notarize,
                         keychainProfile: keychainProfile,
+                        windowDefaults: try windowDefaults(),
+                        replace: replace,
                         redistributionConfirmed: true,
                         client: client
                     )
@@ -973,6 +975,8 @@
             identity: String,
             notarize: Bool,
             keychainProfile: String?,
+            windowDefaults: WrapperWindowDefaultsWire?,
+            replace: Bool,
             redistributionConfirmed: Bool,
             client: RuntimeControlClient
         ) async throws -> DistributionWrapperResult {
@@ -986,6 +990,8 @@
                 identity: identity,
                 notarize: notarize,
                 keychainProfile: keychainProfile,
+                windowDefaults: windowDefaults,
+                replace: replace,
                 redistributionConfirmed: redistributionConfirmed
             )
             let handle: OperationHandle
@@ -1012,7 +1018,7 @@
                 return try distributionResult(from: snapshot, expectedPackageID: packageID)
             } catch let failure as RuntimeWireError {
                 return try placeDistribution(
-                    after: failure, outputDirectory: outputDirectory)
+                    after: failure, outputDirectory: outputDirectory, replace: replace)
             }
         }
 
@@ -1042,7 +1048,8 @@
         /// the result the daemon left in `result.json` (wrapper.md §11).
         static func placeDistribution(
             after failure: RuntimeWireError,
-            outputDirectory: URL
+            outputDirectory: URL,
+            replace: Bool
         ) throws -> DistributionWrapperResult {
             guard failure.code == "wrapper.destinationNotAccessible",
                 let token = failure.parameters["stagingToken"]
@@ -1074,6 +1081,7 @@
                     let final = outputDirectory.appendingPathComponent(
                         product.lastPathComponent)
                     if FileManager.default.fileExists(atPath: final.path) {
+                        guard replace else { throw failure }
                         try FileManager.default.removeItem(at: final)
                     }
                     do {

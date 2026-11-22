@@ -2792,12 +2792,18 @@ public actor RuntimeHost {
         } catch {
             throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
         }
+        var window = WindowDefaults()
+        if let windowDefaults = request.windowDefaults {
+            window.defaultWidth = windowDefaults.defaultWidth ?? window.defaultWidth
+            window.defaultHeight = windowDefaults.defaultHeight ?? window.defaultHeight
+            window.resizable = windowDefaults.resizable ?? window.resizable
+        }
         let configuration = WrapperConfiguration(
             packageID: request.packageID,
             displayName: request.displayName ?? details.summary.displayName
                 ?? request.packageID.rawValue,
             icon: iconSource,
-            window: WindowDefaults(),
+            window: window,
             updates: WrapperUpdateDefaults(
                 authority: details.summary.updateAuthority == .apkrun ? .apkrun : .manual,
                 mode: .automatic,
@@ -2820,18 +2826,49 @@ public actor RuntimeHost {
         } catch {
             throw Self.wrapperWireError(for: .destinationNotWritable(request.outputDirectory))
         }
+        // Failed signing or notarization must not leak staged products;
+        // only a destinationNotAccessible reply keeps them for the
+        // client's deferred placement (wrapper.md §11 note).
+        var keepStagingDirectory = false
+        defer {
+            if !keepStagingDirectory {
+                try? FileManager.default.removeItem(at: stagingDirectory)
+            }
+        }
         let fileName = WrapperFileName.sanitize(
             displayName: request.fileName ?? configuration.displayName,
             packageID: configuration.packageID.rawValue)
         guard !fileName.isEmpty else {
             throw Self.wrapperWireError(for: .invalidName(configuration.displayName))
         }
+        // §6.4: fail before any work when the destination cannot be
+        // replaced. A foreign or native item is never touched; this
+        // package's own wrapper and zip need replace == true.
+        let appDestination = request.outputDirectory
+            .appendingPathComponent("\(fileName).app")
+        let zipDestination = request.outputDirectory
+            .appendingPathComponent("\(fileName).zip")
+        let installer = WrapperInstaller(sink: diagnostics?.logSink)
+        if let kind = installer.classifyConflict(
+            at: appDestination, packageID: request.packageID)
+        {
+            throw Self.wrapperWireError(
+                for: .nameConflict(appDestination, existing: kind))
+        }
+        if FileManager.default.fileExists(atPath: appDestination.path), !request.replace {
+            throw Self.wrapperWireError(
+                for: .wrapperExists(request.packageID, appDestination))
+        }
+        if FileManager.default.fileExists(atPath: zipDestination.path), !request.replace {
+            throw Self.wrapperWireError(
+                for: .nameConflict(zipDestination, existing: .file))
+        }
         let bundleID = BundleIDMapper.map(configuration.packageID)
         let generator = AppWrapperGenerator(
             environment: AppWrapperGenerator.Environment(
                 launcher: launcher,
                 registry: registry,
-                installer: WrapperInstaller(sink: diagnostics?.logSink),
+                installer: installer,
                 stagingRoot: paths.wrapperStagingDirectory
             )
         )
@@ -2882,8 +2919,8 @@ public actor RuntimeHost {
             throw .runtime("internal", message: "APKRun couldn't notarize the Mac app.")
         }
         let result = DistributionWrapperResult(
-            appURL: request.outputDirectory.appendingPathComponent("\(fileName).app"),
-            zipURL: request.outputDirectory.appendingPathComponent("\(fileName).zip"),
+            appURL: appDestination,
+            zipURL: zipDestination,
             bundleID: bundleID,
             cdhash: signed.cdhash,
             teamID: signed.teamID,
@@ -2902,6 +2939,7 @@ public actor RuntimeHost {
             try Self.moveDistributionProduct(zipURL, to: result.zipURL)
             try? FileManager.default.removeItem(at: stagingDirectory)
         } catch {
+            keepStagingDirectory = true
             throw Self.wrapperWireError(
                 for: .destinationNotAccessible(
                     request.outputDirectory, stagingToken: stagingToken))

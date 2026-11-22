@@ -576,6 +576,13 @@ public struct DistributionWrapperRequest: Codable, Equatable, Sendable {
     public var notarize: Bool
     /// The `notarytool` keychain profile; required with `notarize`.
     public var keychainProfile: String?
+    /// `wrapper.json` window defaults carried over from `wrap`; the same
+    /// §6.1 options apply to a distribution wrapper.
+    public var windowDefaults: WrapperWindowDefaultsWire?
+    /// Replace this package's own existing wrapper and zip at the
+    /// destination. A foreign or native item is never replaced
+    /// (wrapper.md §6.4).
+    public var replace: Bool
 
     /// The client confirmed the APK may be redistributed; `false` fails
     /// the request with `runtime.malformedRequest` (wrapper.md §11).
@@ -591,6 +598,8 @@ public struct DistributionWrapperRequest: Codable, Equatable, Sendable {
         identity: String,
         notarize: Bool = false,
         keychainProfile: String? = nil,
+        windowDefaults: WrapperWindowDefaultsWire? = nil,
+        replace: Bool = false,
         redistributionConfirmed: Bool
     ) {
         self.packageID = packageID
@@ -601,6 +610,8 @@ public struct DistributionWrapperRequest: Codable, Equatable, Sendable {
         self.identity = identity
         self.notarize = notarize
         self.keychainProfile = keychainProfile
+        self.windowDefaults = windowDefaults
+        self.replace = replace
         self.redistributionConfirmed = redistributionConfirmed
     }
 }

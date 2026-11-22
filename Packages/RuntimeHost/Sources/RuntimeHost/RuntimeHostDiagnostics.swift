@@ -233,26 +233,28 @@ extension RuntimeHost {
     private func healthFixes() -> [HealthCheckID: any HealthFix] {
         [
             "wrappers.registration": ClosureHealthFix(
-                id: "wrappers.registration") { [weak self] _ in
-                    guard let self else { return }
-                    await self.runWrapperSweep()
-                },
+                id: "wrappers.registration"
+            ) { [weak self] _ in
+                guard let self else { return }
+                await self.runWrapperSweep()
+            },
             "apkrund.version": ClosureHealthFix(
-                id: "apkrund.version") { _ in
-                    let process = Process()
-                    process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-                    process.arguments = [
-                        "kickstart", "-k",
-                        "gui/\(getuid())/io.apkrun.apkrund",
-                    ]
-                    try process.run()
-                    process.waitUntilExit()
-                    guard process.terminationStatus == 0 else {
-                        throw RuntimeWireError(
-                            domain: "diagnostics", code: "diagnostics.fixFailed",
-                            message: "launchctl kickstart failed.")
-                    }
-                },
+                id: "apkrund.version"
+            ) { _ in
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+                process.arguments = [
+                    "kickstart", "-k",
+                    "gui/\(getuid())/io.apkrun.apkrund",
+                ]
+                try process.run()
+                process.waitUntilExit()
+                guard process.terminationStatus == 0 else {
+                    throw RuntimeWireError(
+                        domain: "diagnostics", code: "diagnostics.fixFailed",
+                        message: "launchctl kickstart failed.")
+                }
+            },
         ]
     }
 

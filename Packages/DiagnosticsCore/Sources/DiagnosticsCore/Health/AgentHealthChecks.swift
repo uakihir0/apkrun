@@ -153,141 +153,169 @@ public enum HealthChecks {
 
         let checks: [ClosureHealthCheck] = [
             // apkrund.* (§7.3)
-            check("apkrund.reachable", .backgroundService, "Background service is reachable",
-                  requirement: .host) { _ in
-                    await probe.daemonReachable()
-                        ? .init(state: .pass)
-                        : .init(state: .failure, error: err("runtime.serviceUnavailable"))
+            check(
+                "apkrund.reachable", .backgroundService, "Background service is reachable",
+                requirement: .host
+            ) { _ in
+                await probe.daemonReachable()
+                    ? .init(state: .pass)
+                    : .init(state: .failure, error: err("runtime.serviceUnavailable"))
             },
-            check("apkrund.version", .backgroundService, "Background service version",
-                  requirement: .daemon) { context in
-                    guard let build = await probe.daemonBuild() else {
-                        return .init(state: .skipped)
-                    }
-                    return build == context.buildInfo.buildNumber
-                        ? .init(state: .pass, detail: "build \(build)")
-                        : .init(
-                            state: .warning,
-                            detail: "daemon \(build), app \(context.buildInfo.buildNumber)",
-                            error: err("diagnostics.componentVersionMismatch"))
+            check(
+                "apkrund.version", .backgroundService, "Background service version",
+                requirement: .daemon
+            ) { context in
+                guard let build = await probe.daemonBuild() else {
+                    return .init(state: .skipped)
+                }
+                return build == context.buildInfo.buildNumber
+                    ? .init(state: .pass, detail: "build \(build)")
+                    : .init(
+                        state: .warning,
+                        detail: "daemon \(build), app \(context.buildInfo.buildNumber)",
+                        error: err("diagnostics.componentVersionMismatch"))
             },
-            check("apkrund.crashLoop", .backgroundService, "Background service stability",
-                  requirement: .host) { _ in
-                    let crashes = await probe.daemonCrashCount()
-                    return crashes < 3
-                        ? .init(state: .pass)
-                        : .init(
-                            state: .failure,
-                            detail: "\(crashes) unclean exits in 10 minutes",
-                            error: err("diagnostics.crashLoop"))
+            check(
+                "apkrund.crashLoop", .backgroundService, "Background service stability",
+                requirement: .host
+            ) { _ in
+                let crashes = await probe.daemonCrashCount()
+                return crashes < 3
+                    ? .init(state: .pass)
+                    : .init(
+                        state: .failure,
+                        detail: "\(crashes) unclean exits in 10 minutes",
+                        error: err("diagnostics.crashLoop"))
             },
             // graphics.* (§7.4)
-            check("graphics.device", .graphics, "Virtual GPU device",
-                  requirement: .runningRuntime) { _ in
-                    guard let status = await probe.graphicsStatus() else {
-                        return .init(state: .skipped)
-                    }
-                    return status.deviceReady
-                        ? .init(state: .pass)
-                        : .init(state: .failure, error: err("graphics.deviceSetupFailed"))
+            check(
+                "graphics.device", .graphics, "Virtual GPU device",
+                requirement: .runningRuntime
+            ) { _ in
+                guard let status = await probe.graphicsStatus() else {
+                    return .init(state: .skipped)
+                }
+                return status.deviceReady
+                    ? .init(state: .pass)
+                    : .init(state: .failure, error: err("graphics.deviceSetupFailed"))
             },
-            check("graphics.renderer", .graphics, "Graphics renderer",
-                  requirement: .runningRuntime) { _ in
-                    guard let status = await probe.graphicsStatus() else {
-                        return .init(state: .skipped)
-                    }
-                    return status.gpuRendering
-                        ? .init(state: .pass)
-                        : .init(state: .warning, error: err("graphics.softwareRendering"))
+            check(
+                "graphics.renderer", .graphics, "Graphics renderer",
+                requirement: .runningRuntime
+            ) { _ in
+                guard let status = await probe.graphicsStatus() else {
+                    return .init(state: .skipped)
+                }
+                return status.gpuRendering
+                    ? .init(state: .pass)
+                    : .init(state: .warning, error: err("graphics.softwareRendering"))
             },
-            check("graphics.present", .graphics, "Frame presentation",
-                  requirement: .runningRuntime) { _ in
-                    guard let status = await probe.graphicsStatus() else {
-                        return .init(state: .skipped)
-                    }
-                    return status.fastPresentation
-                        ? .init(state: .pass)
-                        : .init(state: .warning, error: err("graphics.presentationSlowPath"))
+            check(
+                "graphics.present", .graphics, "Frame presentation",
+                requirement: .runningRuntime
+            ) { _ in
+                guard let status = await probe.graphicsStatus() else {
+                    return .init(state: .skipped)
+                }
+                return status.fastPresentation
+                    ? .init(state: .pass)
+                    : .init(state: .warning, error: err("graphics.presentationSlowPath"))
             },
-            check("graphics.memory", .graphics, "Graphics memory",
-                  requirement: .runningRuntime) { _ in
-                    guard let status = await probe.graphicsStatus() else {
-                        return .init(state: .skipped)
-                    }
-                    return status.memoryLimitReached
-                        ? .init(state: .warning, error: err("graphics.memoryLimitReached"))
-                        : .init(state: .pass)
+            check(
+                "graphics.memory", .graphics, "Graphics memory",
+                requirement: .runningRuntime
+            ) { _ in
+                guard let status = await probe.graphicsStatus() else {
+                    return .init(state: .skipped)
+                }
+                return status.memoryLimitReached
+                    ? .init(state: .warning, error: err("graphics.memoryLimitReached"))
+                    : .init(state: .pass)
             },
-            check("graphics.safeMode", .graphics, "Graphics safe mode",
-                  requirement: .host) { _ in
-                    guard let status = await probe.graphicsStatus() else {
-                        return .init(state: .skipped)
-                    }
-                    return status.safeMode
-                        ? .init(state: .warning, error: err("graphics.safeModeOn"))
-                        : .init(state: .pass)
+            check(
+                "graphics.safeMode", .graphics, "Graphics safe mode",
+                requirement: .host
+            ) { _ in
+                guard let status = await probe.graphicsStatus() else {
+                    return .init(state: .skipped)
+                }
+                return status.safeMode
+                    ? .init(state: .warning, error: err("graphics.safeModeOn"))
+                    : .init(state: .pass)
             },
-            check("graphics.guestDriver", .graphics, "Guest graphics driver",
-                  requirement: .runningRuntime, cost: .deep) { _ in
-                    guard let status = await probe.graphicsStatus() else {
-                        return .init(state: .skipped)
-                    }
-                    return status.gpuRendering
-                        ? .init(state: .pass)
-                        : .init(state: .warning, error: err("graphics.softwareRendering"))
+            check(
+                "graphics.guestDriver", .graphics, "Guest graphics driver",
+                requirement: .runningRuntime, cost: .deep
+            ) { _ in
+                guard let status = await probe.graphicsStatus() else {
+                    return .init(state: .skipped)
+                }
+                return status.gpuRendering
+                    ? .init(state: .pass)
+                    : .init(state: .warning, error: err("graphics.softwareRendering"))
             },
             // agent.* (§7.4) — all share one GetHealth round trip.
-            check("agent.guest", .guest, "Guest Agent is answering",
-                  requirement: .runningRuntime) { _ in
-                    guard let health = await shared.fetch() else {
-                        return .init(state: .failure, error: err("runtime.serviceUnavailable"))
-                    }
-                    return .init(
-                        state: .pass,
-                        detail: "uptime \(health.agentUptimeMs / 1000)s, \(health.displaysCount) display(s)")
+            check(
+                "agent.guest", .guest, "Guest Agent is answering",
+                requirement: .runningRuntime
+            ) { _ in
+                guard let health = await shared.fetch() else {
+                    return .init(state: .failure, error: err("runtime.serviceUnavailable"))
+                }
+                return .init(
+                    state: .pass,
+                    detail: "uptime \(health.agentUptimeMs / 1000)s, \(health.displaysCount) display(s)")
             },
-            check("agent.store", .guest, "Store Agent is answering",
-                  requirement: .runningRuntime) { _ in
-                    // The Store Agent shares the guest channel today; its own
-                    // channel arrives with the store work. Reaching the Guest
-                    // Agent is the best available signal.
-                    await shared.fetch() != nil
-                        ? .init(state: .pass)
-                        : .init(state: .skipped)
+            check(
+                "agent.store", .guest, "Store Agent is answering",
+                requirement: .runningRuntime
+            ) { _ in
+                // The Store Agent shares the guest channel today; its own
+                // channel arrives with the store work. Reaching the Guest
+                // Agent is the best available signal.
+                await shared.fetch() != nil
+                    ? .init(state: .pass)
+                    : .init(state: .skipped)
             },
-            check("agent.input", .guest, "Input injection",
-                  requirement: .runningRuntime) { _ in
-                    guard let health = await shared.fetch() else {
-                        return .init(state: .skipped)
-                    }
-                    let rejected = health.inputEventsRejected
-                    let injected = health.inputEventsInjected
-                    let degraded = rejected > 0 && rejected * 20 > injected + rejected
-                    return degraded
-                        ? .init(
-                            state: .warning,
-                            detail: "\(rejected) of \(injected + rejected) events rejected",
-                            error: err("runtime.inputDegraded"))
-                        : .init(state: .pass)
+            check(
+                "agent.input", .guest, "Input injection",
+                requirement: .runningRuntime
+            ) { _ in
+                guard let health = await shared.fetch() else {
+                    return .init(state: .skipped)
+                }
+                let rejected = health.inputEventsRejected
+                let injected = health.inputEventsInjected
+                let degraded = rejected > 0 && rejected * 20 > injected + rejected
+                return degraded
+                    ? .init(
+                        state: .warning,
+                        detail: "\(rejected) of \(injected + rejected) events rejected",
+                        error: err("runtime.inputDegraded"))
+                    : .init(state: .pass)
             },
-            check("agent.ime", .guest, "APKRun input method selected",
-                  requirement: .runningRuntime) { _ in
-                    guard let health = await shared.fetch() else {
-                        return .init(state: .skipped)
-                    }
-                    return health.imeSelected
-                        ? .init(state: .pass)
-                        : .init(state: .warning, error: err("runtime.inputMethodNotSelected"))
+            check(
+                "agent.ime", .guest, "APKRun input method selected",
+                requirement: .runningRuntime
+            ) { _ in
+                guard let health = await shared.fetch() else {
+                    return .init(state: .skipped)
+                }
+                return health.imeSelected
+                    ? .init(state: .pass)
+                    : .init(state: .warning, error: err("runtime.inputMethodNotSelected"))
             },
-            check("agent.developerMode", .guest, "Development interfaces",
-                  requirement: .runningRuntime) { _ in
-                    guard let health = await shared.fetch() else {
-                        return .init(state: .skipped)
-                    }
-                    let unexpectedADB = health.adbEnabled && !health.isDevelopmentShell
-                    return unexpectedADB
-                        ? .init(state: .warning, error: err("runtime.adbEnabledUnexpectedly"))
-                        : .init(state: .pass)
+            check(
+                "agent.developerMode", .guest, "Development interfaces",
+                requirement: .runningRuntime
+            ) { _ in
+                guard let health = await shared.fetch() else {
+                    return .init(state: .skipped)
+                }
+                let unexpectedADB = health.adbEnabled && !health.isDevelopmentShell
+                return unexpectedADB
+                    ? .init(state: .warning, error: err("runtime.adbEnabledUnexpectedly"))
+                    : .init(state: .pass)
             },
         ]
         for one in checks {

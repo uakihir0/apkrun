@@ -25,7 +25,7 @@ struct DoctorCommand: AsyncParsableCommand {
     mutating func run() async throws {
         do {
             let (report, metrics) = try await daemonReport()
-            try print(report: report, metrics: metrics)
+            try emit(report: report, metrics: metrics)
         } catch let code as ExitCode {
             throw code
         } catch {
@@ -57,8 +57,8 @@ struct DoctorCommand: AsyncParsableCommand {
         return (report, metrics)
     }
 
-    /// Prints a report and exits with the §7.3 code.
-    private func print(
+    /// Writes a report and exits with the §7.3 code.
+    private func emit(
         report: WireHealthReport, metrics: [(name: String, value: String)]
     ) throws {
         let rows = report.results.map(Self.row)
@@ -176,16 +176,18 @@ struct DoctorCommand: AsyncParsableCommand {
     )] {
         var rows: [(name: String, value: String)] = []
         for marker in stats.markers.prefix(8) {
-            rows.append((
-                name: marker.name,
-                value: "median \(marker.p50Us / 1000)ms p95 \(marker.p95Us / 1000)ms"
-            ))
+            rows.append(
+                (
+                    name: marker.name,
+                    value: "median \(marker.p50Us / 1000)ms p95 \(marker.p95Us / 1000)ms"
+                ))
         }
         for session in stats.sessions {
-            rows.append((
-                name: "session \(session.packageID.rawValue) fps",
-                value: String(format: "%.1f", session.fps)
-            ))
+            rows.append(
+                (
+                    name: "session \(session.packageID.rawValue) fps",
+                    value: String(format: "%.1f", session.fps)
+                ))
         }
         return rows
     }

@@ -173,13 +173,18 @@ func consoleLogWriterSynchronizesAtSixtyFourKiBAndOnTimerFlush() async throws {
     let countBeforeTimerFlush = fixture.fileSystem.contents(at: fixture.paths.consoleLogFile)?.count ?? 0
     await fixture.writer.append(Data("partial".utf8))
     fixture.clock.advance(by: .milliseconds(250))
-    try await Task.sleep(for: .milliseconds(350))
+    // Wait for the timer-driven flush instead of a fixed sleep: on a loaded
+    // CI runner the flush task can be scheduled late, so poll for the write.
+    var contentsAfterTimerFlush = fixture.fileSystem.contents(at: fixture.paths.consoleLogFile)
+    for _ in 0..<40 {
+        if (contentsAfterTimerFlush?.count ?? 0) > countBeforeTimerFlush { break }
+        try await Task.sleep(for: .milliseconds(100))
+        contentsAfterTimerFlush = fixture.fileSystem.contents(at: fixture.paths.consoleLogFile)
+    }
 
-    let contentsAfterTimerFlush = try #require(
-        fixture.fileSystem.contents(at: fixture.paths.consoleLogFile)
-    )
-    #expect(contentsAfterTimerFlush.count > countBeforeTimerFlush)
-    #expect(contentsAfterTimerFlush.suffix(8) == Data("partial\n".utf8))
+    let flushedContents = try #require(contentsAfterTimerFlush)
+    #expect(flushedContents.count > countBeforeTimerFlush)
+    #expect(flushedContents.suffix(8) == Data("partial\n".utf8))
     #expect(fixture.fileSystem.synchronizeCallCount >= 4)
     await fixture.writer.finish()
 }

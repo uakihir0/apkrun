@@ -234,20 +234,23 @@ private final class IOKitPowerEventSource: PowerEventSource, @unchecked Sendable
         receiver = handler
 
         var newNotificationPort: IONotificationPortRef?
-        var newRootPort: io_connect_t = IO_OBJECT_NULL
-        let newNotifier = IORegisterForSystemPower(
+        var newNotifier: io_object_t = IO_OBJECT_NULL
+        // The return value is the power connection `IOAllowPowerChange`
+        // takes; the last argument receives the object
+        // `IODeregisterForSystemPower` deregisters.
+        let newRootPort = IORegisterForSystemPower(
             Unmanaged.passUnretained(self).toOpaque(),
             &newNotificationPort,
             ioKitPowerInterestCallback,
-            &newRootPort
+            &newNotifier
         )
-        guard newNotifier != IO_OBJECT_NULL, let newNotificationPort else {
+        guard newRootPort != IO_OBJECT_NULL, let newNotificationPort else {
             receiver = nil
             if let newNotificationPort {
                 IONotificationPortDestroy(newNotificationPort)
             }
-            if newRootPort != IO_OBJECT_NULL {
-                IOServiceClose(newRootPort)
+            if newNotifier != IO_OBJECT_NULL {
+                IODeregisterForSystemPower(&newNotifier)
             }
             throw .registrationFailed
         }

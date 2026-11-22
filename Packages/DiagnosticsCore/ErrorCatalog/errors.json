@@ -1482,6 +1482,48 @@
       }
     },
     {
+      "code": "integration.microphoneNeedsRestart",
+      "parameters": [],
+      "message": {
+        "en": "Android needs to restart to change the microphone.",
+        "ja": "マイクの設定を反映するには Android の再起動が必要です。"
+      },
+      "remediation": {
+        "en": "Restart Android from the app's Integrations section or run `apkrun stop --android`.",
+        "ja": "アプリの Integrations セクションから Android を再起動するか、`apkrun stop --android` を実行してください。"
+      },
+      "action": "restartAndroid",
+      "cliExit": 1,
+      "doc": {
+        "table": "integration",
+        "case": "microphoneNeedsRestart",
+        "when": "the microphone-enabled package set differs from the set Android booted with",
+        "raisedBy": "IntegrationsSection, integrationStatus",
+        "ref": "[../02-design/desktop-integration.md](../02-design/desktop-integration.md) §8.2"
+      }
+    },
+    {
+      "code": "integration.microphonePermissionDenied",
+      "parameters": [],
+      "message": {
+        "en": "APKRun does not have microphone access.",
+        "ja": "APKRun にマイクへのアクセスが許可されていません。"
+      },
+      "remediation": {
+        "en": "Open System Settings → Privacy & Security → Microphone and turn on APKRun.",
+        "ja": "システム設定 → プライバシーとセキュリティ → マイクで APKRun をオンにしてください。"
+      },
+      "action": "openMicrophoneSettings",
+      "cliExit": 1,
+      "doc": {
+        "table": "integration",
+        "case": "microphonePermissionDenied",
+        "when": "AVCaptureDevice.authorizationStatus(for: .audio) reports denied or restricted for apkrund",
+        "raisedBy": "RuntimeHostIntegrationService",
+        "ref": "[../01-architecture/security-model.md](../01-architecture/security-model.md) §3.2"
+      }
+    },
+    {
       "code": "integration.notSupportedOnImage",
       "parameters": [
         "capability"

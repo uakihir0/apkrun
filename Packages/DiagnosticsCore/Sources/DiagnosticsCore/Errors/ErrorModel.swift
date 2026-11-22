@@ -141,6 +141,7 @@ public enum RemediationAction: String, CaseIterable, Codable, Sendable {
     case openPrivacySettings
     case openLoginItemsSettings
     case openNotificationSettings
+    case openMicrophoneSettings
     case openDownloadsPage
     case updateAPKRun
     case updateAndroid

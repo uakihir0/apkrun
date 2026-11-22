@@ -165,6 +165,22 @@ final class PackageDetailModel {
         }
     }
 
+    /// True while the Integrations section offers a restart for a microphone
+    /// change (desktop-integration.md §8.2).
+    var askRestartAndroid = false
+
+    /// **Restart Android Now** restarts the guest so a microphone change
+    /// takes effect (§9.4); running apps close.
+    func restartAndroid() {
+        Task {
+            do {
+                _ = try await service().restartRuntime()
+            } catch {
+                loadError = Self.describe(error)
+            }
+        }
+    }
+
     /// **Open** launches the app (§7 header).
     func open() {
         Task {

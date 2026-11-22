@@ -29,6 +29,7 @@ import io.apkrun.guest.protocol.v1.ResolveUrl
 import io.apkrun.guest.protocol.v1.SetClockFormat
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.SetLocale
+import io.apkrun.guest.protocol.v1.SetMicrophoneAccess
 import io.apkrun.guest.protocol.v1.SetNotificationForwarding
 import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
 import io.apkrun.guest.protocol.v1.SetTimeZone
@@ -54,6 +55,7 @@ internal class DeviceOperations(
     private val clipboard: ClipboardBridge,
     private val notifications: NotificationBridge,
     private val urlRedirect: UrlRedirect,
+    private val microphone: MicrophoneGate,
     private val files: FilesBridge,
     private val input: InputService,
     private val localeTime: LocaleTimeService = LocaleTimeService(),
@@ -153,6 +155,8 @@ internal class DeviceOperations(
         notifications.setForwarding(request)
 
     override fun setUrlRedirect(request: SetUrlRedirect) = urlRedirect.setRedirect(request)
+
+    override fun setMicrophoneAccess(request: SetMicrophoneAccess) = microphone.setAccess(request)
 
     override fun resolveUrl(request: ResolveUrl) = urlRedirect.resolve(request)
 

@@ -76,6 +76,7 @@ import Testing
             + [
                 "disabled", "notSupportedOnImage", "guestUnavailable", "clipboardTooLarge",
                 "fileTooLarge", "folderRefused", "folderUnavailable", "linkRejected",
+                "microphoneNeedsRestart", "microphonePermissionDenied",
                 "notificationAccessMissing", "pathRejected", "promptTimedOut",
                 "readOnly", "tooManyFiles", "transferFailed",
             ].map { "integration.\($0)" }

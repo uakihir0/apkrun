@@ -216,6 +216,7 @@ targets:
       - path: Apps/APKRun/Features/Home/HomeRowStatus.swift
       - path: Apps/APKRun/Features/AddFlow/AddFlowModel.swift
       - path: Apps/APKRun/Features/AppPage/PackageDetailModel.swift
+      - path: Apps/APKRun/Features/Diagnostics/DiagnosticsReportSheet.swift
       - path: Apps/APKRun/Features/Settings/SettingsModel.swift
       - path: Apps/APKRun/Settings/LocaleTimeSettingsStore.swift
       - path: Apps/APKRun/Maintenance/SelfUpdateModel.swift

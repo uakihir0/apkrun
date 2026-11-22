@@ -137,6 +137,7 @@ public actor RuntimeSupervisor {
     private let options: BootOptions
     /// Reads `audio.output` at each boot; `nil` keeps `options.soundOutput`.
     private let soundOutputProvider: (@Sendable () -> Bool)?
+    private let microphoneProvider: (@Sendable () -> Bool)?
     private let diagnostics: DiagnosticsContext
     private let planner: AndroidBootPlanner
     private let timeouts: BootTimeouts
@@ -205,7 +206,8 @@ public actor RuntimeSupervisor {
         guestAgentTimeout: Duration = DevelopmentGuestAgent.defaultConnectTimeout,
         requiredAgentOutageTimeout: Duration = .seconds(30),
         developmentDisplay: DevelopmentDisplay? = nil,
-        soundOutputProvider: (@Sendable () -> Bool)? = nil
+        soundOutputProvider: (@Sendable () -> Bool)? = nil,
+        microphoneProvider: (@Sendable () -> Bool)? = nil
     ) {
         self.guestAgentBundle = guestAgentBundle
         self.developmentDisplay = developmentDisplay
@@ -213,6 +215,7 @@ public actor RuntimeSupervisor {
         self.instanceStore = instanceStore
         self.options = options
         self.soundOutputProvider = soundOutputProvider
+        self.microphoneProvider = microphoneProvider
         self.diagnostics = diagnostics
         planner = AndroidBootPlanner(platform: platform, paths: diagnostics.paths)
         self.timeouts = timeouts
@@ -396,6 +399,9 @@ public actor RuntimeSupervisor {
             // touches the running VM (configuration.md §2.4).
             if let soundOutputProvider {
                 bootOptions.soundOutput = soundOutputProvider()
+            }
+            if let microphoneProvider {
+                bootOptions.microphone = microphoneProvider()
             }
             plan = try planner.prepareBoot(image: image, instance: instance, options: bootOptions)
         } catch {

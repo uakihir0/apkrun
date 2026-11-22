@@ -222,6 +222,10 @@ class Dispatcher(
                 operations.setUrlRedirect(request.setUrlRedirect)
                 Response.newBuilder().setSetUrlRedirect(Empty.getDefaultInstance()).build()
             }
+            Request.OpCase.SET_MICROPHONE_ACCESS -> {
+                operations.setMicrophoneAccess(request.setMicrophoneAccess)
+                Response.newBuilder().setSetMicrophoneAccess(Empty.getDefaultInstance()).build()
+            }
             Request.OpCase.RESOLVE_URL -> {
                 operations.resolveUrl(request.resolveUrl)
                 Response.newBuilder().setResolveUrl(Empty.getDefaultInstance()).build()
@@ -300,6 +304,7 @@ class Dispatcher(
                 Request.OpCase.SET_NOTIFICATION_FORWARDING -> GuestCapability.NOTIFICATIONS
                 Request.OpCase.SET_URL_REDIRECT,
                 Request.OpCase.RESOLVE_URL -> GuestCapability.URL
+                Request.OpCase.SET_MICROPHONE_ACCESS -> GuestCapability.MICROPHONE
                 Request.OpCase.IMPORT_FILES,
                 Request.OpCase.RESOLVE_EXPORT -> GuestCapability.FILES
                 Request.OpCase.SET_SHARED_FOLDER_ACCESS -> GuestCapability.FILES_SHARED

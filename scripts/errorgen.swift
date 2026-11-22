@@ -35,7 +35,8 @@ let markdownURL = rootURL.appendingPathComponent("docs/03-reference/error-catalo
 let remediationActions: Set<String> = [
     "none", "retry", "openTroubleshooting", "restartAndroid", "startGraphicsSafeMode",
     "openRuntimeSettings", "openStorageSettings", "openPrivacySettings",
-    "openLoginItemsSettings", "openNotificationSettings", "openDownloadsPage",
+    "openLoginItemsSettings", "openNotificationSettings", "openMicrophoneSettings",
+    "openDownloadsPage",
     "updateAPKRun", "updateAndroid", "updateMacApp", "createMacApp", "reinstallApp",
     "reportProblem",
 ]

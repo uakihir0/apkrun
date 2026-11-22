@@ -80,6 +80,9 @@ public actor DevelopmentGuestAgent {
     public nonisolated let notificationEvents: AsyncStream<DevelopmentNotificationEvent>
     /// `open_url_on_host` events (desktop-integration.md §7.2).
     public nonisolated let urlEvents: AsyncStream<GPOpenUrlOnHost>
+    /// `recording_changed` events: the packages that just started or stopped
+    /// recording (desktop-integration.md §8.2).
+    public nonisolated let recordingEvents: AsyncStream<GPRecordingChanged>
     /// The guest's Save-to-Mac offers (integration.proto event 44,
     /// desktop-integration.md §6.3).
     public nonisolated let exportOfferedEvents: AsyncStream<GPExportFileOffered>
@@ -111,6 +114,7 @@ public actor DevelopmentGuestAgent {
     private let clipboardEventContinuation: AsyncStream<GPClipData>.Continuation
     private let notificationEventContinuation: AsyncStream<DevelopmentNotificationEvent>.Continuation
     private let urlEventContinuation: AsyncStream<GPOpenUrlOnHost>.Continuation
+    private let recordingEventContinuation: AsyncStream<GPRecordingChanged>.Continuation
     private let exportOfferedContinuation: AsyncStream<GPExportFileOffered>.Continuation
     private var taskEventRelay: Task<Void, Never>?
 
@@ -165,6 +169,10 @@ public actor DevelopmentGuestAgent {
             of: GPExportFileOffered.self)
         self.exportOfferedEvents = exportOfferedEvents
         self.exportOfferedContinuation = exportOfferedContinuation
+        let (recordingEvents, recordingEventContinuation) = AsyncStream.makeStream(
+            of: GPRecordingChanged.self)
+        self.recordingEvents = recordingEvents
+        self.recordingEventContinuation = recordingEventContinuation
         let (urlEvents, urlEventContinuation) = AsyncStream.makeStream(
             of: GPOpenUrlOnHost.self,
             bufferingPolicy: .bufferingNewest(128)
@@ -298,6 +306,7 @@ public actor DevelopmentGuestAgent {
         displayEventContinuation.finish()
         clipboardEventContinuation.finish()
         urlEventContinuation.finish()
+        recordingEventContinuation.finish()
         exportOfferedContinuation.finish()
         // The input and IME connections belong to the control session, so they end with it.
         await inputConnection?.close()
@@ -438,6 +447,7 @@ public actor DevelopmentGuestAgent {
         let clipboardContinuation = clipboardEventContinuation
         let notificationContinuation = notificationEventContinuation
         let urlContinuation = urlEventContinuation
+        let recordingContinuation = recordingEventContinuation
         let exportOfferedContinuation = exportOfferedContinuation
         taskEventRelay = Task {
             for await event in updates {
@@ -465,6 +475,8 @@ public actor DevelopmentGuestAgent {
                     notificationContinuation.yield(.removed(removal))
                 case .openURLOnHost(let event):
                     urlContinuation.yield(event)
+                case .recordingChanged(let event):
+                    recordingContinuation.yield(event)
                 case .exportFileOffered(let offer):
                     exportOfferedContinuation.yield(offer)
                 default:

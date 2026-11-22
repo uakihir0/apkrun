@@ -221,6 +221,10 @@ public enum IntegrationChange: Codable, Sendable, Equatable {
     /// The shared-folder roots changed; clients refetch with `sharedFolders`
     /// (desktop-integration.md §6.4).
     case sharedFoldersChanged
+    /// The packages that started or stopped recording changed; the menu bar
+    /// shows "‹App› is using the microphone" while the set is non-empty
+    /// (desktop-integration.md §8.2).
+    case recordingChanged(packageIDs: [RuntimePackageID])
     /// An event kind this client does not know.
     case unknown
 
@@ -229,11 +233,12 @@ public enum IntegrationChange: Codable, Sendable, Equatable {
         case linkPrompt
         case exportOffered
         case sharedFoldersChanged
+        case recordingChanged
         case unknown
     }
 
     private enum CodingKeys: String, CodingKey {
-        case kind, sessionID, packageID, item, prompt, offer
+        case kind, sessionID, packageID, item, prompt, offer, packageIDs
     }
 
     /// Creates the event from its coded form.
@@ -261,6 +266,10 @@ public enum IntegrationChange: Codable, Sendable, Equatable {
             )
         case .sharedFoldersChanged:
             self = .sharedFoldersChanged
+        case .recordingChanged:
+            self = .recordingChanged(
+                packageIDs: try container.decode([RuntimePackageID].self, forKey: .packageIDs)
+            )
         case .unknown:
             self = .unknown
         }
@@ -287,6 +296,9 @@ public enum IntegrationChange: Codable, Sendable, Equatable {
             try container.encode(offer, forKey: .offer)
         case .sharedFoldersChanged:
             try container.encode(Kind.sharedFoldersChanged, forKey: .kind)
+        case .recordingChanged(let packageIDs):
+            try container.encode(Kind.recordingChanged, forKey: .kind)
+            try container.encode(packageIDs, forKey: .packageIDs)
         case .unknown:
             try container.encode(Kind.unknown, forKey: .kind)
         }

@@ -32,6 +32,7 @@ import io.apkrun.guest.protocol.v1.Response
 import io.apkrun.guest.protocol.v1.SetClockFormat
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.SetLocale
+import io.apkrun.guest.protocol.v1.SetMicrophoneAccess
 import io.apkrun.guest.protocol.v1.SetNotificationForwarding
 import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
 import io.apkrun.guest.protocol.v1.SetTimeZone
@@ -159,6 +160,8 @@ private class FakeOperations : AgentOperations {
     override fun setNotificationForwarding(request: SetNotificationForwarding) = enter()
 
     override fun setUrlRedirect(request: SetUrlRedirect) = enter()
+
+    override fun setMicrophoneAccess(request: SetMicrophoneAccess) = enter()
 
     override fun resolveUrl(request: ResolveUrl) = enter()
 

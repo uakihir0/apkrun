@@ -47,6 +47,24 @@ struct IntegrationsSection: View {
                 footnote: model.integrations?.microphoneNeedsRestart == true
                     ? "Android needs to restart to change the microphone."
                     : nil)
+            // §8.2: first-on and last-off need an Android restart.
+            if model.integrations?.microphoneNeedsRestart == true {
+                Button("Restart Android Now…") {
+                    model.askRestartAndroid = true
+                }
+                .controlSize(.small)
+                .confirmationDialog(
+                    "Restart Android now?",
+                    isPresented: $model.askRestartAndroid
+                ) {
+                    Button("Restart Android", role: .destructive) {
+                        model.restartAndroid()
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Running apps close while Android restarts.")
+                }
+            }
             LabeledContent("Camera") {
                 Text("Not supported yet")
                     .foregroundStyle(.secondary)

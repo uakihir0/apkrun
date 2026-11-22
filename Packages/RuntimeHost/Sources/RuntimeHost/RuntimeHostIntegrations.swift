@@ -1,3 +1,4 @@
+import AVFoundation
 import DiagnosticsCore
 import Foundation
 import GuestProtocol
@@ -14,6 +15,7 @@ final class IntegrationSettingsCache: @unchecked Sendable {
     private var globalsEnabled: [String: Bool] = [:]
     private var capabilities: Set<String> = []
     private var capabilitiesKnown = false
+    private var recordings: Set<String> = []
 
     /// Replaces the cached values of one package.
     func setPackage(_ packageID: String, values: [String: String]) {
@@ -52,6 +54,24 @@ final class IntegrationSettingsCache: @unchecked Sendable {
     /// Whether the capability set has been read at least once this run.
     var capabilitiesAreKnown: Bool {
         lock.withLock { capabilitiesKnown }
+    }
+
+    /// The enabled set the last Android boot carried (desktop-integration.md
+    /// §9); the boot writes it through `microphoneProvider`.
+    var microphoneBootedSet: Set<String> {
+        get { lock.withLock { bootedMicrophoneSet } }
+        set { lock.withLock { bootedMicrophoneSet = newValue } }
+    }
+    private var bootedMicrophoneSet: Set<String> = []
+
+    /// The packages the guest reports as recording (§9.3).
+    var activeRecordings: Set<String> {
+        lock.withLock { recordings }
+    }
+
+    /// Replaces the recording set after a `recording_changed` event.
+    func setRecordings(_ packages: Set<String>) {
+        lock.withLock { recordings = packages }
     }
 }
 
@@ -456,23 +476,41 @@ extension RuntimeHost {
                 )
             )
         }
-        return IntegrationStatus(packageID: packageID, items: items)
+        return IntegrationStatus(
+            packageID: packageID,
+            items: items,
+            microphoneNeedsRestart: await microphoneNeedsRestart())
     }
 
-    /// The host-ui §7.4 permission line of a kind, currently only
-    /// notifications: "Notifications for ‹App› are turned off in System
-    /// Settings." when the wrapper reported `.denied`.
+    /// The host-ui §7.4 permission line of a kind: the notifications case is
+    /// "Notifications for ‹App› are turned off in System Settings." when the
+    /// wrapper reported `.denied`; the microphone case reports apkrund's own
+    /// TCC answer, since the daemon owns the audio input device (§9.5).
     private func macPermissionText(
         for kind: IntegrationKind,
         packageID: RuntimePackageID,
         displayName: String
     ) async -> String? {
-        guard kind == .notifications,
-            await notificationCoordinator().macPermission(for: packageID) == .denied
-        else {
+        switch kind {
+        case .notifications:
+            guard await notificationCoordinator().macPermission(for: packageID) == .denied
+            else {
+                return nil
+            }
+            return "Notifications for \(displayName) are turned off in System Settings."
+        case .microphone:
+            switch AVCaptureDevice.authorizationStatus(for: .audio) {
+            case .denied, .restricted:
+                return
+                    "APKRun needs microphone access in System Settings → Privacy & Security → Microphone."
+            case .authorized, .notDetermined:
+                return nil
+            @unknown default:
+                return nil
+            }
+        default:
             return nil
         }
-        return "Notifications for \(displayName) are turned off in System Settings."
     }
 
     /// The stored or default `integrations.<kind>` value and its source.
@@ -849,6 +887,118 @@ extension RuntimeHost {
     func stopLinkRelay() {
         linkRelayTask?.cancel()
         linkRelayTask = nil
+    }
+
+    /// Starts the microphone relay of desktop-integration.md §8.2: pushes the
+    /// `SetMicrophoneAccess` allowlist on each (re)connection and republishes
+    /// the guest's `recording_changed` events on the `integrations` topic.
+    func startMicrophoneRelay() {
+        guard microphoneRelayTask == nil,
+            let supervisor = runtimeSupervisorForIntegrations()
+        else {
+            return
+        }
+        microphoneRelayTask = Task.detached { [weak self] in
+            guard let self else { return }
+            var agent = await supervisor.developmentGuestAgent
+            while !Task.isCancelled, let current = agent {
+                await self.pushMicrophoneAccess()
+                for await event in current.recordingEvents {
+                    guard !Task.isCancelled else { return }
+                    let set = Set(event.packages)
+                    self.integrationSettings.setRecordings(set)
+                    self.eventHub.publishIntegrationChange(
+                        .recordingChanged(
+                            packageIDs: set.compactMap { RuntimePackageID(rawValue: $0) }))
+                }
+                // A stream that ended means an agent restart: wait for the
+                // next agent, then resubscribe and re-push the allowlist.
+                agent = nil
+                while !Task.isCancelled, agent == nil {
+                    try? await Task.sleep(for: .seconds(1))
+                    let next = await supervisor.developmentGuestAgent
+                    if let next, next !== current {
+                        agent = next
+                    }
+                }
+            }
+            await self.clearMicrophoneRelayTask()
+        }
+    }
+
+    /// Clears the finished relay task so `startMicrophoneRelay` re-arms.
+    private func clearMicrophoneRelayTask() {
+        microphoneRelayTask = nil
+    }
+
+    /// Ends the microphone relay.
+    func stopMicrophoneRelay() {
+        microphoneRelayTask?.cancel()
+        microphoneRelayTask = nil
+    }
+
+    /// Pushes the current microphone allowlist (desktop-integration.md §8.2):
+    /// the global switch gates the kind, then every package whose stored
+    /// `integrations.microphone` is "true". Packages absent from the list keep
+    /// recording silence; packages installed later are denied by the gate.
+    func pushMicrophoneAccess() async {
+        guard let supervisor = runtimeSupervisorForIntegrations(),
+            let agent = await supervisor.developmentGuestAgent,
+            let service = packageServiceForIntegrations()
+        else {
+            return
+        }
+        guard let result = try? await service.listPackages(RuntimeListPackagesRequest())
+        else {
+            return
+        }
+        let global = integrationSettings.globalEnabled(IntegrationKind.microphone.rawValue)
+        var packageValues: [String: String?] = [:]
+        for summary in result.packages {
+            let stored = try? await service.packageIntegrationSettings(
+                for: summary.packageID.rawValue)
+            packageValues[summary.packageID.rawValue] =
+                stored?.value("integrations.microphone")
+        }
+        let set = AudioPolicy.enabledPackages(
+            packageValues: packageValues, globalEnabled: global)
+        do {
+            _ = try await agent.supervisor.send(
+                GuestSetMicrophoneAccess(packages: set.sorted()))
+        } catch {
+            let logger = APKLogger(
+                category: RuntimeLogCategory.host, sink: hostLogSink)
+            logger.notice(
+                "SetMicrophoneAccess failed; the gate keeps its previous list")
+        }
+    }
+
+    /// The packages the guest reports as recording (desktop-integration.md
+    /// §9.3): package IDs only, never contents or levels (NFR-SEC-05).
+    public func activeRecordings() -> Set<String> {
+        integrationSettings.activeRecordings
+    }
+
+    /// Whether a microphone change is waiting on an Android restart: the
+    /// `recording_changed`… booted input stream differs from what the current
+    /// allowlist needs (§9.4).
+    func microphoneNeedsRestart() async -> Bool {
+        guard let service = packageServiceForIntegrations(),
+            let result = try? await service.listPackages(RuntimeListPackagesRequest())
+        else {
+            return false
+        }
+        let global = integrationSettings.globalEnabled(IntegrationKind.microphone.rawValue)
+        var packageValues: [String: String?] = [:]
+        for summary in result.packages {
+            let stored = try? await service.packageIntegrationSettings(
+                for: summary.packageID.rawValue)
+            packageValues[summary.packageID.rawValue] =
+                stored?.value("integrations.microphone")
+        }
+        let current = AudioPolicy.enabledPackages(
+            packageValues: packageValues, globalEnabled: global)
+        return !current.isEmpty != !integrationSettings.microphoneBootedSet.isEmpty
     }
 
     /// Pushes the current SetUrlRedirect state: the global links switch and

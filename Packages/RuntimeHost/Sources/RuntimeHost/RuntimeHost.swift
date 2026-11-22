@@ -239,6 +239,8 @@ public actor RuntimeHost {
     var linkForwarderLazy: LinkForwarder?
     /// The guest→forwarder open-url relay; alive while the agent is.
     var linkRelayTask: Task<Void, Never>?
+    /// The `recording_changed` relay of desktop-integration.md §8.2.
+    var microphoneRelayTask: Task<Void, Never>?
     /// `integrations.notificationListener` registers once when the
     /// notification coordinator is created.
     var integrationHealthChecksRegistered = false
@@ -509,7 +511,11 @@ public actor RuntimeHost {
                     diagnostics: diagnostics,
                     guestAgentBundle: guestAgent,
                     guestAgentTimeout: .seconds(30),
-                    soundOutputProvider: Self.soundOutputProvider(settingsFile: paths.settingsFile)
+                    soundOutputProvider: Self.soundOutputProvider(settingsFile: paths.settingsFile),
+                    microphoneProvider: Self.microphoneProvider(
+                        settingsFile: paths.settingsFile,
+                        packagesDirectory: paths.packagesDirectory,
+                        cache: integrationSettings)
                 )
                 supervisor = runtimeSupervisor
                 observeSupervisorEvents(from: runtimeSupervisor)
@@ -981,6 +987,7 @@ public actor RuntimeHost {
             await refreshIntegrationSettings(for: request.packageID)
             await pushNotificationForwarding()
             await pushUrlRedirect()
+            await pushMicrophoneAccess()
         }
         return result
     }
@@ -4398,6 +4405,7 @@ public actor RuntimeHost {
             startClipboardRelay()
             startNotificationRelay()
             startLinkRelay()
+            startMicrophoneRelay()
             startFileServices()
         } else if case .stopped = snapshot.state {
             stopClipboardRelay()
@@ -5909,7 +5917,11 @@ public actor RuntimeHost {
             diagnostics: diagnostics,
             guestAgentBundle: bundle,
             guestAgentTimeout: .seconds(30),
-            soundOutputProvider: Self.soundOutputProvider(settingsFile: paths.settingsFile)
+            soundOutputProvider: Self.soundOutputProvider(settingsFile: paths.settingsFile),
+            microphoneProvider: Self.microphoneProvider(
+                settingsFile: paths.settingsFile,
+                packagesDirectory: paths.packagesDirectory,
+                cache: integrationSettings)
         )
         supervisor = runtimeSupervisor
         observeSupervisorEvents(from: runtimeSupervisor)
@@ -5922,6 +5934,55 @@ public actor RuntimeHost {
         {
             GlobalSettings.load(from: settingsFile)
                 .extraValue("audio.output") != "false"
+        }
+    }
+
+    /// The packages whose `integrations.microphone` is on under the current
+    /// `settings.json` and package settings (desktop-integration.md §8.2). Reads
+    /// the files directly so the supervisor can consult it synchronously at
+    /// boot; the store's async view agrees because both read the same files.
+    static func microphoneEnabledSet(
+        settingsFile: URL,
+        packagesDirectory: URL
+    ) -> Set<String> {
+        let globals = GlobalSettings.load(from: settingsFile)
+        let globalEnabled =
+            globals.extraValue("integrations.enabled.microphone") != "false"
+        var packageValues: [String: String?] = [:]
+        let fileManager = FileManager()
+        for directory
+            in (try? fileManager.contentsOfDirectory(
+                at: packagesDirectory, includingPropertiesForKeys: nil)) ?? []
+        {
+            let name = directory.lastPathComponent
+            guard !name.hasPrefix(".") else {
+                continue
+            }
+            let settingsURL = directory.appendingPathComponent("settings.json")
+            guard let data = try? Data(contentsOf: settingsURL),
+                let settings = try? JSONDecoder().decode(PackageSettings.self, from: data)
+            else {
+                continue
+            }
+            packageValues[name] = settings.value("integrations.microphone")
+        }
+        return AudioPolicy.enabledPackages(
+            packageValues: packageValues, globalEnabled: globalEnabled)
+    }
+
+    /// Whether the microphone input stream belongs on the next Android boot
+    /// (desktop-integration.md §8.2): any package may record. `cache` records
+    /// the booted set so `integrationStatus` can report a pending restart.
+    static func microphoneProvider(
+        settingsFile: URL,
+        packagesDirectory: URL,
+        cache: IntegrationSettingsCache
+    ) -> @Sendable () -> Bool {
+        {
+            let set = Self.microphoneEnabledSet(
+                settingsFile: settingsFile, packagesDirectory: packagesDirectory)
+            cache.microphoneBootedSet = set
+            return !set.isEmpty
         }
     }
 

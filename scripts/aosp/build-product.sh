@@ -195,6 +195,7 @@ if [[ "$variant" == "user" ]]; then
     # Fail closed: vbmeta must be signed by the release AVB key. The whole
     # image zip is extracted so chained partitions and descriptors resolve.
     work_avb="$(mktemp -d)"
+    trap 'rm -rf "$work_avb"' EXIT
     unzip -q "$image_zip" -d "$work_avb"
     avbtool="$aosp_root/external/avb/avbtool"
     [[ -f "$avbtool" ]] || avbtool="$aosp_root/external/avb/avbtool.py"
@@ -204,6 +205,7 @@ if [[ "$variant" == "user" ]]; then
         exit 2
     }
     rm -rf "$work_avb"
+    trap - EXIT
     log "signed image zip: $image_zip"
 else
     (cd "$aosp_root" && img_from_target_files "${target_files[0]}" "$image_zip")

@@ -20,6 +20,8 @@ checks+=(
     "scripts/check-compatibility-db.sh"
     "scripts/check-readback.sh"
     "scripts/check-raw-adb.sh"
+    "scripts/check-strings.sh"
+    "scripts/check-launcher.sh"
 )
 if [[ -f "$repo_root/scripts/check-fixtures.sh" ]]; then
     checks+=("scripts/check-fixtures.sh")

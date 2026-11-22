@@ -4414,6 +4414,7 @@ public actor RuntimeHost {
             stopClipboardRelay()
             stopNotificationRelay()
             stopLinkRelay()
+            stopMicrophoneRelay()
             stopFileServices()
         }
     }

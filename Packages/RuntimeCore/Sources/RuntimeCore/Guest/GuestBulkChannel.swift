@@ -69,8 +69,9 @@ public actor GuestBulkChannel {
     /// Fetchers waiting on an announced transfer.
     private var waiters: [UInt64: [CheckedContinuation<GuestInboundTransfer?, Never>]] = [:]
     /// Transfers whose wait was settled before a late waiter registration
-    /// landed; registration answers nil instead of lingering forever.
-    private var retiredWaiters: Set<UInt64> = []
+    /// landed; registration answers nil instead of lingering forever. IDs are
+    /// never reused, so the set is bounded to the last 16 timed-out IDs.
+    private var retiredWaiters: [UInt64] = []
     /// Host-allocated transfer IDs are even (bulk.proto).
     private var nextTransferID: UInt64 = 2
 
@@ -170,7 +171,9 @@ public actor GuestBulkChannel {
             return completed.remove(at: index).transfer
         }
         // A fresh fetch waits normally even after an earlier wait timed out.
-        retiredWaiters.remove(transferID)
+        if let retiredIndex = retiredWaiters.firstIndex(of: transferID) {
+            retiredWaiters.remove(at: retiredIndex)
+        }
         let deadline = now.advanced(by: timeout)
         return await withTaskGroup(of: GuestInboundTransfer?.self) { group in
             group.addTask {
@@ -227,7 +230,8 @@ public actor GuestBulkChannel {
     /// Answers every waiter of `transferID` with nil (a fetch timeout) and
     /// refuses later registrations for the same fetch.
     private func evictWaiter(_ transferID: UInt64) {
-        retiredWaiters.insert(transferID)
+        retiredWaiters.append(transferID)
+        if retiredWaiters.count > 16 { retiredWaiters.removeFirst() }
         if let waiter = waiters.removeValue(forKey: transferID) {
             for continuation in waiter {
                 continuation.resume(returning: nil)

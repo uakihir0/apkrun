@@ -6,12 +6,41 @@ public enum DiagnosticsAllowlists {
     /// `true` when the Android property name is on the §6.2 getprop
     /// allowlist. `ro.serialno` and `ro.boot.serialno` are never allowed.
     public static func allowsGetprop(_ name: String) -> Bool {
-        if name == "ro.serialno" || name == "ro.boot.serialno" {
+        if getpropNever.contains(name) {
             return false
         }
         return getpropPrefixes.contains(where: { name.hasPrefix($0) })
             || getpropExact.contains(name)
     }
+
+    /// Filters `getprop` output to one `[name]: [value]` line per
+    /// allowlisted name, sorted for a stable diff. Runs on the host as well
+    /// as in the agent: guest payloads are untrusted (§6.2, §8.3).
+    public static func filterGetprop(_ output: String) -> String {
+        let lines =
+            output
+            .split(separator: "\n")
+            .compactMap { raw -> String? in
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                guard line.hasPrefix("["), line.hasSuffix("]"),
+                    let close = line.firstIndex(of: "]"),
+                    line[line.index(after: close)...].hasPrefix(": [")
+                else { return nil }
+                let name = String(line[line.index(after: line.startIndex)..<close])
+                return allowsGetprop(name) ? line : nil
+            }
+            .sorted()
+        return lines.isEmpty ? "" : lines.joined(separator: "\n") + "\n"
+    }
+
+    /// Property names that never reach a report, even when a prefix would
+    /// match (§6.2; mirrors the guest-side allowlist).
+    private static let getpropNever: Set<String> = [
+        "ro.serialno",
+        "ro.boot.serialno",
+        "ro.ril.oem.sno",
+        "persist.sys.safemode_reason",
+    ]
 
     private static let getpropPrefixes = [
         "ro.build.version.",

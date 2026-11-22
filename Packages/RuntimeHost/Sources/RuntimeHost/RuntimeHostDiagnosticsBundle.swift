@@ -67,6 +67,7 @@ extension RuntimeHost {
         output: FileHandle,
         operationID: WireOperationID
     ) async {
+        defer { finishLifecycleOperation() }
         do {
             let options = DiagnosticsOptions(
                 includeLogcat: request.includeLogcat,
@@ -308,8 +309,15 @@ extension RuntimeHost {
                 continue
             }
             var text = String(decoding: payload, as: UTF8.self)
-            if item.item == .logcat {
+            switch item.item {
+            case .logcat:
                 text = LogcatFilter.filter(text, includeAll: options.includeLogcat)
+            case .getprop:
+                // The agent already allowlists, but the payload is
+                // untrusted: the host re-applies the §6.2 filter.
+                text = DiagnosticsAllowlists.filterGetprop(text)
+            default:
+                break
             }
             try bundle.add(name, text: text)
         }

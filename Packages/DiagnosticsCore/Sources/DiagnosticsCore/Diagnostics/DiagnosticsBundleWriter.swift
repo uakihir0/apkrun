@@ -231,7 +231,8 @@ public final class DiagnosticsBundleWriter {
 
     /// Redacts the staged files and streams the archive into `output`. The
     /// archive root directory is `APKRun-Diagnostics-<yyyyMMdd-HHmmss>`.
-    /// Returns the summary text, the compressed size, and the omissions.
+    /// Returns the summary text, the archive size in bytes, and the
+    /// omissions.
     ///
     /// `onCancel` is polled between files: returning `true` abandons the run —
     /// the partial archive is truncated by the caller per runtime-api.md §4.7.
@@ -333,7 +334,7 @@ public final class DiagnosticsBundleWriter {
         }
         return DiagnosticsBundleResult(
             summary: summaryText,
-            bytes: Int64(entries.reduce(0) { $0 + $1.data.count }),
+            bytes: Int64(try output.offset()),
             omitted: omitted)
     }
 

@@ -114,6 +114,29 @@ final class RedactorTests: XCTestCase {
         XCTAssertFalse(DiagnosticsAllowlists.allowsGetprop("ro.serialno"))
         XCTAssertFalse(DiagnosticsAllowlists.allowsGetprop("ro.boot.serialno"))
         XCTAssertFalse(DiagnosticsAllowlists.allowsGetprop("net.hostname"))
+        XCTAssertFalse(DiagnosticsAllowlists.allowsGetprop("ro.ril.oem.sno"))
+    }
+
+    func testGetpropFilterKeepsOnlyAllowlistedLines() {
+        let output = """
+            [ro.build.fingerprint]: [aosp_cf/test]
+            [ro.serialno]: [SERIAL123]
+            [ro.boot.serialno]: [BOOT456]
+            [net.hostname]: [phone]
+            [init.svc.adbd]: [running]
+            malformed line
+            [ro.apkrun.image.version]: [1.2.3]
+
+            """
+        let filtered = DiagnosticsAllowlists.filterGetprop(output)
+        let lines = filtered.split(separator: "\n").map(String.init)
+        XCTAssertEqual(
+            lines,
+            [
+                "[init.svc.adbd]: [running]",
+                "[ro.apkrun.image.version]: [1.2.3]",
+                "[ro.build.fingerprint]: [aosp_cf/test]",
+            ])
     }
 
     func testPackageRecordFilter() {

@@ -38,3 +38,12 @@ BOARD_SEPOLICY_DIRS += device/apkrun/apkrun_arm64/sepolicy
 ifeq ($(TARGET_BUILD_VARIANT),userdebug)
 BOARD_SEPOLICY_DIRS += device/apkrun/apkrun_arm64/sepolicy/userdebug
 endif
+
+# Release AVB key (ADR-0020): the builder supplies it through
+# APKRUN_AVB_KEY_DIR and keeps it outside the repository; without it the
+# product inherits the AOSP test key, so a `user` build must set it.
+ifneq ($(strip $(APKRUN_AVB_KEY_DIR)),)
+BOARD_AVB_ENABLE := true
+BOARD_AVB_KEY_PATH := $(APKRUN_AVB_KEY_DIR)/avb.pem
+BOARD_AVB_ALGORITHM := SHA256_RSA4096
+endif

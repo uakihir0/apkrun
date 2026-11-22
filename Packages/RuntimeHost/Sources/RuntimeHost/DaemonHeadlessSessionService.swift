@@ -275,11 +275,11 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 // a failure a retained task keeps running and stays
                 // protected.
                 let result = try await Self.terminateWithoutSession(request, using: guestAgent)
-                markBackgroundTask(packageID, active: false)
+                endAllBackgroundTasks(packageID)
                 return result
             } catch Self.packageNotInstalledError {
                 // Nothing can still run for a package that is not installed.
-                markBackgroundTask(packageID, active: false)
+                endAllBackgroundTasks(packageID)
                 throw Self.packageNotInstalledError
             }
         }
@@ -321,7 +321,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         await stopDrainingFrames(for: current.id)
         _ = await registry.stopCompleted(sessionID: current.id)
         await forgetSession(packageID: packageID, sessionID: current.id)
-        markBackgroundTask(packageID, active: false)
+        endAllBackgroundTasks(packageID)
         return RuntimeTerminateResult(packageID: request.packageID, hadSession: true)
     }
 
@@ -376,7 +376,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             } catch {
                 throw Self.wireError(for: error)
             }
-            markBackgroundTask(packageID, active: true)
+            retainBackgroundTasks(packageID, taskIDs: latest.taskIDs)
         }
 
         await stopDrainingFrames(for: current.id)
@@ -496,7 +496,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         await stopDrainingFrames(for: current.id)
         _ = await registry.stopCompleted(sessionID: current.id, endReason: .packageUninstalled)
         await forgetSession(packageID: packageID, sessionID: current.id)
-        markBackgroundTask(packageID, active: false)
+        endAllBackgroundTasks(packageID)
     }
 
     static func terminateWithoutSession(
@@ -647,10 +647,16 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         case .appeared(let package, _), .vanished(let package, _):
             packageID = package
         }
-        if case .vanished(let package, _) = event {
+        if case .appeared(let package, let taskID) = event, backgroundTasks[package] != nil {
+            // A retained package spawning a new task keeps that task too
+            // (§7.6); a relaunching session ends the hold below.
+            backgroundTasks[package]?.insert(taskID)
+        }
+        if case .vanished(let package, let taskID) = event {
             // A task a keepRunning close retained vanishes after its session
-            // is already gone; its hold ends here (§7.6).
-            markBackgroundTask(package, active: false)
+            // is already gone; its hold ends when the last retained task of
+            // the package ends (§7.6).
+            endBackgroundTask(package, taskID: taskID)
         }
         guard let current = await registry.session(packageID: packageID), !isShuttingDown else {
             return
@@ -682,7 +688,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             }
             // Relaunch of a package whose task a keepRunning close retained:
             // the session's own hold takes over the task's (§7.6).
-            markBackgroundTask(package, active: false)
+            endAllBackgroundTasks(package)
         case .vanished(let package, let taskID):
             let updated = await registry.taskVanished(packageID: package, taskID: taskID)
             if let updated, Self.isEnded(updated.state) {
@@ -939,27 +945,45 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         _ = try await launch(RuntimeLaunchRequest(packageID: packageID))
     }
 
-    /// GU3: packages with a keepRunning task (update-system.md §7.1). Filled
-    /// by `markBackgroundTask`; empty until `window.closeBehavior =
-    /// keepRunning` lands.
-    private var backgroundTasks: Set<String> = []
+    /// GU3: keepRunning-retained task IDs per package (update-system.md
+    /// §7.1). A keepRunning close seeds it with the session's task IDs and
+    /// task events grow and shrink it; the hold ends when the last retained
+    /// task of the package ends.
+    private var backgroundTasks: [String: Set<Int32>] = [:]
 
     /// §7.2 trigger observers, retained for the service's life.
     private var sessionActivityObservers: [@Sendable (RuntimePackageID, PackageSessionActivity) -> Void] = []
 
-    /// Marks a keepRunning task for `packageID` active or ended (#43 calls
-    /// this when `window.closeBehavior = keepRunning` keeps a task alive).
-    /// Ending a task is a §7.2 gate trigger.
-    func markBackgroundTask(_ packageID: String, active: Bool) {
-        if active {
-            backgroundTasks.insert(packageID)
-        } else if backgroundTasks.remove(packageID) != nil {
+    /// Marks `taskIDs` of `packageID` as keepRunning-retained (a
+    /// `window.closeBehavior = keepRunning` close keeps those tasks alive).
+    func retainBackgroundTasks(_ packageID: String, taskIDs: Set<Int32>) {
+        backgroundTasks[packageID, default: []].formUnion(taskIDs)
+    }
+
+    /// Ends `taskID`'s retention. Ending the last retained task is a §7.2
+    /// gate trigger; a vanish matching no tracked task keeps the hold while
+    /// other retained tasks remain.
+    func endBackgroundTask(_ packageID: String, taskID: Int32) {
+        guard var retained = backgroundTasks[packageID] else { return }
+        retained.remove(taskID)
+        if retained.isEmpty {
+            backgroundTasks.removeValue(forKey: packageID)
+            noteActivity(packageID, .taskEnded)
+        } else {
+            backgroundTasks[packageID] = retained
+        }
+    }
+
+    /// Ends every retained task of `packageID` (terminate, uninstall,
+    /// relaunch).
+    func endAllBackgroundTasks(_ packageID: String) {
+        if backgroundTasks.removeValue(forKey: packageID) != nil {
             noteActivity(packageID, .taskEnded)
         }
     }
 
     func hasBackgroundActivity(packageID: RuntimePackageID) async -> Bool {
-        backgroundTasks.contains(packageID.rawValue)
+        backgroundTasks[packageID.rawValue] != nil
     }
 
     /// Package IDs of all sessions that have not ended (§3.6 status).
@@ -969,7 +993,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
 
     /// Package IDs with a keepRunning background task (§3.6 status).
     func maintenanceBackgroundTaskPackageIDs() -> [RuntimePackageID] {
-        backgroundTasks.sorted().compactMap { RuntimePackageID(rawValue: $0) }
+        backgroundTasks.keys.sorted().compactMap { RuntimePackageID(rawValue: $0) }
     }
 
     func observeSessionActivity(

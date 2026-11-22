@@ -132,6 +132,13 @@ func daemonCloseSessionKeepRunningReleasesItsHoldWhenTheRetainedTaskVanishes() a
         RuntimeCloseSessionRequest(packageID: package), policy: .keepRunning)
     #expect(await fixture.service.hasBackgroundActivity(packageID: package))
 
+    // A second task of the retained package keeps the hold when one task
+    // of the package vanishes.
+    await fixture.agent.sendTaskEvent(.appeared(packageID: package.rawValue, taskID: 42))
+    await fixture.agent.sendTaskEvent(.vanished(packageID: package.rawValue, taskID: 42))
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(await fixture.service.hasBackgroundActivity(packageID: package))
+
     await fixture.agent.sendTaskEvent(.vanished(packageID: package.rawValue, taskID: 41))
     for _ in 0..<100 {
         if await !fixture.service.hasBackgroundActivity(packageID: package) {

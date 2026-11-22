@@ -339,6 +339,14 @@
                     text += " \(result.failed.count) failed."
                 }
                 return text
+            case .diagnostics(let info):
+                var text = "Wrote the diagnostics report (\(info.bytes) bytes)."
+                if !info.omitted.isEmpty {
+                    text += " Omitted: "
+                        + info.omitted.map { "\($0.item) (\($0.reason))" }
+                            .joined(separator: ", ")
+                }
+                return text
             case .unknown:
                 return "The result of operation \(snapshot.operationID.wireValue) is unknown."
             }

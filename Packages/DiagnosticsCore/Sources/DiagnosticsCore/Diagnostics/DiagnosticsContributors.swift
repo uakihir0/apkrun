@@ -52,7 +52,7 @@ public struct HostEnvironmentContributor: DiagnosticsContributor {
         object["macOSBuild"] = sysctlString("kern.osversion")
         object["hostModel"] = sysctlString("hw.model")
         object["chip"] = sysctlString("machdep.cpu.brand_string")
-        object["physicalCores"] = process.physicalProcessorCount
+        object["physicalCores"] = process.processorCount
         object["memoryBytes"] = process.physicalMemory
         object["uptimeSeconds"] = Int(process.systemUptime)
         object["localeIdentifier"] = Locale.current.identifier

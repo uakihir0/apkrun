@@ -26,7 +26,7 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// `SettingApplies` on `updateGlobalConfiguration` (desktop-integration.md
     /// §9). 1.31 adds `selfUpdateStatus` and `noteSelfUpdateStatus`
     /// (runtime-api.md §12.2).
-    public static let current = APIVersion(major: 1, minor: 34)
+    public static let current = APIVersion(major: 1, minor: 35)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -903,6 +903,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     /// Safe health repairs (`apkrun doctor --fix`). Reply:
     /// `WireHealthReport`.
     func applyHealthFixes(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Starts a diagnostics report (diagnostics.md §8.1): the output ZIP is
+    /// the single `FileHandle` beside the request, opened by the client.
+    /// Reply: `RuntimeCreateDiagnosticsControlReply`.
+    func createDiagnostics(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.

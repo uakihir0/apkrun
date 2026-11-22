@@ -1255,6 +1255,14 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             argumentIndex: 1,
             ofReply: false
         )
+        // `createDiagnostics` carries the report's output handle
+        // (diagnostics.md §8.1).
+        controlInterface.setClasses(
+            fileHandleClasses,
+            for: #selector(RuntimeControlXPC.createDiagnostics(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
         connection.remoteObjectInterface = NSXPCInterface(with: RuntimeEventSink.self)
         let eventHub = host.eventHub
         let remoteSink =
@@ -1283,6 +1291,7 @@ private protocol VersionedControlRequest: Decodable {
 extension RuntimeStatusRequest: VersionedControlRequest {}
 extension HealthRequest: VersionedControlRequest {}
 extension HealthFixRequest: VersionedControlRequest {}
+extension RuntimeCreateDiagnosticsControlRequest: VersionedControlRequest {}
 extension StartRuntimeRequest: VersionedControlRequest {}
 extension StopRuntimeRequest: VersionedControlRequest {}
 extension RestartRuntimeRequest: VersionedControlRequest {}
@@ -1417,6 +1426,7 @@ enum RuntimeControlOperation {
     case beginRepairPackage
     case updateSkipped
     case updatePackage
+    case createDiagnostics
     case getConfig
     case setConfig
     case selfUpdateStatus
@@ -1560,7 +1570,7 @@ enum RuntimeControlOperation {
             .packageSettings, .updatePackageSettings, .installImage,
             .imageStatus, .applyImage, .rollbackImage,
             .deleteImageRecoveryPoint, .imageFeedAction, .healthReport,
-            .applyHealthFixes:
+            .applyHealthFixes, .createDiagnostics:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -3110,6 +3120,61 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                     Self.encode(
                         WireHealthReport(
                             error: error as? RuntimeWireError ?? Self.malformedWireError)))
+            }
+        }
+    }
+
+    func createDiagnostics(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeCreateDiagnosticsControlReply(
+                        error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .createDiagnostics,
+                as: RuntimeCreateDiagnosticsControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeCreateDiagnosticsControlReply(
+                            error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeCreateDiagnosticsControlRequest.self,
+                    from: request
+                ),
+                let operationID = RuntimeAPI.OperationID(rawValue: decoded.header.operationID),
+                let output = files.first
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeCreateDiagnosticsControlReply(
+                            error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let result = try await host.createDiagnostics(
+                    decoded.request,
+                    output: output,
+                    operationID: operationID,
+                    clientKind: decoded.header.clientKind
+                )
+                response.send(
+                    Self.encode(RuntimeCreateDiagnosticsControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(
+                    Self.encode(RuntimeCreateDiagnosticsControlReply(error: wireError)))
             }
         }
     }

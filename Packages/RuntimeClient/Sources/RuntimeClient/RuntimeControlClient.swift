@@ -2140,6 +2140,42 @@ public actor RuntimeControlClient {
             on: { try await $0.applyHealthFixes($1) })
     }
 
+    /// Starts a diagnostics report (diagnostics.md §8.1). `output` is the
+    /// ZIP the client opened; the daemon writes into it and never opens a
+    /// user-chosen path. Returns the operation's handle; progress and the
+    /// result arrive on the operations topic.
+    public func createDiagnostics(
+        _ request: DiagnosticsRequest,
+        output: FileHandle
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeCreateDiagnosticsControlRequest(
+                header: makeHeader(), request: request)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.createDiagnostics(
+                data, files: [output])
+            let reply = try Self.decode(
+                RuntimeCreateDiagnosticsControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message,
+                    parameters: failure.parameters)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
     private func healthCall<Request: Encodable>(
         _ request: Request,
         on call: @escaping (any RuntimeControlChannel, Data) async throws -> Data
@@ -3403,6 +3439,10 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func healthReport(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Safe health repairs (`apkrun doctor --fix`).
     func applyHealthFixes(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Starts a diagnostics report; the output handle rides beside the
+    /// request (diagnostics.md §8.1).
+    func createDiagnostics(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError)
+        -> Data
     func getConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func setConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func selfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -3540,6 +3580,12 @@ struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
         interface.setClasses(
             fileClasses,
             for: #selector(RuntimeControlXPC.acceptExport(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
+        interface.setClasses(
+            fileClasses,
+            for: #selector(RuntimeControlXPC.createDiagnostics(_:files:reply:)),
             argumentIndex: 1,
             ofReply: false
         )
@@ -4702,6 +4748,24 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.applyHealthFixes(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func createDiagnostics(
+        _ request: Data, files: [FileHandle]
+    ) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.createDiagnostics(request, files: files) { response in
+                finish(.success(response))
+            }
         }
     }
 

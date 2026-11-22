@@ -221,7 +221,9 @@ final class RuntimeEventHub: @unchecked Sendable {
                     subscribers[connectionID] = nil
                     continue
                 }
-                guard subscriber.topics.contains(event.topic) else { continue }
+                guard subscriber.topics.contains(event.topic) else {
+                    continue
+                }
                 if case .operations(.finished(let finishedID, _)) = event.payload {
                     subscriber.lastProgressDelivery[Self.operationProgressKey(finishedID)] = nil
                 }

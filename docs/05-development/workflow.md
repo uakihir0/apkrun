@@ -299,6 +299,8 @@ The `release` environment holds `APKRUN_DEVELOPER_ID_P12` and its password, `APK
 3. Dry run: `release.yml` with `dry-run` on `main`.
 4. Tag: `git tag -a v<version> -m "APKRun <version>"` and `git push origin v<version>`.
 
+For the v1.0 candidate, `scripts/release/check-readiness.sh` prints one line per criterion of [../04-plan/roadmap.md](../04-plan/roadmap.md) §3.6 — pass, fail, or manual with the evidence the release issue must attach — and exits non-zero on a failure. It runs before the dry run; a failing criterion reopens its task or opens a new one (#95).
+
 ### 9.4 The release job
 
 `release.yml` runs on the tag after approval: clean checkout (tag on `main`, `MARKETING_VERSION` equals the tag, `ci.yml` passed); build number (§8.2); third-party and guest builds; assemble the Release app with `APKRUN_CHANNEL=stable`; sign with the Developer ID; `check-release-build.sh`; notarize and staple; make the DMG; make the Sparkle zip; sign it, make deltas from the last three releases, add a beta appcast item; publish; create a GitHub pre-release with the zip, the DMG, `components.json`, and `SHA256SUMS`. A failure in any step stops the job before anything is published. Details of each script: [build-system.md](build-system.md) §11–§12.

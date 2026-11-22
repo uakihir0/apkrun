@@ -18,6 +18,11 @@ import java.util.concurrent.TimeUnit
 class DiagnosticsService(
     private val bulk: BulkTransfers,
     private val shellRunner: ShellRunner = ProcessShellRunner(),
+    private val agentLogPaths: List<String> =
+        listOf(
+            "/data/local/tmp/apkrun/agent.log",
+            "/data/local/tmp/apkrun/agent.log.1",
+        ),
 ) {
     /** Runs one CollectDiagnostics request. */
     fun collect(request: CollectDiagnostics): CollectDiagnosticsResult {
@@ -30,10 +35,36 @@ class DiagnosticsService(
 
     private fun collectItem(item: DiagnosticsItem, maxBytes: Long): DiagnosticsItemResult {
         return when (item) {
+            DiagnosticsItem.DIAGNOSTICS_ITEM_GETPROP ->
+                shellItem(item, maxBytes, "getprop.txt", "getprop") { output ->
+                    DiagnosticsAllowlist.filterGetprop(output)
+                }
+            DiagnosticsItem.DIAGNOSTICS_ITEM_LOGCAT ->
+                shellItem(
+                    item,
+                    maxBytes,
+                    "logcat.txt",
+                    "logcat",
+                    "-d",
+                    "-b",
+                    "main,system,crash",
+                    "-v",
+                    "threadtime,uid,UTC,year",
+                )
+            DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_WINDOW ->
+                shellItem(item, maxBytes, "dumpsys-window.txt", "dumpsys", "window")
+            DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_DISPLAY ->
+                shellItem(item, maxBytes, "dumpsys-display.txt", "dumpsys", "display")
+            DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_INPUT ->
+                shellItem(item, maxBytes, "dumpsys-input.txt", "dumpsys", "input")
+            DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_ACTIVITY ->
+                shellItem(item, maxBytes, "dumpsys-activity.txt", "dumpsys", "activity")
             DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_MEMINFO ->
-                dumpsys(item, maxBytes, "dumpsys-meminfo.txt", "meminfo", "-c")
+                shellItem(item, maxBytes, "dumpsys-meminfo.txt", "dumpsys", "meminfo", "-c")
             DiagnosticsItem.DIAGNOSTICS_ITEM_DUMPSYS_SURFACEFLINGER ->
-                dumpsys(item, maxBytes, "dumpsys-surfaceflinger.txt", "SurfaceFlinger")
+                shellItem(item, maxBytes, "dumpsys-surfaceflinger.txt", "dumpsys", "SurfaceFlinger")
+            DiagnosticsItem.DIAGNOSTICS_ITEM_TOMBSTONE_LIST -> tombstones(item, maxBytes)
+            DiagnosticsItem.DIAGNOSTICS_ITEM_AGENT_LOG -> agentLog(item, maxBytes)
             else ->
                 DiagnosticsItemResult.newBuilder()
                     .setItem(item)
@@ -42,23 +73,95 @@ class DiagnosticsService(
         }
     }
 
-    private fun dumpsys(
+    /**
+     * The `ls -l` of the tombstone directory, or the dropbox crash index when the directory cannot
+     * be listed (a `shell` process often cannot read it). List only: names, times, sizes — never
+     * tombstone bodies.
+     */
+    private fun tombstones(item: DiagnosticsItem, maxBytes: Long): DiagnosticsItemResult {
+        val listing =
+            try {
+                shellRunner.run("ls", "-l", "/data/tombstones/")
+            } catch (error: Exception) {
+                ByteArray(0)
+            }
+        val text = String(listing, Charsets.UTF_8)
+        val useful = text.lines().count { it.contains("tombstone_") } > 0
+        if (useful) {
+            return sendPayload(
+                item,
+                maxBytes,
+                "tombstones.txt",
+                text.toByteArray(Charsets.UTF_8),
+            )
+        }
+        // Fallback: `dumpsys dropbox` index lines of crash/tombstone tags
+        // carry "time tag (…)" — time, process, signal class.
+        return shellItem(item, maxBytes, "tombstones.txt", "dumpsys", "dropbox") { output ->
+            String(output, Charsets.UTF_8)
+                .lineSequence()
+                .filter { line ->
+                    line.contains("crash") ||
+                        line.contains("tombstone") ||
+                        line.contains("anr") ||
+                        line.contains("wtf")
+                }
+                .joinToString("\n")
+                .toByteArray(Charsets.UTF_8)
+        }
+    }
+
+    /** Concatenates the agent's ring-buffer log files. */
+    private fun agentLog(item: DiagnosticsItem, maxBytes: Long): DiagnosticsItemResult {
+        val output = ByteArrayOutputStream()
+        var any = false
+        for (path in agentLogPaths) {
+            try {
+                val file = java.io.File(path)
+                if (file.isFile) {
+                    file.inputStream().use { it.copyTo(output) }
+                    any = true
+                }
+            } catch (error: Exception) {
+                AgentLog.error("agent log read failed: $path", error)
+            }
+        }
+        if (!any) {
+            return DiagnosticsItemResult.newBuilder()
+                .setItem(item)
+                .setStatus(DiagnosticsItemStatus.DIAGNOSTICS_ITEM_STATUS_FAILED)
+                .build()
+        }
+        return sendPayload(item, maxBytes, "agent.log", output.toByteArray())
+    }
+
+    private fun shellItem(
         item: DiagnosticsItem,
         maxBytes: Long,
         fileName: String,
-        vararg arguments: String,
+        vararg command: String,
+        transform: (ByteArray) -> ByteArray = { it },
     ): DiagnosticsItemResult {
-        val limit = if (maxBytes > 0) minOf(maxBytes, MAX_ITEM_BYTES) else MAX_ITEM_BYTES
         val output: ByteArray =
             try {
-                shellRunner.run("dumpsys", *arguments)
+                transform(shellRunner.run(*command))
             } catch (error: Exception) {
-                AgentLog.error("dumpsys ${arguments.joinToString(" ")} failed", error)
+                AgentLog.error("diagnostics ${command.joinToString(" ")} failed", error)
                 return DiagnosticsItemResult.newBuilder()
                     .setItem(item)
                     .setStatus(DiagnosticsItemStatus.DIAGNOSTICS_ITEM_STATUS_FAILED)
                     .build()
             }
+        return sendPayload(item, maxBytes, fileName, output)
+    }
+
+    private fun sendPayload(
+        item: DiagnosticsItem,
+        maxBytes: Long,
+        fileName: String,
+        output: ByteArray,
+    ): DiagnosticsItemResult {
+        val limit = if (maxBytes > 0) minOf(maxBytes, MAX_ITEM_BYTES) else MAX_ITEM_BYTES
         if (output.size > MAX_ITEM_BYTES) {
             return DiagnosticsItemResult.newBuilder()
                 .setItem(item)

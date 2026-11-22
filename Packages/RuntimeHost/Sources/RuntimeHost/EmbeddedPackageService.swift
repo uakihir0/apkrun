@@ -174,11 +174,11 @@ public actor EmbeddedPackageService: RuntimeService {
     func refreshLocaleDependentPackageLabels(registry: WrapperRegistry) async throws(RuntimeWireError) {
         do {
             try await ensureOpen()
-            let changed = try await refreshAndroidInventory()
-            guard !changed.isEmpty else { return }
-            let changedSet = Set(changed)
-            for record in try await store.listManagedPackages()
-            where changedSet.contains(record.packageId) {
+            _ = try await refreshAndroidInventory()
+            // Registry sync must catch every drift, not just names Android
+            // reported differently this refresh — an APK update can write the
+            // new label straight into the record, which never shows as changed.
+            for record in try await store.listManagedPackages() {
                 let runtimeID = try Self.runtimePackageID(record.packageId)
                 if let entry = await registry.entry(packageID: runtimeID),
                     entry.displayName != record.displayName

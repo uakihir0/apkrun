@@ -552,10 +552,9 @@ final class FakeScanoutController: ScanoutController, @unchecked Sendable {
             guest.emit(.changed(followup))
         }
         if removeBeforeAttachTimeout {
-            Task {
-                try? await Task.sleep(for: .milliseconds(5))
-                guest.emit(.removed(displayID: result.0))
-            }
+            // Emit right away: a sleeping task races the pool's attach timeout and flakes
+            // under load. In-order delivery still exercises the removal path.
+            guest.emit(.removed(displayID: result.0))
         }
     }
 

@@ -333,6 +333,12 @@ func embeddedRuntimeServiceReconcilesTerminalGuestSnapshotThroughMultiWindowCall
     await service.attachGuestAgent(guest)
 
     await guest.resynchronize(with: guestSnapshot(displays: [0]))
+    for _ in 0..<100 {
+        if await reconciled.results.count == 1 {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
 
     let results = await reconciled.results
     #expect(results.count == 1)
@@ -357,6 +363,12 @@ func embeddedRuntimeServiceSignalsSingleWindowWhenSnapshotShowsAppExited() async
     await service.attachGuestAgent(guest)
 
     await guest.resynchronize(with: guestSnapshot(displays: [0]))
+    for _ in 0..<100 {
+        if await stopSignal.current() != nil {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
 
     #expect(await service.currentSession()?.state == .ended(.appExited))
     #expect(await stopSignal.current() == .appExited)
@@ -378,6 +390,12 @@ func embeddedRuntimeServiceStopsSingleWindowAfterSnapshotLosesItsDisplay() async
     await service.attachGuestAgent(guest)
 
     await guest.resynchronize(with: guestSnapshot(displays: []))
+    for _ in 0..<100 {
+        if await stopSignal.current() != nil {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
 
     #expect(await service.currentSession()?.state == .ended(.error(.displayLost)))
     #expect(await stopSignal.current() == .appWindowCloseFailed)

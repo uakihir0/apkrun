@@ -3512,6 +3512,19 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 response.send(Self.encode(RuntimeCloseSessionControlReply(error: Self.malformedWireError)))
                 return
             }
+            // NFR-SEC-07: a wrapper closes only its own package's session
+            // (runtime-api.md §10.1); a launcher's package is not
+            // authenticated here, so the wrapper check does not apply.
+            if clientKind == .wrapper, decoded.packageID != wrapperPackageID {
+                response.send(
+                    Self.encode(
+                        RuntimeCloseSessionControlReply(
+                            error: Self.wireError(
+                                for: RuntimeControlError(
+                                    code: "runtime.notAuthorized",
+                                    message: "This part of APKRun isn't allowed to do that.")))))
+                return
+            }
             do {
                 let result = try await host.closeSession(
                     RuntimeCloseSessionRequest(packageID: decoded.packageID, policy: decoded.policy))

@@ -593,15 +593,7 @@ public actor RuntimeHost {
                         }
                     }
                 )
-                supervisor = runtimeSupervisor
-                observeSupervisorEvents(from: runtimeSupervisor)
-                let powerLogger = APKLogger(category: RuntimeLogCategory.power, sink: diagnostics.logSink)
-                let powerService = EmbeddedDeveloperService(supervisor: runtimeSupervisor) { message in
-                    powerLogger.warning("\(message, .public)")
-                }
-                powerEventHandler = { event in
-                    await powerService.receivePowerObserverEvent(event)
-                }
+                finishSupervisorSetup(runtimeSupervisor)
             } catch {
                 recordDegradedStartup(step: 8, code: error.qualifiedCode)
             }
@@ -804,11 +796,36 @@ public actor RuntimeHost {
         }
     }
 
+    /// Applies a `runtime.idleSuspendMinutes`/`runtime.idleStopMinutes`
+    /// config change to the live idle controller.
+    func reloadIdleSettingsIfIdleKey(_ key: String) async {
+        guard key == "runtime.idleSuspendMinutes" || key == "runtime.idleStopMinutes",
+            idleSettingsOverride == nil,
+            let loaded = try? RuntimeIdleSettingsLoader.load(from: paths.settingsFile)
+        else {
+            return
+        }
+        idleSettings = loaded
+        await idleController?.update(settings: loaded)
+    }
+
     private func releaseSessionActivity(_ packageID: String) {
         sessionActivityAssertions.removeValue(forKey: packageID)?.release()
     }
 
-    private func releaseSessionActivityIfInactive(_ packageID: RuntimePackageID) async {
+    /// Holds `.session` activity for a package whose session is (re)starting,
+    /// matching what `launch` does before the first window draws.
+    func acquireSessionActivityIfNeeded(_ packageID: RuntimePackageID) async {
+        guard sessionActivityAssertions[packageID.rawValue] == nil,
+            let idleController
+        else {
+            return
+        }
+        sessionActivityAssertions[packageID.rawValue] =
+            await idleController.assertActivity(.session)
+    }
+
+    func releaseSessionActivityIfInactive(_ packageID: RuntimePackageID) async {
         if let headlessSessionService {
             guard let sessionHandling = headlessSessionService as? any PackageMutationSessionHandling else {
                 return
@@ -1284,12 +1301,7 @@ public actor RuntimeHost {
             finishPackageLaunch(request.packageID)
         }
         let launchTracking = await beginLaunchRecord(request)
-        if sessionActivityAssertions[request.packageID.rawValue] == nil,
-            let idleController
-        {
-            sessionActivityAssertions[request.packageID.rawValue] =
-                await idleController.assertActivity(.session)
-        }
+        await acquireSessionActivityIfNeeded(request.packageID)
         do {
             guard headlessLaunchHookIsEnabled else {
                 throw Self.launchUnavailableError
@@ -1535,13 +1547,6 @@ public actor RuntimeHost {
             return existing.handle
         }
         try reservePackageInstall(packageID)
-        let mutationToken: UUID
-        do {
-            mutationToken = try await beginPackageMutation()
-        } catch {
-            packageActivityReservations.finishInstall(packageID: packageID.rawValue)
-            throw Self.sessionWireError(for: error)
-        }
 
         let handle = OperationHandle(operationID: requestedID, kind: .install)
         let snapshot = OperationSnapshot(
@@ -1556,7 +1561,6 @@ public actor RuntimeHost {
         trackedOperations[requestedID] = RuntimeTrackedOperation(
             handle: handle,
             requestPayload: requestPayload,
-            packageMutationToken: mutationToken,
             snapshot: snapshot,
             isCancellable: true,
             task: nil
@@ -1628,17 +1632,6 @@ public actor RuntimeHost {
         } catch {
             throw Self.packageOperationInProgressError
         }
-        let mutationToken: UUID
-        do {
-            mutationToken = try await beginPackageMutation(activity: request.options.forget ? nil : .storeOperation)
-        } catch {
-            if request.options.forget {
-                packageActivityReservations.finishForget(packageID: request.packageID.rawValue)
-            } else {
-                packageActivityReservations.finishUninstall(packageID: request.packageID.rawValue)
-            }
-            throw Self.sessionWireError(for: error)
-        }
 
         let handle = OperationHandle(operationID: requestedID, kind: .uninstall)
         let snapshot = OperationSnapshot(
@@ -1656,7 +1649,6 @@ public actor RuntimeHost {
         trackedOperations[requestedID] = RuntimeTrackedOperation(
             handle: handle,
             requestPayload: requestPayload,
-            packageMutationToken: mutationToken,
             snapshot: snapshot,
             isCancellable: true,
             task: nil
@@ -1715,13 +1707,6 @@ public actor RuntimeHost {
         } catch {
             throw Self.packageOperationInProgressError
         }
-        let mutationToken: UUID
-        do {
-            mutationToken = try await beginPackageMutation()
-        } catch {
-            packageActivityReservations.finishInstall(packageID: request.packageID.rawValue)
-            throw Self.sessionWireError(for: error)
-        }
 
         let handle = OperationHandle(operationID: requestedID, kind: .repair)
         let snapshot = OperationSnapshot(
@@ -1752,14 +1737,12 @@ public actor RuntimeHost {
                     await self.runRepairPackageOperation(
                         request,
                         operationID: requestedID,
-                        clientKind: clientKind,
-                        mutationToken: mutationToken
+                        clientKind: clientKind
                     )
                 }
             } else {
                 await self.runRepairPackageOperation(
-                    request, operationID: requestedID, clientKind: clientKind,
-                    mutationToken: mutationToken)
+                    request, operationID: requestedID, clientKind: clientKind)
             }
         }
         trackedOperations[requestedID]?.task = task
@@ -1825,12 +1808,27 @@ public actor RuntimeHost {
         operationID: WireOperationID,
         clientKind: RuntimeClientKind
     ) async {
-        let mutationToken = trackedOperations[operationID]?.packageMutationToken
+        var mutationToken: UUID?
         defer {
             packageActivityReservations.finishInstall(packageID: packageID.rawValue)
             if let mutationToken {
                 finishPackageMutation(mutationToken)
             }
+        }
+        // Acquiring the mutation drives the `.activityBegan` idle action and
+        // can wait for Android to boot; it runs inside the tracked task so
+        // admission already published the operation record and handle.
+        do {
+            mutationToken = try await beginPackageMutation()
+        } catch {
+            finishOperation(
+                operationID,
+                result: Task.isCancelled ? .cancelled : .failed(Self.operationWireError(for: error)))
+            return
+        }
+        guard !Task.isCancelled else {
+            finishOperation(operationID, result: .cancelled)
+            return
         }
         do {
             let result = try await performInstallImported(
@@ -1860,7 +1858,7 @@ public actor RuntimeHost {
         operationID: WireOperationID,
         clientKind: RuntimeClientKind
     ) async {
-        let mutationToken = trackedOperations[operationID]?.packageMutationToken
+        var mutationToken: UUID?
         defer {
             if request.options.forget {
                 packageActivityReservations.finishForget(packageID: request.packageID.rawValue)
@@ -1870,6 +1868,21 @@ public actor RuntimeHost {
             if let mutationToken {
                 finishPackageMutation(mutationToken)
             }
+        }
+        // Acquiring the mutation can wait for Android to boot; it runs inside
+        // the tracked task so admission already published the operation.
+        do {
+            mutationToken = try await beginPackageMutation(
+                activity: request.options.forget ? nil : .storeOperation)
+        } catch {
+            finishOperation(
+                operationID,
+                result: Task.isCancelled ? .cancelled : .failed(Self.operationWireError(for: error)))
+            return
+        }
+        guard !Task.isCancelled else {
+            finishOperation(operationID, result: .cancelled)
+            return
         }
         do {
             try await performUninstallPackage(
@@ -1896,12 +1909,28 @@ public actor RuntimeHost {
     private func runRepairPackageOperation(
         _ request: RuntimePackageRequest,
         operationID: WireOperationID,
-        clientKind: RuntimeClientKind,
-        mutationToken: UUID
+        clientKind: RuntimeClientKind
     ) async {
+        var mutationToken: UUID?
         defer {
             packageActivityReservations.finishInstall(packageID: request.packageID.rawValue)
-            finishPackageMutation(mutationToken)
+            if let mutationToken {
+                finishPackageMutation(mutationToken)
+            }
+        }
+        // Acquiring the mutation can wait for Android to boot; it runs inside
+        // the tracked task so admission already published the operation.
+        do {
+            mutationToken = try await beginPackageMutation()
+        } catch {
+            finishOperation(
+                operationID,
+                result: Task.isCancelled ? .cancelled : .failed(Self.operationWireError(for: error)))
+            return
+        }
+        guard !Task.isCancelled else {
+            finishOperation(operationID, result: .cancelled)
+            return
         }
         do {
             let service = packageQueryServiceInstance()
@@ -5958,6 +5987,11 @@ public actor RuntimeHost {
             return
         }
         isShuttingDown = true
+        stopPowerObserver()
+        stopMemoryPressureObserver()
+        prebootTask?.cancel()
+        prebootTask = nil
+        await idleController?.stop()
         await stopLocaleTimeObservers()
         runtimeSessionGeneration &+= 1
         hostState = "shuttingDown"
@@ -6722,7 +6756,8 @@ public actor RuntimeHost {
             options: BootOptions(
                 gpuProfile: .drmVirgl,
                 developerMode: buildInfo.configuration == .debug,
-                captureLogcat: false
+                captureLogcat: false,
+                adbHostPort: adbHostPort
             ),
             diagnostics: diagnostics,
             guestAgentBundle: bundle,
@@ -6731,11 +6766,33 @@ public actor RuntimeHost {
             microphoneProvider: Self.microphoneProvider(
                 settingsFile: paths.settingsFile,
                 packagesDirectory: paths.packagesDirectory,
-                cache: integrationSettings)
+                cache: integrationSettings),
+            adbClientConnectionCountChanged: { [weak self] generation, revision, connectionCount in
+                Task {
+                    await self?.updateADBClientActivity(
+                        generation: generation,
+                        revision: revision,
+                        connectionCount: connectionCount
+                    )
+                }
+            }
         )
+        finishSupervisorSetup(runtimeSupervisor)
+        return runtimeSupervisor
+    }
+
+    /// Stores the supervisor and attaches the event, power, and ADB bridges
+    /// every supervisor creation path needs.
+    private func finishSupervisorSetup(_ runtimeSupervisor: RuntimeSupervisor) {
         supervisor = runtimeSupervisor
         observeSupervisorEvents(from: runtimeSupervisor)
-        return runtimeSupervisor
+        let powerLogger = APKLogger(category: RuntimeLogCategory.power, sink: diagnostics?.logSink)
+        let powerService = EmbeddedDeveloperService(supervisor: runtimeSupervisor) { message in
+            powerLogger.warning("\(message, .public)")
+        }
+        powerEventHandler = { event in
+            await powerService.receivePowerObserverEvent(event)
+        }
     }
 
     /// Reads `audio.output` before each Android boot; a change never

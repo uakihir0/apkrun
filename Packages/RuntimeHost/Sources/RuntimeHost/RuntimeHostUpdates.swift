@@ -926,6 +926,9 @@ extension RuntimeHost {
             throw Self.unknownConfigKey(key)
         }
         try GlobalSettings.store(globals, to: paths.settingsFile)
+        // The idle controller applies new suspend/stop deadlines at once;
+        // it is not re-read until the next daemon start otherwise.
+        Task { await reloadIdleSettingsIfIdleKey(key) }
         // A changed `integrations.enabled.*`/`defaults.*` may alter the
         // guest's forwarding allowlist; push it so titles and text stop
         // leaving Android at once.
@@ -1080,8 +1083,10 @@ extension RuntimeHost {
 
         // A non-checkOnly run can install: hold the package-mutation guard so
         // stop/restart/reset cannot interrupt a stage→install transaction.
+        // Acquiring it can boot a stopped runtime, so skip it when there is
+        // nothing to check.
         var mutationToken: UUID?
-        if !checkOnly {
+        if !checkOnly, !selected.isEmpty {
             do {
                 mutationToken = try await beginPackageMutation()
             } catch {
@@ -1580,7 +1585,16 @@ extension RuntimeHost {
                 else {
                     return
                 }
-                try await handling.reopenPackageSession(packageID: wireID)
+                // The service-level reopen bypasses the host `launch` that
+                // holds `.session` activity; hold it here or the resumed app
+                // would be eligible for idle suspend/stop.
+                await self.acquireSessionActivityIfNeeded(wireID)
+                do {
+                    try await handling.reopenPackageSession(packageID: wireID)
+                } catch {
+                    await self.releaseSessionActivityIfInactive(wireID)
+                    throw error
+                }
             },
             ready: { [weak self] reason in
                 // Daemon startup creates the supervisor asynchronously; an

@@ -124,18 +124,14 @@ mkdir -p "$aosp_root/.repo/local_manifests"
 cat > "$aosp_root/.repo/local_manifests/apkrun.xml" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
-  <project name="apkrun-host"
+  <remote name="apkrun-local" fetch="$(dirname "$repo_root")" />
+  <project name="$(basename "$repo_root")"
            path="vendor/apkrun/src"
            revision="$revision"
-           remote="apkrun-local" />
-  <linkfile src="Guest/product" dest="device/apkrun/apkrun_arm64" />
-  <linkfile src="Guest/vsockd" dest="device/apkrun/apkrun_arm64/vsockd" />
-</manifest>
-EOF
-cat > "$aosp_root/.repo/local_manifests/apkrun-remote.xml" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<manifest>
-  <remote name="apkrun-local" fetch="$repo_root" />
+           remote="apkrun-local">
+    <linkfile src="Guest/product" dest="device/apkrun/apkrun_arm64" />
+    <linkfile src="Guest/vsockd" dest="device/apkrun/apkrun_arm64/vsockd" />
+  </project>
 </manifest>
 EOF
 log "linked Guest/product to device/apkrun/apkrun_arm64 and Guest/vsockd at $revision"
@@ -147,7 +143,7 @@ product_tree="$aosp_root/vendor/apkrun/src/Guest/product"
 mkdir -p "$product_tree/prebuilt"
 "$repo_root/scripts/build-guest.sh"
 cp "$repo_root/Guest/build/out/apkrun-guest.apk" "$product_tree/prebuilt/ApkRunGuest.apk"
-(cd "$repo_root/Guest" && ./gradlew :APKRunStore:assembleRelease -q)
+(cd "$repo_root" && ./gradlew -p Guest :APKRunStore:assembleRelease -q)
 store_apks=("$repo_root"/Guest/APKRunStore/build/outputs/apk/release/*.apk)
 [[ "${#store_apks[@]}" -eq 1 ]] || {
     printf 'build-product: expected one APKRunStore release APK, found %s\n' "${#store_apks[@]}" >&2
@@ -159,6 +155,10 @@ log "staged ApkRunGuest.apk and ApkRunStore.apk in prebuilt/"
 # R-13: a user build's SELinux inputs must be enforcing-only.
 if [[ "$variant" == "user" ]]; then
     "$repo_root/scripts/check-sepolicy.sh" --variant user --root "$product_tree"
+    [[ -f "$keys_dir/avb.pem" ]] || {
+        printf 'build-product: %s/avb.pem is missing; a user image signs vbmeta with the AOSP test key otherwise\n' "$keys_dir" >&2
+        exit 2
+    }
 fi
 
 # Step 4: lunch, m, m dist.
@@ -170,6 +170,10 @@ log "lunch apkrun_arm64-trunk_staging-$variant (BUILD_NUMBER=$build_number)"
     source build/envsetup.sh
     lunch "apkrun_arm64-trunk_staging-$variant"
     export BUILD_NUMBER="$build_number"
+    if [[ "$variant" == "user" ]]; then
+        # vbmeta is signed by avbtool during `m` with BOARD_AVB_KEY_PATH.
+        export APKRUN_AVB_KEY_DIR="$keys_dir"
+    fi
     m
     m dist
 )
@@ -188,6 +192,19 @@ if [[ "$variant" == "user" ]]; then
     (cd "$aosp_root" && sign_target_files_apks -d "$keys_dir" \
         "${target_files[0]}" "$signed_tf")
     (cd "$aosp_root" && img_from_target_files "$signed_tf" "$image_zip")
+    # Fail closed: vbmeta must be signed by the release AVB key.
+    work_avb="$(mktemp -d)"
+    unzip -p "$image_zip" vbmeta.img > "$work_avb/vbmeta.img"
+    avbtool="$aosp_root/external/avb/avbtool"
+    [[ -f "$avbtool" ]] || avbtool="$aosp_root/external/avb/avbtool.py"
+    python3 "$avbtool" extract_public_key --key "$keys_dir/avb.pem" \
+        --output "$work_avb/avb_pub.bin"
+    python3 "$avbtool" verify_image --image "$work_avb/vbmeta.img" \
+        --expected_public_key "$work_avb/avb_pub.bin" || {
+        printf 'build-product: vbmeta is not signed by %s/avb.pem\n' "$keys_dir" >&2
+        exit 2
+    }
+    rm -rf "$work_avb"
     log "signed image zip: $image_zip"
 else
     (cd "$aosp_root" && img_from_target_files "${target_files[0]}" "$image_zip")

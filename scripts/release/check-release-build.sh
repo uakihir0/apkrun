@@ -126,6 +126,21 @@ def parse_pkcs8_private_key(data):
         return None
     return decoded
 
+
+def parse_raw_ed25519_private_key(data):
+    try:
+        text = data.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    stripped = "".join(line.strip() for line in text.splitlines())
+    try:
+        decoded = base64.b64decode(stripped, validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    if len(decoded) == 64:
+        return decoded
+    return None
+
 def read_der_value(data, offset, tag):
     value = read_der_any_value(data, offset)
     if value is None or value[0] != tag:
@@ -447,6 +462,8 @@ def add_key_tokens(path):
         rsa_private_key = parse_pkcs1_rsa_private_key(data)
         if private_key is None and rsa_private_key is not None:
             private_key = rsa_private_key[0]
+        if private_key is None:
+            private_key = parse_raw_ed25519_private_key(data)
         avb_public_key = parse_avb_public_key(data) if path.suffix.lower() == ".avbpubkey" else None
 
     binary_tokens = set()

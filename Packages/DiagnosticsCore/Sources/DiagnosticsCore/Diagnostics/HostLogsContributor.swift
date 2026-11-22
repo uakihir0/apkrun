@@ -75,7 +75,8 @@ public struct HostLogsContributor: DiagnosticsContributor {
         // Mirrors: apkrund.log* keep the last 1 MiB each.
         if let mirrorDirectory {
             if let files = try? FileManager.default.contentsOfDirectory(
-                atPath: mirrorDirectory.path) {
+                atPath: mirrorDirectory.path)
+            {
                 for file in files.sorted() where file.hasPrefix("apkrund.log") {
                     let url = mirrorDirectory.appendingPathComponent(file)
                     guard let data = try? Data(contentsOf: url) else { continue }
@@ -92,12 +93,16 @@ public struct HostLogsContributor: DiagnosticsContributor {
         let cutoff = Date().addingTimeInterval(-7 * 86_400)
         var reports: [(url: URL, date: Date)] = []
         for directory in crashReportDirectories {
-            guard let files = try? FileManager.default.contentsOfDirectory(
-                atPath: directory.path) else { continue }
+            guard
+                let files = try? FileManager.default.contentsOfDirectory(
+                    atPath: directory.path)
+            else { continue }
             for file in files where file.hasSuffix(".ips") {
-                guard crashProcesses.contains(where: { file.hasPrefix("\($0)-") })
-                        || crashProcesses.contains(file.replacingOccurrences(
-                            of: ".ips", with: ""))
+                guard
+                    crashProcesses.contains(where: { file.hasPrefix("\($0)-") })
+                        || crashProcesses.contains(
+                            file.replacingOccurrences(
+                                of: ".ips", with: ""))
                 else { continue }
                 let url = directory.appendingPathComponent(file)
                 let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)

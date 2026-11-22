@@ -71,6 +71,16 @@ struct HomeView: View {
             AddFlowView()
                 .environment(model.addFlow)
         }
+        .sheet(
+            isPresented: Binding(
+                get: { model.reportRequest != nil },
+                set: { if !$0 { model.reportRequest = nil } })
+        ) {
+            if let request = model.reportRequest {
+                DiagnosticsReportSheet(
+                    model: DiagnosticsReportModel(request: request))
+            }
+        }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             for provider in providers {
                 provider.loadObject(ofClass: NSURL.self) { item, _ in

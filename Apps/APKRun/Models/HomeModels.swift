@@ -346,6 +346,11 @@ final class HomeModel {
     let addFlow: AddFlowModel
     /// Settings pane a `settings/<pane>` route asks for.
     var requestedSettingsPane: String?
+
+    /// The diagnostics report request routed by `apkrun://report`
+    /// (diagnostics.md §8.4). Setting it presents the report sheet; the
+    /// package preselects the focus row without starting anything.
+    var reportRequest: DiagnosticsReportRequest?
     init(
         makeService: @escaping @Sendable () throws -> any RuntimeService = {
             try RuntimeControlClient(clientKind: .app)
@@ -401,6 +406,15 @@ final class HomeModel {
             requestedSettingsPane = pane
         case .setup:
             selection = .apps
+        case .report(let packageID):
+            if let packageID,
+                !packages.managed.contains(where: { $0.packageID == packageID })
+            {
+                missingPackageID = packageID.rawValue
+            }
+            reportRequest = DiagnosticsReportRequest(
+                focusPackage: packageID,
+                packages: packages.managed.map(\.packageID))
         }
     }
 

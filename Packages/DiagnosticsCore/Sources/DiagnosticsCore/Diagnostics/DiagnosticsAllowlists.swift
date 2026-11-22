@@ -164,9 +164,12 @@ public enum DiagnosticsAllowlists {
     /// MAC addresses → `<mac-N>` handled by the layer-3 MAC rule.
     public static func redactBootconfig(_ text: String, redactor: Redactor) -> String {
         var result = text
-        guard let regex = try? NSRegularExpression(
-            pattern: #"(androidboot\.serialno|androidboot\.apkrun\.instance_uuid|androidboot\.apkrun\.machine_id)=([^\s]+)"#
-        ) else { return text }
+        guard
+            let regex = try? NSRegularExpression(
+                pattern:
+                    #"(androidboot\.serialno|androidboot\.apkrun\.instance_uuid|androidboot\.apkrun\.machine_id)=([^\s]+)"#
+            )
+        else { return text }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         for match in regex.matches(in: text, range: range).reversed() {
             guard

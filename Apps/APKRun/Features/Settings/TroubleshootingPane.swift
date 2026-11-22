@@ -43,6 +43,13 @@ struct TroubleshootingPane: View {
                         .disabled(model.isRunning)
                     Button("Fix") { Task { await model.fix() } }
                         .disabled(model.isRunning)
+                    // Opens the report sheet through the apkrun:// route
+                    // (diagnostics.md §8.5).
+                    Button("Create Diagnostics Report…") {
+                        if let url = URL(string: "apkrun://report") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
                 }
             } footer: {
                 if model.isRunning {

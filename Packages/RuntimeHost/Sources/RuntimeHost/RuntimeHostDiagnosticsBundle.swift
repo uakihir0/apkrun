@@ -80,13 +80,14 @@ extension RuntimeHost {
                 operationID: operationID)
             finishOperation(
                 operationID,
-                result: .succeeded(.diagnostics(
-                    DiagnosticsReportInfo(
-                        bytes: result.bytes,
-                        omitted: result.omitted.map {
-                            WireOmittedItem(item: $0.item, reason: $0.reason)
-                        },
-                        summary: result.summary))))
+                result: .succeeded(
+                    .diagnostics(
+                        DiagnosticsReportInfo(
+                            bytes: result.bytes,
+                            omitted: result.omitted.map {
+                                WireOmittedItem(item: $0.item, reason: $0.reason)
+                            },
+                            summary: result.summary))))
         } catch is CancellationError {
             // Cancel truncates the output (§8.1): a partial archive never
             // looks like a report.
@@ -205,7 +206,8 @@ extension RuntimeHost {
 
         let runtimeRunning = await diagnosticsRuntimeRunning()
         let appsLine = await diagnosticsAppsLine()
-        let statusLine = runtimeRunning
+        let statusLine =
+            runtimeRunning
             ? "APKRun is running."
             : "Android is not running."
         return try await service.run(
@@ -231,7 +233,7 @@ extension RuntimeHost {
         options: DiagnosticsOptions
     ) async throws {
         var status: [String: Any] = [
-            "state": String(describing: runtimeStateSnapshot),
+            "state": String(describing: runtimeStateSnapshot)
         ]
         let sessions = await listSessions()
         status["sessions"] = sessions.count
@@ -369,7 +371,8 @@ extension RuntimeHost {
                 if let entry = try? await integrationStatus(packageID: package.packageID) {
                     let data = try JSONEncoder().encode(entry)
                     if var object = try JSONSerialization.jsonObject(with: data)
-                        as? [String: Any] {
+                        as? [String: Any]
+                    {
                         object.removeValue(forKey: "packageID")
                         status[package.packageID.rawValue] = object
                     }

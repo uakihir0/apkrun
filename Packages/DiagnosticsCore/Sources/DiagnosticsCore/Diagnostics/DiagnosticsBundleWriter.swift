@@ -285,10 +285,11 @@ public final class DiagnosticsBundleWriter {
         }
 
         let summaryText = Self.summary(options: options, context: summaryContext)
-        entries.append((
-            path: "summary.txt",
-            data: Data(summaryText.utf8)
-        ))
+        entries.append(
+            (
+                path: "summary.txt",
+                data: Data(summaryText.utf8)
+            ))
 
         let manifest = DiagnosticsManifest(
             reportID: options.reportID,

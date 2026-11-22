@@ -16,6 +16,9 @@ enum AppRoute: Equatable {
     case settings(pane: String)
     /// Onboarding when setup is incomplete, otherwise home.
     case setup
+    /// The diagnostics report sheet; `package` preselects a package
+    /// (diagnostics.md §8.4).
+    case report(package: RuntimePackageID?)
 }
 
 /// Delivers document opens (double-click, Open With, `open -a APKRun file.apk`)
@@ -46,7 +49,7 @@ enum AppRouter {
 
     /// Parses an `apkrun://` URL into a navigation target.
     ///
-    /// Unknown routes — including `report` until #61 — open home. Package IDs
+    /// Unknown routes open home. Package IDs
     /// that fail the Android package-name grammar are rejected as `nil`
     /// (the caller shows "‹id› isn't installed in APKRun.").
     static func route(_ url: URL) -> AppRoute? {
@@ -71,6 +74,16 @@ enum AppRouter {
             return .settings(pane: settingsPanes.contains(pane) ? pane : "general")
         case "setup":
             return .setup
+        case "report":
+            let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "package" })?.value
+            if let id, !id.isEmpty {
+                guard let packageID = RuntimePackageID(rawValue: id) else {
+                    return nil
+                }
+                return .report(package: packageID)
+            }
+            return .report(package: nil)
         default:
             return .home
         }

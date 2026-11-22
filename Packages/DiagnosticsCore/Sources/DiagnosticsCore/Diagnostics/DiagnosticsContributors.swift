@@ -59,7 +59,8 @@ public struct HostEnvironmentContributor: DiagnosticsContributor {
         object["architecture"] = sysctlString("hw.machine")
 
         if let volume = try? FileManager.default.attributesOfFileSystem(
-            forPath: NSHomeDirectory()) {
+            forPath: NSHomeDirectory())
+        {
             if let free = volume[.systemFreeSize] as? Int64 {
                 object["dataVolumeFreeBytes"] = free
             }

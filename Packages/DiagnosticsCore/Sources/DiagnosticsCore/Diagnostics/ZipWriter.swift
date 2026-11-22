@@ -174,13 +174,13 @@ public enum CRC32 {
     }
 }
 
-private extension Data {
-    mutating func appendLittleEndian(_ value: UInt16) {
+extension Data {
+    fileprivate mutating func appendLittleEndian(_ value: UInt16) {
         append(UInt8(value & 0xFF))
         append(UInt8(value >> 8))
     }
 
-    mutating func appendLittleEndian(_ value: UInt32) {
+    fileprivate mutating func appendLittleEndian(_ value: UInt32) {
         append(UInt8(value & 0xFF))
         append(UInt8((value >> 8) & 0xFF))
         append(UInt8((value >> 16) & 0xFF))

@@ -68,11 +68,38 @@ struct DiagnosticsCommand: AsyncParsableCommand {
             focusPackage: package,
             createdBy: "cli")
         let operation = try await client.createDiagnostics(request, output: handle)
-        let snapshot = try await OperationCommandOutput.waitForTerminalSnapshot(
-            using: client,
-            operationID: operation.operationID,
-            progressToStderr: false)
-        try OperationCommandOutput.requireSuccess(snapshot)
+        let snapshot = try await Self.waitForTerminal(
+            using: client, operationID: operation.operationID)
+        try Self.requireSuccess(snapshot)
+    }
+
+    /// Polls `operationStatus` until the operation reaches a terminal
+    /// result.
+    private static func waitForTerminal(
+        using client: RuntimeControlClient, operationID: RuntimeAPI.OperationID
+    ) async throws -> OperationSnapshot {
+        while true {
+            let snapshot = try await client.operationStatus(operationID)
+            if snapshot.result != nil { return snapshot }
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+    }
+
+    /// Exits 1 with the wire error when the operation did not succeed.
+    private static func requireSuccess(_ snapshot: OperationSnapshot) throws {
+        switch snapshot.result {
+        case .succeeded:
+            return
+        case .failed(let failure):
+            Output.writeLogLine(
+                "The report failed: \(failure.message)", toStandardError: true)
+            throw ExitCode(1)
+        case .cancelled:
+            Output.writeLogLine("The report was cancelled.", toStandardError: true)
+            throw ExitCode(1)
+        default:
+            throw ExitCode(1)
+        }
     }
 
     /// The host-only report when apkrund cannot be reached (§8.4).
@@ -90,11 +117,13 @@ struct DiagnosticsCommand: AsyncParsableCommand {
             preservedPaths: [paths.dataRoot.path, paths.logsRoot.path])
         let contributors: [DiagnosticsContributor] = [
             HostEnvironmentContributor(),
-            VersionsContributor(versions: { [
-                "apkrund": "unavailable",
-                "cli": Output.versionHuman(BuildInfo.current),
-                "apiLevel": "\(APIVersion.current.major).\(APIVersion.current.minor)",
-            ] }),
+            VersionsContributor(versions: {
+                [
+                    "apkrund": "unavailable",
+                    "cli": Output.versionHuman(BuildInfo.current),
+                    "apiLevel": "\(APIVersion.current.major).\(APIVersion.current.minor)",
+                ]
+            }),
             ConfigContributor(settingsFile: paths.settingsFile),
             HostLogsContributor(mirrorDirectory: paths.logsRoot),
             PerfContributor(

@@ -37,6 +37,11 @@ final class BootstrapInstallController {
         return (directory, json, payload)
     }
 
+    /// The package this launcher wraps, when a portable bootstrap payload
+    /// carries it — used to preselect the diagnostics report's focus
+    /// (diagnostics.md §8.5).
+    var bundledPackageID: String? { bundle?.payload.packageId }
+
     /// Whether the bundled package is missing from the store and the
     /// screen-N prompt applies (wrapper-json.md §3.4 B2).
     func needsInstall() async -> Bool {

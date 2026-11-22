@@ -228,9 +228,11 @@ public final class Redactor: @unchecked Sendable {
         let home = identity.homeDirectory
         guard !home.isEmpty else { return text }
         let escaped = NSRegularExpression.escapedPattern(for: home)
-        guard let regex = try? NSRegularExpression(
-            pattern: escaped + #"[^\s"'\\]*"#
-        ) else { return text }
+        guard
+            let regex = try? NSRegularExpression(
+                pattern: escaped + #"[^\s"'\\]*"#
+            )
+        else { return text }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         let matches = regex.matches(in: text, range: range)
         guard !matches.isEmpty else { return text }
@@ -257,9 +259,11 @@ public final class Redactor: @unchecked Sendable {
     /// URLs lose path, query, fragment, and user info; APKRun's own endpoint
     /// hosts keep theirs (diagnostics.md §6.3).
     private func reduceURLs(_ text: String) -> String {
-        guard let regex = try? NSRegularExpression(
-            pattern: #"\b([a-zA-Z][a-zA-Z0-9+.-]*)://([^\s/)"'<>\]]+)([^\s)"'<>\]]*)"#
-        ) else { return text }
+        guard
+            let regex = try? NSRegularExpression(
+                pattern: #"\b([a-zA-Z][a-zA-Z0-9+.-]*)://([^\s/)"'<>\]]+)([^\s)"'<>\]]*)"#
+            )
+        else { return text }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         let matches = regex.matches(in: text, range: range)
         guard !matches.isEmpty else { return text }
@@ -295,12 +299,14 @@ public final class Redactor: @unchecked Sendable {
     private func reduceIPs(_ text: String) -> String {
         var result = text
         result = replaceIPMatches(
-            #"\b(?:\d{1,3}\.){3}\d{1,3}\b"#, in: result, isAllowed: { ip in
+            #"\b(?:\d{1,3}\.){3}\d{1,3}\b"#, in: result,
+            isAllowed: { ip in
                 ip.hasPrefix("127.") || ip.hasPrefix("169.254.")
                     || ip.hasPrefix("192.168.64.")
             })
         result = replaceIPMatches(
-            #"(?i)\b(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{0,4}\b"#, in: result, isAllowed: { ip in
+            #"(?i)\b(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{0,4}\b"#, in: result,
+            isAllowed: { ip in
                 let lower = ip.lowercased()
                 return lower == "::1" || lower.hasPrefix("fe80:") || lower.hasPrefix(":")
             })
@@ -337,9 +343,11 @@ public final class Redactor: @unchecked Sendable {
     /// `content://` URIs keep their authority and lose their path
     /// (diagnostics.md §6.3).
     private func reduceContentURIs(_ text: String) -> String {
-        guard let regex = try? NSRegularExpression(
-            pattern: #"content://([a-zA-Z0-9._-]+)[^\s)"'<>\]]*"#
-        ) else { return text }
+        guard
+            let regex = try? NSRegularExpression(
+                pattern: #"content://([a-zA-Z0-9._-]+)[^\s)"'<>\]]*"#
+            )
+        else { return text }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         let matches = regex.matches(in: text, range: range)
         guard !matches.isEmpty else { return text }

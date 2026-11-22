@@ -6105,6 +6105,42 @@
         "ref": "diagnostics.md §7"
       },
       "parameters": []
+    },
+    {
+      "code": "diagnostics.writeFailed",
+      "message": {
+        "en": "The diagnostics report could not be written."
+      },
+      "remediation": {
+        "en": "Check the output folder and free disk space, then try again."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "writeFailed(_:)",
+        "when": "the bundle writer fails staging, writing, or attributes",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §8"
+      },
+      "parameters": []
+    },
+    {
+      "code": "diagnostics.failed",
+      "message": {
+        "en": "The diagnostics report could not be collected."
+      },
+      "remediation": {
+        "en": "Try again; if it keeps failing, collect host logs manually."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "failed(_:)",
+        "when": "a diagnostics contributor or the report pipeline fails",
+        "raisedBy": "apkrund",
+        "ref": "diagnostics.md §8"
+      },
+      "parameters": []
     }
   ]
 }

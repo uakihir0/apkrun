@@ -135,6 +135,8 @@ public actor RuntimeSupervisor {
     private let image: InstalledImage
     private let instanceStore: InstanceStore
     private let options: BootOptions
+    /// Reads `audio.output` at each boot; `nil` keeps `options.soundOutput`.
+    private let soundOutputProvider: (@Sendable () -> Bool)?
     private let diagnostics: DiagnosticsContext
     private let planner: AndroidBootPlanner
     private let timeouts: BootTimeouts
@@ -202,13 +204,15 @@ public actor RuntimeSupervisor {
         guestAgentBundle: GuestAgentBundle? = nil,
         guestAgentTimeout: Duration = DevelopmentGuestAgent.defaultConnectTimeout,
         requiredAgentOutageTimeout: Duration = .seconds(30),
-        developmentDisplay: DevelopmentDisplay? = nil
+        developmentDisplay: DevelopmentDisplay? = nil,
+        soundOutputProvider: (@Sendable () -> Bool)? = nil
     ) {
         self.guestAgentBundle = guestAgentBundle
         self.developmentDisplay = developmentDisplay
         self.image = image
         self.instanceStore = instanceStore
         self.options = options
+        self.soundOutputProvider = soundOutputProvider
         self.diagnostics = diagnostics
         planner = AndroidBootPlanner(platform: platform, paths: diagnostics.paths)
         self.timeouts = timeouts
@@ -387,6 +391,11 @@ public actor RuntimeSupervisor {
             var bootOptions = options
             if let developmentDisplay {
                 bootOptions.displayDensity = developmentDisplay.mode.densityDpi
+            }
+            // `audio.output` is read before every boot; a change never
+            // touches the running VM (configuration.md §2.4).
+            if let soundOutputProvider {
+                bootOptions.soundOutput = soundOutputProvider()
             }
             plan = try planner.prepareBoot(image: image, instance: instance, options: bootOptions)
         } catch {

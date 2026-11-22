@@ -371,7 +371,16 @@ The `apkrun-perf` input scenario posts events with `CGEvent.postToPid`, which ne
 
 The harness checks `AXIsProcessTrusted()` at start and fails with a message that names this section when the permission is missing.
 
-### 6.4 Secrets and credentials
+### 6.4 Virtual audio devices
+
+The T2/T3 audio checks of #84 and #85 need virtual audio devices that only lab Macs carry ([test-strategy.md](../04-plan/test-strategy.md) §8.7, checklist C10-4/C10-5):
+
+- **Loopback output (#84).** A virtual output device whose stream is capturable, e.g. BlackHole 2ch. Install the pinned version through Homebrew (`brew install blackhole-2ch`), then select it as the macOS default output for the measurement run. The latency measure captures the click track on that device; the error bound of the capture path is stated in the run report. Restore the real output afterwards.
+- **Virtual input (#85).** A virtual input device the test signal plays into. The same BlackHole install serves it: route the signal file through the device and select it as the default input.
+
+These are runner prerequisites. A T2/T3 job on a runner without them skips with a message that names this section; on a GitHub-hosted runner they are never installed.
+
+### 6.5 Secrets and credentials
 
 | Secret | Where | Used by |
 |---|---|---|

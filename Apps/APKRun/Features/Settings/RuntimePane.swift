@@ -50,6 +50,20 @@ struct RuntimePane: View {
             }
             Section {
                 Toggle("Sound output", isOn: binding("audio.output", default: true))
+                Button("Restart Android Now…") {
+                    model.askRestartAndroid = true
+                }
+                .confirmationDialog(
+                    "Restart Android now?",
+                    isPresented: $model.askRestartAndroid
+                ) {
+                    Button("Restart Android", role: .destructive) {
+                        model.restartAndroid()
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Running apps close while Android restarts.")
+                }
             } footer: {
                 Text("Sound output applies the next time Android starts.")
             }

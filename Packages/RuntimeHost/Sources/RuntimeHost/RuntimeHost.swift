@@ -508,7 +508,8 @@ public actor RuntimeHost {
                     ),
                     diagnostics: diagnostics,
                     guestAgentBundle: guestAgent,
-                    guestAgentTimeout: .seconds(30)
+                    guestAgentTimeout: .seconds(30),
+                    soundOutputProvider: Self.soundOutputProvider(settingsFile: paths.settingsFile)
                 )
                 supervisor = runtimeSupervisor
                 observeSupervisorEvents(from: runtimeSupervisor)
@@ -5907,11 +5908,21 @@ public actor RuntimeHost {
             ),
             diagnostics: diagnostics,
             guestAgentBundle: bundle,
-            guestAgentTimeout: .seconds(30)
+            guestAgentTimeout: .seconds(30),
+            soundOutputProvider: Self.soundOutputProvider(settingsFile: paths.settingsFile)
         )
         supervisor = runtimeSupervisor
         observeSupervisorEvents(from: runtimeSupervisor)
         return runtimeSupervisor
+    }
+
+    /// Reads `audio.output` before each Android boot; a change never
+    /// touches the running VM (configuration.md §2.4, vm.md §11).
+    static func soundOutputProvider(settingsFile: URL) -> @Sendable () -> Bool {
+        {
+            GlobalSettings.load(from: settingsFile)
+                .extraValue("audio.output") != "false"
+        }
     }
 
     func packageQueryServiceInstance() -> EmbeddedPackageService {

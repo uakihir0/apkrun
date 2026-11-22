@@ -1481,3 +1481,17 @@ struct SettingsCommandTests {
         #expect(ExitCodes.code(for: failure) == 4)
     }
 }
+
+/// cli.md §4.6: restart-applied keys say so after `config set`.
+@Test func configSetAppliesNoteCoversSpecKeys() {
+    for key in [
+        "runtime.memoryGiB", "runtime.cpuCount", "audio.output",
+        "graphics.safeMode", "developer.enabled",
+    ] {
+        #expect(ConfigSetCommand.appliesNote(for: key) == "Applies the next time Android starts.")
+    }
+    #expect(
+        ConfigSetCommand.appliesNote(for: "runtime.userdataGiB")
+            == "Applies after Reset Android.")
+    #expect(ConfigSetCommand.appliesNote(for: "updates.checkIntervalHours") == nil)
+}

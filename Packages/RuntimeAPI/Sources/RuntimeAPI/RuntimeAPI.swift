@@ -26,7 +26,7 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// `SettingApplies` on `updateGlobalConfiguration` (desktop-integration.md
     /// §9). 1.31 adds `selfUpdateStatus` and `noteSelfUpdateStatus`
     /// (runtime-api.md §12.2).
-    public static let current = APIVersion(major: 1, minor: 33)
+    public static let current = APIVersion(major: 1, minor: 34)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -897,6 +897,12 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     /// User-initiated feed actions (`apkrun image check`,
     /// `apkrun image install --latest`). Reply: `WireImageApplyReply`.
     func imageFeedAction(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Health report (`apkrun doctor`). Reply: `WireHealthReport`
+    /// (runtime-api.md §13).
+    func healthReport(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Safe health repairs (`apkrun doctor --fix`). Reply:
+    /// `WireHealthReport`.
+    func applyHealthFixes(_ request: Data, reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.

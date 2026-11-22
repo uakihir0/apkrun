@@ -281,6 +281,8 @@ public enum EventPayload: Codable, Equatable, Sendable {
     case resyncRequired(EventTopic)
     /// A sequenced event on an open stream (runtime-api.md §16.4).
     case stream(StreamEnvelope)
+    /// A live health check's new result (runtime-api.md §13, topic `health`).
+    case health(HealthEvent)
     /// The daemon reported an event kind added by a newer API version.
     case unknown
 
@@ -292,6 +294,7 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case wrappers
         case integrations
         case maintenance
+        case health
         case resyncRequired
         case stream
     }
@@ -336,6 +339,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case "stream":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .stream(try payload.decode(StreamEnvelope.self, forKey: .first))
+        case "health":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .health(try payload.decode(HealthEvent.self, forKey: .first))
         default:
             self = .unknown
         }
@@ -372,6 +378,9 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case .stream(let envelope):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .stream)
             try payload.encode(envelope, forKey: .first)
+        case .health(let event):
+            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .health)
+            try payload.encode(event, forKey: .first)
         case .unknown:
             throw EncodingError.invalidValue(
                 self,

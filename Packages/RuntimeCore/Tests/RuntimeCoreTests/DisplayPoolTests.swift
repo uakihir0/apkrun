@@ -552,8 +552,8 @@ final class FakeScanoutController: ScanoutController, @unchecked Sendable {
             guest.emit(.changed(followup))
         }
         if removeBeforeAttachTimeout {
-            // Emit synchronously: a delayed removal races the pool's attach
-            // decision and intermittently lets the productless display attach.
+            // Emit right away: a sleeping task races the pool's attach timeout and flakes
+            // under load. In-order delivery still exercises the removal path.
             guest.emit(.removed(displayID: result.0))
         }
     }

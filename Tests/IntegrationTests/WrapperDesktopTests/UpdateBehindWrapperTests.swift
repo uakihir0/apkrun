@@ -119,7 +119,7 @@ final class UpdateBehindWrapperTests: XCTestCase {
         let installDeadline = Date().addingTimeInterval(120)
         var version = try installedVersion(cli)
         while version != 2, Date() < installDeadline {
-            Thread.sleep(forTimeInterval: 2)
+            try await Task.sleep(for: .seconds(2))
             version = try installedVersion(cli)
         }
         XCTAssertEqual(version, 2, "V2 did not install after the wrapper quit")

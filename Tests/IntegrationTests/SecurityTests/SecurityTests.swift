@@ -22,7 +22,8 @@ final class SecurityTests: XCTestCase {
         try await AndroidBootSession.withBoot(developerMode: false) { session in
             let readyState = await session.supervisor.state
             XCTAssertEqual(readyState, .ready)
-            XCTAssertNil(await session.supervisor.developmentADBHostPort)
+            let developmentPort = await session.supervisor.developmentADBHostPort
+            XCTAssertNil(developmentPort)
             let productPort = BootOptions.defaultADBHostPort
             XCTAssertTrue(try AndroidADBTests.listeningAddresses(port: productPort).isEmpty)
             // A netstat inside the guest must not list vsock port 5555.

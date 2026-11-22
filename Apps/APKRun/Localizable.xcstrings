@@ -1,7 +1,215 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    "(\\(code))": {
+    "%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\\(model.value("
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@"
+          }
+        }
+      }
+    },
+    "%@ %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\\(model.value(key)) \\(unit)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ %@"
+          }
+        }
+      }
+    },
+    "%@ %@ — %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\\(symbol(row.state)) \\(row.id) — \\(row.title.fallback)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ %@ — %@"
+          }
+        }
+      }
+    },
+    "%@ and its data will be removed from Android.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\\(displayName) and its data will be removed from Android."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ とそのデータは Android から削除されます。"
+          }
+        }
+      }
+    },
+    "%@ app%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\\(running) app\\(running == 1 ? "
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 個のアプリ%@"
+          }
+        }
+      }
+    },
+    "%@ is open and will be closed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\\(displayName) is open and will be closed."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ は開いているため、閉じられます。"
+          }
+        }
+      }
+    },
+    "%@ isn't installed in APKRun.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\\(missing) isn't installed in APKRun."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ は APKRun にインストールされていません。"
+          }
+        }
+      }
+    },
+    "%@ was installed, but the Mac app couldn't be created: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\\(preview.displayName) was installed, but the Mac app couldn't be created: \\(wrapperError)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ はインストールされましたが、Mac アプリを作成できませんでした: %@"
+          }
+        }
+      }
+    },
+    "%@ was installed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\\(preview.displayName) was installed."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ をインストールしました。"
+          }
+        }
+      }
+    },
+    "%@ · version %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\\(preview.packageID.rawValue) · version \\(version)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · バージョン %@"
+          }
+        }
+      }
+    },
+    "%lld": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\\(Int(((Double(model.value("
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld"
+          }
+        }
+      }
+    },
+    "%lld operation(s) running": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\\(model.operations.active.count) operation(s) running"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 件の処理を実行中"
+          }
+        }
+      }
+    },
+    "%lld recovery point(s) kept. Delete them with `apkrun image recovery-points delete`.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\\(imageStatus.recoveryPoints.count) recovery point(s) kept. Delete them with `apkrun image recovery-points delete`."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 件の復元ポイントを保持中。`apkrun image recovery-points delete` で削除できます。"
+          }
+        }
+      }
+    },
+    "(%@)": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -12,7 +220,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "(\\(code))"
+            "value": "(%@)"
           }
         }
       }
@@ -241,7 +449,7 @@
         }
       }
     },
-    "Allow “\\(prompt.displayName)” to open \\(prompt.packageID.rawValue) in APKRun?": {
+    "Allow “%@” to open %@ in APKRun?": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -252,7 +460,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "「\\(prompt.displayName)」が APKRun で \\(prompt.packageID.rawValue) を開くことを許可しますか？"
+            "value": "「%@」が APKRun で %@ を開くことを許可しますか？"
           }
         }
       }
@@ -337,7 +545,7 @@
         }
       }
     },
-    "Android cannot start, so \\(displayName) may still be installed there.": {
+    "Android cannot start, so %@ may still be installed there.": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -348,7 +556,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Android を起動できないため、\\(displayName) が残っている可能性があります。"
+            "value": "Android を起動できないため、%@ が残っている可能性があります。"
           }
         }
       }
@@ -369,7 +577,7 @@
         }
       }
     },
-    "Android version \\(package.versionName ?? ": {
+    "Android version %@": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -380,7 +588,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Android バージョン \\(package.versionName ?? "
+            "value": "Android バージョン %@"
           }
         }
       }
@@ -897,7 +1105,7 @@
         }
       }
     },
-    "Compatibility: \\(info.label)": {
+    "Compatibility: %@": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -908,7 +1116,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "互換性: \\(info.label)"
+            "value": "互換性: %@"
           }
         }
       }
@@ -1121,7 +1329,7 @@
         }
       }
     },
-    "Denied until \\(entry.until.formatted())": {
+    "Denied until %@": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -1132,7 +1340,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "\\(entry.until.formatted()) まで拒否"
+            "value": "%@ まで拒否"
           }
         }
       }
@@ -1409,7 +1617,7 @@
         }
       }
     },
-    "F-Droid's builds of \\(model.displayName) are signed by F-Droid, ": {
+    "F-Droid's builds of %@ are signed by F-Droid, ": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -1420,7 +1628,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "\\(model.displayName) の F-Droid ビルドは F-Droid が署名しており、"
+            "value": "%@ の F-Droid ビルドは F-Droid が署名しており、"
           }
         }
       }
@@ -1569,7 +1777,7 @@
         }
       }
     },
-    "Input changes apply the next time \\(model.displayName) opens.": {
+    "Input changes apply the next time %@ opens.": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -1580,7 +1788,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "入力の変更は次回 \\(model.displayName) を開いたときに適用されます。"
+            "value": "入力の変更は次回 %@ を開いたときに適用されます。"
           }
         }
       }
@@ -1729,7 +1937,7 @@
         }
       }
     },
-    "Keep app data (reinstalling \\(displayName) later restores it)": {
+    "Keep app data (reinstalling %@ later restores it)": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -1740,7 +1948,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "アプリデータを保持（後で \\(displayName) を再インストールすると復元されます）"
+            "value": "アプリデータを保持（後で %@ を再インストールすると復元されます）"
           }
         }
       }
@@ -2337,7 +2545,7 @@
         }
       }
     },
-    "Ready: \\(version)": {
+    "Ready: %@": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -2348,7 +2556,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "準備完了: \\(version)"
+            "value": "準備完了: %@"
           }
         }
       }
@@ -2497,7 +2705,7 @@
         }
       }
     },
-    "Rename ‹\\(model.displayName)›": {
+    "Rename ‹%@›": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -2508,7 +2716,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "「\\(model.displayName)」の名前を変更"
+            "value": "「%@」の名前を変更"
           }
         }
       }
@@ -2529,7 +2737,7 @@
         }
       }
     },
-    "Repair reinstalls \\(displayName) from the copy APKRun kept. ": {
+    "Repair reinstalls %@ from the copy APKRun kept. ": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -2540,12 +2748,12 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "修復は APKRun が保持したコピーから \\(displayName) を再インストールします。"
+            "value": "修復は APKRun が保持したコピーから %@ を再インストールします。"
           }
         }
       }
     },
-    "Repair “\\(displayName)”?": {
+    "Repair “%@”?": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -2556,7 +2764,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "「\\(displayName)」を修復しますか？"
+            "value": "「%@」を修復しますか？"
           }
         }
       }
@@ -2577,7 +2785,7 @@
         }
       }
     },
-    "Replaces the Mac app at \\(replacesURL.path(percentEncoded: false).replacingOccurrences(of: NSHomeDirectory(), with: ": {
+    "Replaces the Mac app at %lld": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -2588,7 +2796,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "\\(replacesURL.path(percentEncoded: false).replacingOccurrences(of: NSHomeDirectory(), with: にある Mac アプリを置き換えます"
+            "value": "%lld"
           }
         }
       }
@@ -2785,7 +2993,7 @@
         }
       }
     },
-    "Roll Back to \\(previous.versionName ?? String(previous.versionCode))…": {
+    "Roll Back to %lld…": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -2796,7 +3004,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "\\(previous.versionName ?? String(previous.versionCode)) にロールバック…"
+            "value": "%lld にロールバック…"
           }
         }
       }
@@ -2849,7 +3057,7 @@
         }
       }
     },
-    "Run this command in Terminal to put `apkrun` on your PATH:\\n\\n\\(Self.installCommand)": {
+    "Run this command in Terminal to put `apkrun` on your PATH:\\n\\n%@": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -2860,7 +3068,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ターミナルでこのコマンドを実行して `apkrun` を PATH に追加してください:\\n\\n\\(Self.installCommand)"
+            "value": "ターミナルでこのコマンドを実行して `apkrun` を PATH に追加してください:\\n\\n%@"
           }
         }
       }
@@ -3025,7 +3233,7 @@
         }
       }
     },
-    "Signed by: \\(digest.rawValue)": {
+    "Signed by: %@": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -3036,7 +3244,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "署名者: \\(digest.rawValue)"
+            "value": "署名者: %@"
           }
         }
       }
@@ -3217,7 +3425,7 @@
         }
       }
     },
-    "The last image update failed: \\(candidate?.version ?? ": {
+    "The last image update failed: %@": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -3228,7 +3436,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "前回のイメージアップデートに失敗しました: \\(candidate?.version ?? "
+            "value": "前回のイメージアップデートに失敗しました: %@"
           }
         }
       }
@@ -3393,7 +3601,7 @@
         }
       }
     },
-    "Uninstall “\\(displayName)”?": {
+    "Uninstall “%@”?": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -3404,7 +3612,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "「\\(displayName)」をアンインストールしますか？"
+            "value": "「%@」をアンインストールしますか？"
           }
         }
       }
@@ -3457,7 +3665,7 @@
         }
       }
     },
-    "Update available \\(candidate.versionName ?? ": {
+    "Update available %@": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -3468,7 +3676,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "アップデートがあります \\(candidate.versionName ?? "
+            "value": "アップデートがあります %@"
           }
         }
       }
@@ -3729,230 +3937,6 @@
         }
       }
     },
-    "\\(Int(((Double(model.value(": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(Int(((Double(model.value("
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(Int(((Double(model.value("
-          }
-        }
-      }
-    },
-    "\\(displayName) and its data will be removed from Android.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(displayName) and its data will be removed from Android."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(displayName) とそのデータは Android から削除されます。"
-          }
-        }
-      }
-    },
-    "\\(displayName) is open and will be closed.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(displayName) is open and will be closed."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(displayName) は開いているため、閉じられます。"
-          }
-        }
-      }
-    },
-    "\\(entry.from.map(String.init) ?? ": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(entry.from.map(String.init) ?? "
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(entry.from.map(String.init) ?? "
-          }
-        }
-      }
-    },
-    "\\(imageStatus.recoveryPoints.count) recovery point(s) kept. Delete them with `apkrun image recovery-points delete`.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(imageStatus.recoveryPoints.count) recovery point(s) kept. Delete them with `apkrun image recovery-points delete`."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(imageStatus.recoveryPoints.count) 件の復元ポイントを保持中。`apkrun image recovery-points delete` で削除できます。"
-          }
-        }
-      }
-    },
-    "\\(missing) isn't installed in APKRun.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(missing) isn't installed in APKRun."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(missing) は APKRun にインストールされていません。"
-          }
-        }
-      }
-    },
-    "\\(model.operations.active.count) operation(s) running": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(model.operations.active.count) operation(s) running"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(model.operations.active.count) 件の処理を実行中"
-          }
-        }
-      }
-    },
-    "\\(model.value(": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(model.value("
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(model.value("
-          }
-        }
-      }
-    },
-    "\\(model.value(key)) \\(unit)": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(model.value(key)) \\(unit)"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(model.value(key)) \\(unit)"
-          }
-        }
-      }
-    },
-    "\\(preview.displayName) was installed, but the Mac app couldn't be created: \\(wrapperError)": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(preview.displayName) was installed, but the Mac app couldn't be created: \\(wrapperError)"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(preview.displayName) はインストールされましたが、Mac アプリを作成できませんでした: \\(wrapperError)"
-          }
-        }
-      }
-    },
-    "\\(preview.displayName) was installed.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(preview.displayName) was installed."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(preview.displayName) をインストールしました。"
-          }
-        }
-      }
-    },
-    "\\(preview.packageID.rawValue) · version \\(version)": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(preview.packageID.rawValue) · version \\(version)"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(preview.packageID.rawValue) · バージョン \\(version)"
-          }
-        }
-      }
-    },
-    "\\(running) app\\(running == 1 ? ": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(running) app\\(running == 1 ? "
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(running) 個のアプリ\\(running == 1 ? "
-          }
-        }
-      }
-    },
-    "\\(symbol(row.state)) \\(row.id) — \\(row.title.fallback)": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(symbol(row.state)) \\(row.id) — \\(row.title.fallback)"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(symbol(row.state)) \\(row.id) — \\(row.title.fallback)"
-          }
-        }
-      }
-    },
     "running": {
       "localizations": {
         "en": {
@@ -3969,7 +3953,7 @@
         }
       }
     },
-    "• \\(hint)": {
+    "• %@": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -3980,7 +3964,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "• \\(hint)"
+            "value": "• %@"
           }
         }
       }
@@ -4001,7 +3985,7 @@
         }
       }
     },
-    "◐ Updating Android… \\(to)": {
+    "◐ Updating Android… %@": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -4012,7 +3996,7 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "◐ Android を更新中… \\(to)"
+            "value": "◐ Android を更新中… %@"
           }
         }
       }

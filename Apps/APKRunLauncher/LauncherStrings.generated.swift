@@ -44,15 +44,45 @@ enum LauncherStrings {
     }
 
     private static let enTable: [String: String] = [
+        "APKRun Launcher": "APKRun Launcher",
+        "Cancel": "Cancel",
+        "Frame Statistics": "Frame Statistics",
         "Images over 16 MB or 8192 pixels per side are not sent. The text still went through.": "Images over 16 MB or 8192 pixels per side are not sent. The text still went through.",
+        "Install \\(appName) \\(version) from this Mac app?": "Install \\(appName) \\(version) from this Mac app?",
+        "Install from This App": "Install from This App",
+        "Keep in Android": "Keep in Android",
+        "Open in Browser": "Open in Browser",
+        "Save to Mac": "Save to Mac",
+        "The image is too large to paste.": "The image is too large to paste.",
         "This Mac app contains the Android app. Install it to continue.": "This Mac app contains the Android app. Install it to continue.",
+        "\\(appName) could not be installed.": "\\(appName) could not be installed.",
+        "\\(packageName) wants to open a link.": "\\(packageName) wants to open a link.",
+        "frameStatistics: \\(error.localizedDescription)": "frameStatistics: \\(error.localizedDescription)",
+        "no app session": "no app session",
     ]
 
     private static let jaTable: [String: String] = [
+        "APKRun Launcher": "APKRun ランチャー",
+        "Cancel": "キャンセル",
+        "Frame Statistics": "フレーム統計",
         "Images over 16 MB or 8192 pixels per side are not sent. The text still went through.": "16 MB または一辺 8192 ピクセルを超える画像は送信されません。テキストは送信されました。",
+        "Install \\(appName) \\(version) from this Mac app?": "この Mac アプリから \\(appName) \\(version) をインストールしますか？",
+        "Install from This App": "このアプリからインストール",
+        "Keep in Android": "Android で開く",
+        "Open in Browser": "ブラウザで開く",
+        "Save to Mac": "Mac に保存",
+        "The image is too large to paste.": "画像が大きすぎてペーストできません。",
         "This Mac app contains the Android app. Install it to continue.": "この Mac アプリには Android アプリが含まれています。続けるにはインストールしてください。",
+        "\\(appName) could not be installed.": "\\(appName) をインストールできませんでした。",
+        "\\(packageName) wants to open a link.": "\\(packageName) がリンクを開こうとしています。",
+        "frameStatistics: \\(error.localizedDescription)": "frameStatistics: \\(error.localizedDescription)",
+        "no app session": "アプリセッションなし",
     ]
 
     private static let interpolatedJA: [(NSRegularExpression, String)] = [
+        (try! NSRegularExpression(pattern: "^Install\\ (.*?)\\ (.*?)\\ from\\ this\\ Mac\\ app\\?$"), "この Mac アプリから \\(appName) \\(version) をインストールしますか？"),
+        (try! NSRegularExpression(pattern: "^(.*?)\\ could\\ not\\ be\\ installed\\.$"), "\\(appName) をインストールできませんでした。"),
+        (try! NSRegularExpression(pattern: "^(.*?)\\ wants\\ to\\ open\\ a\\ link\\.$"), "\\(packageName) がリンクを開こうとしています。"),
+        (try! NSRegularExpression(pattern: "^frameStatistics:\\ (.*?)$"), "frameStatistics: \\(error.localizedDescription)"),
     ]
 }

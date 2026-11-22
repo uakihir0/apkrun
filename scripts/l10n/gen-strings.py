@@ -34,6 +34,7 @@ LAUNCHER_PATTERN = re.compile(
     r'(?:messageText|title|stringValue)\s*=\s*"((?:[^"\\]|\\.)+)"'
     r'|addButton\(withTitle:\s*"((?:[^"\\]|\\.)+)"'
     r'|alert\.informativeText\s*=\s*"((?:[^"\\]|\\.)+)"'
+    r'|LauncherStrings\.text\("((?:[^"\\]|\\.)+)"'
 )
 CLI_PATTERNS = [
     re.compile(r'(?:Output\.write(?:LogLine)?|print|FileHandle\.standardError\.write)\s*\(\s*"((?:[^"\\]|\\.)+)"'),
@@ -90,12 +91,22 @@ def unit(value):
     return {"stringUnit": {"state": "translated", "value": value}}
 
 
-def merge_catalog(path, keys, keys_files, check):
+def merge_catalog(path, keys, keys_files, check, format_keys=False):
     if os.path.exists(path):
         catalog = json.load(open(path, encoding="utf-8"))
     else:
         catalog = {"sourceLanguage": "en", "strings": {}, "version": "1.0"}
     strings = catalog.setdefault("strings", {})
+    raw_by_fmt = {}
+    if format_keys:
+        # SwiftUI keys interpolated literals as `Ready: %@`, not `Ready: \(v)`.
+        strings.update(
+            {to_format_key(k): v for k, v in list(strings.items())}
+        )
+        for old in [k for k in list(strings) if "\\(" in k]:
+            del strings[old]
+        raw_by_fmt = {to_format_key(k): k for k in keys if "\\(" in k}
+        keys = {to_format_key(k) if "\\(" in k else k for k in keys}
     corpus = "".join(
         open(p, encoding="utf-8").read()
         for p in keys_files
@@ -103,10 +114,13 @@ def merge_catalog(path, keys, keys_files, check):
     )
     missing, untranslated = [], []
     for key in sorted(keys | set(strings)):
+        raw = raw_by_fmt.get(key, key)
         entry = strings.setdefault(key, {"localizations": {}})
         locs = entry.setdefault("localizations", {})
         locs.setdefault("en", unit(key))
-        ja_value = JA["strings"].get(key)
+        ja_value = JA["strings"].get(raw)
+        if ja_value and format_keys:
+            ja_value = apply_specs(ja_value, specifiers(raw))
         if ja_value:
             current = locs.get("ja", {}).get("stringUnit", {})
             if current.get("value") != ja_value or current.get("state") != "translated":
@@ -115,7 +129,7 @@ def merge_catalog(path, keys, keys_files, check):
             pass  # a ja translation exists that is not in ja.json — keep it
         else:
             untranslated.append(key)
-        if key not in corpus:
+        if raw not in corpus:
             missing.append(key)  # catalog key no longer referenced in the tree
     if check:
         return missing, untranslated
@@ -181,6 +195,53 @@ def split_interpolated(key):
     return parts
 
 
+def interpolated_exprs(key):
+    """Return the \\( expr ) fragments of a source literal, in order."""
+    exprs, i = [], 0
+    while True:
+        start = key.find("\\(", i)
+        if start < 0:
+            break
+        depth, j = 1, start + 2
+        while j < len(key) and depth:
+            if key[j] == "(":
+                depth += 1
+            elif key[j] == ")":
+                depth -= 1
+            j += 1
+        exprs.append(key[start + 2:j - 1])
+        i = j
+    return exprs
+
+
+NUMERIC_HINT = re.compile(
+    r"Int\(|\.count|bytes|Bytes|framesPerSecond|droppedFrames|\.rounded|"
+    r"percent|versionCode"
+)
+
+
+def specifiers(key):
+    """SwiftUI format specifiers for a literal's interpolations (%lld/%@)."""
+    return [
+        "%lld" if NUMERIC_HINT.search(e) else "%@"
+        for e in interpolated_exprs(key)
+    ]
+
+
+def apply_specs(text, specs):
+    """Replace each \\(...) placeholder of text with a format specifier."""
+    parts = split_interpolated(text)
+    return "".join(
+        part + (specs[n] if n < len(specs) else "")
+        for n, part in enumerate(parts)
+    )
+
+
+def to_format_key(key):
+    """xcstrings lookup key for an interpolated literal (SwiftUI uses %@)."""
+    return apply_specs(key, specifiers(key)) if "\\(" in key else key
+
+
 def eval_literal(key):
     """Evaluate the escapes of a captured source literal to its runtime text."""
     out, i = [], 0
@@ -214,6 +275,13 @@ def emit_table(path, enum_name, keys):
         if not ja_value or "\\(" not in key:
             continue
         parts = split_interpolated(key)
+        # A pattern must have real literal evidence: a meaningful leading
+        # literal (it pins the match to message starts) or enough literal
+        # text overall. Thin keys like `\(key)=\(value)` would emit
+        # `^(.*?)=(.*?)$` and rewrite any `x=y` or JSON line.
+        leading = eval_literal(parts[0]).strip()
+        if len(leading) < 4 and sum(len(p) for p in parts) < 12:
+            continue
         pattern = "^" + "(.*?)".join(
             re.escape(eval_literal(p)) for p in parts
         ) + "$"
@@ -294,11 +362,11 @@ def main():
     problems = []
 
     app_keys = literals(UI_PATTERN, glob.glob("Apps/APKRun/**/*.swift", recursive=True))
-    stale, untr = merge_catalog("Apps/APKRun/Localizable.xcstrings", app_keys, glob.glob("Apps/APKRun/**/*.swift", recursive=True), check)
+    stale, untr = merge_catalog("Apps/APKRun/Localizable.xcstrings", app_keys, glob.glob("Apps/APKRun/**/*.swift", recursive=True), check, format_keys=True)
     problems += [("APKRun", "stale", k) for k in stale] + [("APKRun", "untranslated", k) for k in untr]
 
     bar_keys = literals(UI_PATTERN, glob.glob("Apps/APKRunMenuBar/**/*.swift", recursive=True))
-    stale, untr = merge_catalog("Apps/APKRunMenuBar/Localizable.xcstrings", bar_keys, glob.glob("Apps/APKRunMenuBar/**/*.swift", recursive=True), check)
+    stale, untr = merge_catalog("Apps/APKRunMenuBar/Localizable.xcstrings", bar_keys, glob.glob("Apps/APKRunMenuBar/**/*.swift", recursive=True), check, format_keys=True)
     problems += [("MenuBar", "stale", k) for k in stale] + [("MenuBar", "untranslated", k) for k in untr]
 
     launcher_keys = literals(LAUNCHER_PATTERN, glob.glob("Apps/APKRunLauncher/*.swift"))

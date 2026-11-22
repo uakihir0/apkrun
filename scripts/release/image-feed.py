@@ -125,6 +125,11 @@ def main() -> None:
     if not args.resign:
         if not args.image_version or not args.archive:
             p.error("--image-version and --archive are required without --resign")
+        if args.expanded_size <= 0:
+            p.error(
+                "--expanded-size is required: the downloader reserves that much"
+                " disk space before installing (§4.4)"
+            )
         archive = Path(args.archive)
         url = args.archive_url or f"{args.base_url}/{args.channel}/{archive.name}"
         images.append(entry(args, url))

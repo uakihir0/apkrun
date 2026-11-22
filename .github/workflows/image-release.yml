@@ -22,6 +22,9 @@ on:
       sequence:
         description: "the monotonic feed sequence"
         required: true
+      expanded-size:
+        description: "bytes on disk after the .aar expands (§4.4 space check)"
+        required: true
 
 permissions:
   contents: read
@@ -53,6 +56,7 @@ jobs:
           IMAGE_VERSION: ${{ inputs.image-version }}
           IMAGE_CHANNEL: ${{ inputs.channel }}
           IMAGE_SEQUENCE: ${{ inputs.sequence }}
+          IMAGE_EXPANDED_SIZE: ${{ inputs.expanded-size }}
         run: |
           mkdir -p /tmp/image-release
           cp "Images/out/${IMAGE_VERSION}.aar" /tmp/image-release/ 2>/dev/null \
@@ -62,6 +66,7 @@ jobs:
             --archive "/tmp/image-release/${IMAGE_VERSION}.aar" \
             --channel "${IMAGE_CHANNEL}" \
             --sequence "${IMAGE_SEQUENCE}" \
+            --expanded-size "${IMAGE_EXPANDED_SIZE}" \
             --key /tmp/feed-key.pem \
             --out out/feed/apkrun/images
 

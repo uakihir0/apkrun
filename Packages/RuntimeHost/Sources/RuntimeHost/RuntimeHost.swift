@@ -1417,8 +1417,15 @@ public actor RuntimeHost {
                 releaseSessionActivity(request.packageID.rawValue)
             }
             // A keepRunning close that found no session marked no background
-            // task, so nothing releases the hold later.
-            if policy != .keepRunning || !result.hadSession {
+            // task, so nothing releases the hold later — unless the package
+            // still has a retained task (a repeated keepRunning close).
+            let taskRetained: Bool
+            if result.hadSession {
+                taskRetained = true
+            } else {
+                taskRetained = await service.hasBackgroundActivity(packageID: request.packageID)
+            }
+            if policy != .keepRunning || !taskRetained {
                 releaseBackgroundTaskActivity(request.packageID.rawValue)
             }
             return result

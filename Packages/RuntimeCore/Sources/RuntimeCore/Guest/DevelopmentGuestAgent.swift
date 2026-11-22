@@ -873,9 +873,7 @@ extension DevelopmentGuestAgent: DisplayControlChannel {
     /// Applies a clear policy to one display (display-and-windowing.md §7.6):
     /// `.finishTasks` finishes its tasks; `.moveToDefaultDisplay` moves the
     /// display's tasks to display 0 behind the launcher instead.
-    public func clearDisplay(_ displayID: Int32, policy: GPClearPolicy) async throws(
-        DisplayControlFailure
-    ) {
+    public func clearDisplay(_ displayID: Int32, policy: GPClearPolicy) async throws(DisplayControlFailure) {
         guard await supervisor.state == .ready else {
             throw .unavailable
         }

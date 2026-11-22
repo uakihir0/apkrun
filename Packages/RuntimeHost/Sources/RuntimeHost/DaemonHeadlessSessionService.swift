@@ -368,8 +368,9 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             }
         case .keepRunning:
             guard latest.displayID != 0 else {
-                throw Self.wireError(for: GuestAgentFailure.operationFailed(
-                    reason: "taskAlreadyOnDefaultDisplay"))
+                throw Self.wireError(
+                    for: GuestAgentFailure.operationFailed(
+                        reason: "taskAlreadyOnDefaultDisplay"))
             }
             do throws(GuestAgentFailure) {
                 try await guestAgent.applyClearPolicy(latest.displayID, policy: .moveToDefaultDisplay)

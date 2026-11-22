@@ -14,8 +14,9 @@ import XCTest
 final class KeepRunningIdleTests: XCTestCase {
     override func setUpWithError() throws {
         try super.setUpWithError()
-        guard ProcessInfo.processInfo.environment["APKRUN_INTEGRATION_SUITE"]
-            == "android-keep-running-idle"
+        guard
+            ProcessInfo.processInfo.environment["APKRUN_INTEGRATION_SUITE"]
+                == "android-keep-running-idle"
         else {
             throw XCTSkip(
                 "KeepRunning checks run in the AndroidCustomKeepRunning test-plan configuration."

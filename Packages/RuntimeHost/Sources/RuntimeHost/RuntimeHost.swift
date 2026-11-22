@@ -5946,8 +5946,7 @@ public actor RuntimeHost {
         packagesDirectory: URL
     ) -> Set<String> {
         let globals = GlobalSettings.load(from: settingsFile)
-        let globalEnabled =
-            globals.extraValue("integrations.enabled.microphone") != "false"
+        let globalEnabled = globals.integrationEnabled("microphone")
         var packageValues: [String: String?] = [:]
         let fileManager = FileManager()
         for directory

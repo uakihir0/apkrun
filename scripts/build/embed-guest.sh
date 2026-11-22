@@ -17,7 +17,6 @@ if [[ "${APKRUN_GUEST_EMBED:-on}" == "off" ]]; then
     printf 'Guest Agent embed skipped (APKRUN_GUEST_EMBED=off).\n'
     exit 0
 fi
-
 repo_root="${SRCROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 guest_source="$repo_root/Guest/build/out"
 artifacts=(apkrun-guest.apk apkrun-guest.json)

@@ -67,7 +67,12 @@ internal class MicrophoneGate(
         apply()
     }
 
-    /** Re-applies app-ops for every recordable package; runs on PACKAGE_ADDED too (§9.2). */
+    /**
+     * Re-applies app-ops for every recordable package; runs on PACKAGE_ADDED too (§9.2).
+     * Synchronized so a PACKAGE_ADDED apply cannot finish after a newer SetMicrophoneAccess and
+     * restore a revoked allow entry: each apply snapshots `allowed` inside the lock.
+     */
+    @Synchronized
     fun apply() {
         val allowed = allowed
         for (entry in packages.recordablePackages()) {

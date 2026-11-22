@@ -928,9 +928,14 @@ extension RuntimeHost {
         try GlobalSettings.store(globals, to: paths.settingsFile)
         // A changed `integrations.enabled.*`/`defaults.*` may alter the
         // guest's forwarding allowlist; push it so titles and text stop
-        // leaving Android at once.
+        // leaving Android at once. The same change can alter the
+        // microphone allowlist (desktop-integration.md §8.2): the global
+        // switch turning off empties the set the guest enforces.
         if key.hasPrefix("integrations.") {
-            Task { await pushNotificationForwarding() }
+            Task {
+                await pushNotificationForwarding()
+                await pushMicrophoneAccess()
+            }
         }
         // `system.sync*` is owned by the configuration store (the extras
         // write above only keeps `apkrun config` read-back consistent):

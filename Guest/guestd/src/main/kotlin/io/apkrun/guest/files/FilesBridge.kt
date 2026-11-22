@@ -64,8 +64,8 @@ internal class FilesBridge(
         val size: Long,
         val sourcePackage: String,
         val displayId: Int,
-        /** Opened eagerly while the share grant lives, when no persistable grant exists. */
-        val stream: java.io.InputStream?,
+        /** Copied into our cache while the share grant lives, when no persistable grant exists. */
+        val file: File?,
         val createdAt: Long,
     )
 
@@ -148,8 +148,9 @@ internal class FilesBridge(
         displayId: Int,
     ): Long? {
         val meta = describe(uri) ?: return null
-        // A transient share grant dies with the calling activity, so without a
-        // persistable grant the stream is opened now and kept for the resolve.
+        // A transient share grant dies with the calling activity. Without a
+        // persistable grant the file is copied into our cache now, while the
+        // grant lives, so the resolve can read it at any time.
         val persisted =
             try {
                 context.contentResolver.takePersistableUriPermission(
@@ -162,20 +163,24 @@ internal class FilesBridge(
             } catch (error: Exception) {
                 false
             }
-        val stream =
-            if (persisted) {
-                null
-            } else {
-                try {
-                    context.contentResolver.openInputStream(uri)
-                } catch (error: Exception) {
-                    AgentLog.warning(
-                        "the offered file could not be opened: ${error.javaClass.simpleName}"
-                    )
-                    return null
-                }
-            }
         val offerId = offerIds.incrementAndGet()
+        var file: File? = null
+        if (!persisted) {
+            val copy = File(context.cacheDir, "exports/$offerId")
+            try {
+                copy.parentFile?.mkdirs()
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    copy.outputStream().use { output -> input.copyTo(output) }
+                } ?: return null
+                file = copy
+            } catch (error: Exception) {
+                copy.delete()
+                AgentLog.warning(
+                    "the offered file could not be copied: ${error.javaClass.simpleName}"
+                )
+                return null
+            }
+        }
         purgeExpiredExports()
         synchronized(pendingExports) {
             pendingExports[offerId] =
@@ -187,7 +192,7 @@ internal class FilesBridge(
                     size = meta.size,
                     sourcePackage = sourcePackage,
                     displayId = displayId,
-                    stream = stream,
+                    file = file,
                     createdAt = System.currentTimeMillis(),
                 )
         }
@@ -213,7 +218,7 @@ internal class FilesBridge(
                     pendingExports.filterValues { it.sourcePackage == sourcePackage }.keys
                 keys.mapNotNull { pendingExports.remove(it) }
             }
-        doomed.forEach { it.stream?.close() }
+        doomed.forEach { it.file?.delete() }
     }
 
     /** Offers that outlive the save dialog are dropped so their streams close. */
@@ -225,7 +230,7 @@ internal class FilesBridge(
                     pendingExports.filterValues { now - it.createdAt > OFFER_TTL_MS }.keys
                 keys.mapNotNull { pendingExports.remove(it) }
             }
-        expired.forEach { it.stream?.close() }
+        expired.forEach { it.file?.delete() }
     }
 
     /**
@@ -239,22 +244,24 @@ internal class FilesBridge(
             synchronized(pendingExports) { pendingExports.remove(request.offerId) }
                 ?: return ExportStart.getDefaultInstance()
         if (request.decision != ExportDecision.EXPORT_DECISION_ACCEPT) {
-            offer.stream?.close()
+            offer.file?.delete()
             return ExportStart.getDefaultInstance()
         }
         // The file is framed as it is read; it never lands in memory whole
-        // (desktop-integration.md §6.3). An eagerly opened stream survives the
-        // share activity's transient grant; a persistable grant is reopened.
+        // (desktop-integration.md §6.3). The cached copy survives the share
+        // activity's transient grant; a persistable grant is reopened.
         val stream =
-            offer.stream
-                ?: try {
-                    context.contentResolver.openInputStream(offer.uri)
-                } catch (error: Exception) {
-                    AgentLog.warning(
-                        "the offered file could not be read: ${error.javaClass.simpleName}"
-                    )
-                    null
-                } ?: return ExportStart.getDefaultInstance()
+            try {
+                (offer.file?.inputStream()
+                    ?: context.contentResolver.openInputStream(offer.uri))
+            } catch (error: Exception) {
+                offer.file?.delete()
+                AgentLog.warning(
+                    "the offered file could not be read: ${error.javaClass.simpleName}"
+                )
+                null
+            } ?: return ExportStart.getDefaultInstance()
+        offer.file?.delete()
         val transferId =
             bulkTransfers.sendStream(
                 BulkKind.BULK_KIND_FILE,

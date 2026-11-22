@@ -1,0 +1,3 @@
+エラー: io.apkrun.fixture.hellotext already has a Mac app (HelloText.app).
+ヒント: Use Update Mac App, or run: apkrun wrap io.apkrun.fixture.hellotext --replace
+コード: wrapper.wrapperExists

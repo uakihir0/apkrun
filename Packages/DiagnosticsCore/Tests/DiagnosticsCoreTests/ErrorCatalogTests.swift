@@ -47,6 +47,7 @@ import Testing
                 "guestAgentOperationFailed", "inputNotBound",
                 "busy", "operationNotFound", "notProvisioned", "hostRequirementsNotMet",
                 "developerModeRequired", "invalidConfigValue", "unknownConfigKey",
+                "unknownResult",
             ].map { "runtime.\($0)" }
             + [
                 "rendererInitFailed", "rendererOperationFailed", "rendererLost", "libraryMissing",

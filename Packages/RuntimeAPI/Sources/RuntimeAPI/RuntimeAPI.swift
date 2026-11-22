@@ -26,7 +26,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// `SettingApplies` on `updateGlobalConfiguration` (desktop-integration.md
     /// §9). 1.31 adds `selfUpdateStatus` and `noteSelfUpdateStatus`
     /// (runtime-api.md §12.2).
-    public static let current = APIVersion(major: 1, minor: 35)
+    /// 1.36 adds the buildDistributionWrapper long operation and
+    /// `DistributionWrapperResult` (wrapper.md §11).
+    public static let current = APIVersion(major: 1, minor: 36)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -756,6 +758,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func verifyWrapper(_ request: Data, reply: @escaping (Data) -> Void)
     /// Starts a wrapper generation; replies with the operation handle.
     func createWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void)
+
+    /// Starts a distribution-wrapper build (wrapper.md §11); replies with
+    /// the `distributionWrapper` operation handle.
+    func buildDistributionWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void)
 
     /// Completes a staged wrapper placement (wrapper.md §6.3).
     func placeStagedWrapper(_ request: Data, reply: @escaping (Data) -> Void)

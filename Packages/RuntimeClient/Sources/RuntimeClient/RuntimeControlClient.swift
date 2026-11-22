@@ -1168,6 +1168,79 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Starts a distribution-wrapper build on the daemon and returns the
+    /// operation handle (wrapper.md §11; runtime-api.md §10.8). API 1.36+.
+    ///
+    /// `icon` carries the optional custom icon file sent next to the
+    /// request. A transport failure is reconciled through `operationStatus`
+    /// like every other long operation.
+    public func buildDistributionWrapper(
+        _ request: DistributionWrapperRequest,
+        icon: FileHandle?,
+        operationID: OperationID
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let requestFingerprint: String
+        do {
+            requestFingerprint = try RuntimeOperationRequestFingerprint.make(for: request)
+        } catch {
+            throw .encodingFailure
+        }
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeBuildDistributionWrapperControlRequest(
+                header: APIRequestHeader(
+                    operationID: operationID.rawValue,
+                    clientKind: configuration.clientKind
+                ),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.buildDistributionWrapper(data, icon: icon)
+            let reply = try Self.decode(
+                RuntimeBuildDistributionWrapperControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let handle = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            guard handle.operationID == operationID, handle.kind == .distributionWrapper else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return handle
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            switch clientError {
+            case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply, .invalidRemoteProxy:
+                do {
+                    let snapshot = try await operationStatus(operationID)
+                    guard snapshot.operationID == operationID,
+                        snapshot.kind == .distributionWrapper,
+                        snapshot.packageID == request.packageID,
+                        snapshot.requestFingerprint == requestFingerprint
+                    else {
+                        throw RuntimeControlClientError.operationResultUnknown(
+                            operation: "buildDistributionWrapper"
+                        )
+                    }
+                    return OperationHandle(
+                        operationID: snapshot.operationID,
+                        parent: snapshot.parent,
+                        kind: snapshot.kind
+                    )
+                } catch {
+                    throw RuntimeControlClientError.operationResultUnknown(
+                        operation: "buildDistributionWrapper"
+                    )
+                }
+            default:
+                throw clientError
+            }
+        }
+    }
+
     /// Completes a staged wrapper placement after the client moved the
     /// bundle into the protected folder (wrapper.md §6.3). API 1.18+.
     public func placeStagedWrapper(
@@ -3339,6 +3412,9 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
 
     /// Starts a wrapper generation; the reply carries the operation handle.
     func createWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data
+    /// Starts a distribution build; the reply carries the operation handle
+    /// (wrapper.md §11).
+    func buildDistributionWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data
     /// Finishes a staged wrapper placement (wrapper.md §6.3).
     func placeStagedWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Returns the registry row of one package's wrapper (runtime-api.md §10.2).
@@ -4147,6 +4223,24 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.createWrapper(request, icon: icon) { response in finish(.success(response)) }
+        }
+    }
+
+    /// Starts a distribution build; the reply carries the operation handle
+    /// (wrapper.md §11).
+    func buildDistributionWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.buildDistributionWrapper(request, icon: icon) { response in
+                finish(.success(response))
+            }
         }
     }
 

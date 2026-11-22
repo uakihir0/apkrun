@@ -2594,6 +2594,336 @@ public actor RuntimeHost {
         return Self.wrapperInfo(for: entry, packageID: request.packageID)
     }
 
+    /// Starts a `distributionWrapper` operation (wrapper.md §11): a
+    /// portable bundle Developer ID signed and optionally notarized,
+    /// delivered to `outputDirectory` without placement or registration.
+    func buildDistributionWrapper(
+        _ request: DistributionWrapperRequest,
+        icon: FileHandle?,
+        operationID requestedID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) throws(RuntimeWireError) -> OperationHandle {
+        try assertMaintenanceGateAllowsWork()
+        guard request.redistributionConfirmed else {
+            throw .runtime(
+                "malformedRequest",
+                message: "Redistribution of the APK must be confirmed."
+            )
+        }
+        guard !request.identity.isEmpty else {
+            throw .runtime(
+                "malformedRequest",
+                message: "A signing identity is required."
+            )
+        }
+        guard !request.notarize || request.keychainProfile != nil else {
+            throw .runtime(
+                "malformedRequest",
+                message: "Notarization needs a keychain profile."
+            )
+        }
+
+        let requestPayload: Data
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            requestPayload = try encoder.encode(request)
+        } catch {
+            throw .runtime(
+                "malformedRequest",
+                message: "APKRun's background service couldn't read the request."
+            )
+        }
+        if let existing = trackedOperations[requestedID] {
+            guard existing.handle.kind == .distributionWrapper,
+                existing.requestPayload == requestPayload
+            else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The operation ID is already being used for a different request."
+                )
+            }
+            return existing.handle
+        }
+        // Same serialization as wrapperCreate: a distribution build reads
+        // the package's bootstrap set while a create may regenerate it.
+        guard wrapperCreationsInFlight.insert(request.packageID.rawValue).inserted else {
+            throw Self.packageOperationInProgressError
+        }
+        do {
+            try beginLifecycleOperation()
+        } catch {
+            wrapperCreationsInFlight.remove(request.packageID.rawValue)
+            throw Self.sessionWireError(for: error)
+        }
+
+        let handle = OperationHandle(operationID: requestedID, kind: .distributionWrapper)
+        let snapshot = OperationSnapshot(
+            operationID: requestedID,
+            kind: .distributionWrapper,
+            packageID: request.packageID,
+            requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(
+                stage: "signing",
+                message: "Building the distributable Mac app…"
+            )
+        )
+        trackedOperations[requestedID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: requestPayload,
+            snapshot: snapshot,
+            isCancellable: false,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: requestedID)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            if let diagnosticsID = DiagnosticsCore.OperationID(wire: requestedID.wireValue) {
+                let context = OperationContext(operationID: diagnosticsID)
+                await OperationContext.$current.withValue(context) {
+                    await self.runDistributionWrapperOperation(
+                        request,
+                        icon: icon,
+                        operationID: requestedID
+                    )
+                }
+            } else {
+                await self.runDistributionWrapperOperation(
+                    request, icon: icon, operationID: requestedID)
+            }
+        }
+        trackedOperations[requestedID]?.task = task
+        return handle
+    }
+
+    /// Runs a `distributionWrapper` operation to its terminal state.
+    private func runDistributionWrapperOperation(
+        _ request: DistributionWrapperRequest,
+        icon: FileHandle?,
+        operationID: WireOperationID
+    ) async {
+        defer {
+            wrapperCreationsInFlight.remove(request.packageID.rawValue)
+            finishLifecycleOperation()
+        }
+        do {
+            let result = try await performBuildDistributionWrapper(
+                request, icon: icon, operationID: operationID)
+            finishOperation(operationID, result: .succeeded(.distributionWrapper(result)))
+            logger?.notice(
+                "Distribution wrapper built for \(request.packageID.rawValue, .public)")
+        } catch {
+            if Task.isCancelled {
+                finishOperation(operationID, result: .cancelled)
+                return
+            }
+            let wireError = Self.operationWireError(for: error)
+            finishOperation(operationID, result: .failed(wireError))
+            logger?.error("Distribution wrapper build failed", errorCode: wireError.code)
+        }
+    }
+
+    /// Builds the signed, optionally notarized products for a
+    /// `distributionWrapper` operation (wrapper.md §11). On a deferred
+    /// write the staging directory keeps `<name>.app`, `<name>.zip`, and
+    /// `result.json` for the client to place.
+    private func performBuildDistributionWrapper(
+        _ request: DistributionWrapperRequest,
+        icon: FileHandle?,
+        operationID: WireOperationID
+    ) async throws(RuntimeWireError) -> DistributionWrapperResult {
+        guard let launcher = launcherBuild() else {
+            throw Self.wrapperWireError(for: .launcherTemplateInvalid("missing"))
+        }
+        let registry = await wrapperRegistryInstance()
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        try await attachPackageQueriesIfRuntimeIsReady(to: service)
+        let details: RuntimePackageDetails
+        do {
+            details = try await service.packageInfo(
+                RuntimePackageRequest(packageID: request.packageID))
+        } catch {
+            guard error.code == "store.packageNotFound" else { throw error }
+            throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+        }
+        guard details.summary.managed == true, details.summary.state == .installed else {
+            throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+        }
+        let iconSource: WrapperIconSource
+        switch request.icon {
+        case .custom:
+            let data = icon.flatMap { try? $0.readToEnd() }
+            guard let data, !data.isEmpty else {
+                throw Self.wrapperWireError(for: .customIconInvalid(.unreadable))
+            }
+            let customURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("apkrun-custom-icon-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: customURL) }
+            do {
+                try data.write(to: customURL)
+                iconSource = .rendered(try IconComposer.customIconData(at: customURL))
+            } catch let failure as WrapperFailure {
+                throw Self.wrapperWireError(for: failure)
+            } catch {
+                throw Self.wrapperWireError(for: .customIconInvalid(.unreadable))
+            }
+        case .android, .none:
+            if let rendered = await service.renderedIconLayers(for: request.packageID),
+                let composed = Self.composedIcon(
+                    kind: rendered.manifest.kind, layers: rendered.layers)
+            {
+                iconSource = .rendered(composed.icns)
+            } else {
+                iconSource = .placeholder
+            }
+        }
+        // Distribution wrappers are portable: the bootstrap set comes from
+        // the installed package (wrapper.md §11 step 1).
+        guard let packageID = PackageID(rawValue: request.packageID.rawValue) else {
+            throw .runtime("malformedRequest", message: "The package ID is not readable.")
+        }
+        let bootstrap: BootstrapSet
+        do {
+            let installed = try await service.store.bootstrapSet(for: packageID)
+            bootstrap = Self.bootstrapSet(from: installed.set, in: installed.directory)
+        } catch {
+            throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+        }
+        let configuration = WrapperConfiguration(
+            packageID: request.packageID,
+            displayName: request.displayName ?? details.summary.displayName
+                ?? request.packageID.rawValue,
+            icon: iconSource,
+            window: WindowDefaults(),
+            updates: WrapperUpdateDefaults(
+                authority: details.summary.updateAuthority == .apkrun ? .apkrun : .manual,
+                mode: .automatic,
+                provider: nil),
+            kind: .distribution,
+            bootstrap: bootstrap
+        )
+        let builder = DistributionWrapperBuilder()
+        do {
+            try builder.precheck(identity: request.identity)
+        } catch {
+            throw Self.wrapperWireError(for: error)
+        }
+        let stagingToken = UUID().uuidString
+        let stagingDirectory = paths.wrapperStagingDirectory
+            .appendingPathComponent(stagingToken, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(
+                at: stagingDirectory, withIntermediateDirectories: true)
+        } catch {
+            throw Self.wrapperWireError(for: .destinationNotWritable(request.outputDirectory))
+        }
+        let fileName = WrapperFileName.sanitize(
+            displayName: request.fileName ?? configuration.displayName,
+            packageID: configuration.packageID.rawValue)
+        guard !fileName.isEmpty else {
+            throw Self.wrapperWireError(for: .invalidName(configuration.displayName))
+        }
+        let bundleID = BundleIDMapper.map(configuration.packageID)
+        let generator = AppWrapperGenerator(
+            environment: AppWrapperGenerator.Environment(
+                launcher: launcher,
+                registry: registry,
+                installer: WrapperInstaller(sink: diagnostics?.logSink),
+                stagingRoot: paths.wrapperStagingDirectory
+            )
+        )
+        let generation = WrapperGenerationRequest(
+            configuration: configuration,
+            destination: .directory(stagingDirectory),
+            fileName: fileName,
+            replace: .sameWrapper
+        )
+        let stagedBundle: URL
+        do {
+            stagedBundle = try await generator.stageForDistribution(
+                generation, stagingDirectory: stagingDirectory, fileName: fileName)
+        } catch {
+            throw Self.wrapperWireError(for: error)
+        }
+        let signed: (cdhash: String, teamID: String?)
+        do {
+            signed = try builder.sign(
+                bundleURL: stagedBundle, bundleID: bundleID, identity: request.identity)
+        } catch let failure as WrapperFailure {
+            throw Self.wrapperWireError(for: failure)
+        } catch {
+            throw .runtime("internal", message: "APKRun couldn't sign the Mac app.")
+        }
+        var notarized = false
+        var submissionID: String?
+        var assessment: String?
+        var zipURL: URL
+        do {
+            if request.notarize {
+                let submission = try await builder.notarize(
+                    bundleURL: stagedBundle,
+                    name: fileName,
+                    keychainProfile: request.keychainProfile ?? "",
+                    workDirectory: stagingDirectory)
+                zipURL = submission.zipURL
+                submissionID = submission.submissionID
+                assessment = submission.assessment
+                notarized = true
+            } else {
+                zipURL = try builder.makeZip(
+                    bundleURL: stagedBundle, name: fileName, workDirectory: stagingDirectory)
+            }
+        } catch let failure as WrapperFailure {
+            throw Self.wrapperWireError(for: failure)
+        } catch {
+            throw .runtime("internal", message: "APKRun couldn't notarize the Mac app.")
+        }
+        let result = DistributionWrapperResult(
+            appURL: request.outputDirectory.appendingPathComponent("\(fileName).app"),
+            zipURL: request.outputDirectory.appendingPathComponent("\(fileName).zip"),
+            bundleID: bundleID,
+            cdhash: signed.cdhash,
+            teamID: signed.teamID,
+            notarized: notarized,
+            submissionID: submissionID,
+            assessment: assessment
+        )
+        // The staged result.json lets the client finish a deferred
+        // placement without a second wire call (wrapper.md §11 note).
+        let resultURL = stagingDirectory.appendingPathComponent("result.json")
+        try? JSONEncoder().encode(result).write(to: resultURL)
+        do {
+            try FileManager.default.createDirectory(
+                at: request.outputDirectory, withIntermediateDirectories: true)
+            try Self.moveDistributionProduct(stagedBundle, to: result.appURL)
+            try Self.moveDistributionProduct(zipURL, to: result.zipURL)
+            try? FileManager.default.removeItem(at: stagingDirectory)
+        } catch {
+            throw Self.wrapperWireError(
+                for: .destinationNotAccessible(
+                    request.outputDirectory, stagingToken: stagingToken))
+        }
+        return result
+    }
+
+    /// Moves a staged distribution product into the output directory,
+    /// crossing volumes when `moveItem` cannot.
+    private static func moveDistributionProduct(_ source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: destination.path) {
+            try fm.removeItem(at: destination)
+        }
+        do {
+            try fm.moveItem(at: source, to: destination)
+        } catch {
+            try fm.copyItem(at: source, to: destination)
+            try? fm.removeItem(at: source)
+        }
+    }
+
     /// Starts a `wrapperRefresh` operation (wrapper.md §9.3).
     func refreshWrapper(
         packageID: RuntimePackageID,

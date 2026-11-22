@@ -233,3 +233,34 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
         #expect(requestHeader.clientKind == .cli)
     }
 }
+
+@Test func distributionWrapperDTOsRoundTrip() throws {
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let request = DistributionWrapperRequest(
+        packageID: packageID,
+        outputDirectory: URL(fileURLWithPath: "/tmp/out"),
+        fileName: "Hello",
+        displayName: "Hello Text",
+        icon: nil,
+        identity: "Developer ID Application: APKRun Tests (ABCDE12345)",
+        notarize: true,
+        keychainProfile: "apkrun-notary",
+        redistributionConfirmed: true
+    )
+    let result = DistributionWrapperResult(
+        appURL: URL(fileURLWithPath: "/tmp/out/Hello.app"),
+        zipURL: URL(fileURLWithPath: "/tmp/out/Hello.zip"),
+        bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+        cdhash: String(repeating: "ab", count: 20),
+        teamID: "ABCDE12345",
+        notarized: true,
+        submissionID: "SUB-1",
+        assessment: "source=Notarized Developer ID"
+    )
+
+    #expect(try roundTrip(request) == request)
+    #expect(try roundTrip(result) == result)
+    #expect(
+        try roundTrip(OperationOutput.distributionWrapper(result))
+            == .distributionWrapper(result))
+}

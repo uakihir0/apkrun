@@ -176,6 +176,17 @@ targets:
           - "$(SRCROOT)/Packages/DiagnosticsCore/Sources/DiagnosticsCore/Build/ComponentManifest.swift"
         outputFiles:
           - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/components.json"
+      - name: Embed Compatibility Database
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          /usr/bin/ditto \
+            "$SRCROOT/Tests/Compatibility/database/compatibility.json" \
+            "$TARGET_BUILD_DIR/$WRAPPER_NAME/Contents/Resources/compatibility.json"
+        inputFiles:
+          - "$(SRCROOT)/Tests/Compatibility/database/compatibility.json"
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/compatibility.json"
     scheme:
       testTargets:
         - APKRunTests

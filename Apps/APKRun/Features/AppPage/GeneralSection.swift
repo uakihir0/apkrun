@@ -59,6 +59,19 @@ struct GeneralSection: View {
                         "\(PackageDetailModel.sizeText(details.artifactBytes)) on your Mac"
                         + androidDataText(details))
             }
+            if let compatibility = model.details?.compatibility {
+                // §10.3: the shipped database's verdict and issues.
+                LabeledContent("Compatibility") {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(compatibility.label)
+                        ForEach(compatibility.issues, id: \.id) { issue in
+                            Text(issue.title["en"] ?? issue.id)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
         }
         .fileImporter(
             isPresented: $iconImporter,

@@ -27,8 +27,10 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// §9). 1.31 adds `selfUpdateStatus` and `noteSelfUpdateStatus`
     /// (runtime-api.md §12.2).
     /// 1.36 adds the buildDistributionWrapper long operation and
-    /// `DistributionWrapperResult` (wrapper.md §11).
-    public static let current = APIVersion(major: 1, minor: 36)
+    /// `DistributionWrapperResult` (wrapper.md §11). 1.37 adds
+    /// RuntimeCompatibilityInfo on package details and import previews
+    /// (#91).
+    public static let current = APIVersion(major: 1, minor: 37)
 
     /// The incompatible protocol generation.
     public let major: Int

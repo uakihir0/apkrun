@@ -161,6 +161,13 @@ struct PackageInfoCommand: AsyncParsableCommand {
                             + "\(staged.versionName.map(PackageQueryOutput.safeTerminalText) ?? "unknown") "
                             + "(\(staged.versionCode)), \(staged.size) bytes")
                 }
+                if let compatibility = details.compatibility {
+                    Output.write("Compatibility: \(compatibility.label)")
+                    for issue in compatibility.issues {
+                        Output.write(
+                            "  - \(PackageQueryOutput.safeTerminalText(issue.title["en"] ?? issue.id))")
+                    }
+                }
             }
         } catch let failure as RuntimeWireError {
             throw failure

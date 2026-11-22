@@ -6320,7 +6320,15 @@ public actor RuntimeHost {
         if let packageQueryService {
             return packageQueryService
         }
-        let service = EmbeddedPackageService(paths: paths)
+        // apkrund lives in Contents/Helpers, so the bundled
+        // compatibility database resolves to
+        // Contents/Resources/compatibility.json (diagnostics.md §10.1).
+        let service = EmbeddedPackageService(
+            paths: paths,
+            compatibilityDatabase: CompatibilityDatabase.load(
+                from: CompatibilityDatabase.bundleURL(
+                    executableURL: Bundle.main.executableURL
+                        ?? URL(fileURLWithPath: CommandLine.arguments[0]))))
         Task { [weak self] in
             await service.setIconChangeHandler { [weak self] packageID in
                 guard let wireID = RuntimePackageID(rawValue: packageID.rawValue) else { return }

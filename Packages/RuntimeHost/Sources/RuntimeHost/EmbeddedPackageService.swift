@@ -57,6 +57,10 @@ public actor EmbeddedPackageService: RuntimeService {
     private var packageStoreMutationsInProgress = Set<String>()
     private var packageLaunchesInProgress: [String: Int] = [:]
 
+    /// The bundled compatibility database (diagnostics.md §10). Empty
+    /// when the file is absent — it advises, it never blocks.
+    private let compatibilityDatabase: CompatibilityDatabase
+
     /// Creates an embedded package service rooted at APKRun's persistent package directory.
     public init(
         paths: APKRunPaths = APKRunPaths(allowingHomeOverride: true),
@@ -64,9 +68,11 @@ public actor EmbeddedPackageService: RuntimeService {
         hostFreeSpace: (@Sendable (URL) -> Int64)? = nil,
         sessionService: (any RuntimeSessionService)? = nil,
         importVerifier: @escaping PackageStore.ImportVerifier = PackageStore.strictImportVerifier,
-        runtimeAccess: (any StoreRuntimeAccess)? = nil
+        runtimeAccess: (any StoreRuntimeAccess)? = nil,
+        compatibilityDatabase: CompatibilityDatabase = .empty
     ) {
         self.paths = paths
+        self.compatibilityDatabase = compatibilityDatabase
         self.inspector = inspector
         self.hostFreeSpace = hostFreeSpace ?? Self.availableHostSpace
         self.sessionService = sessionService ?? EmbeddedRuntimeService()
@@ -222,6 +228,10 @@ public actor EmbeddedPackageService: RuntimeService {
             let relation = try await relation(for: preview)
             var result = try Self.runtimePreview(from: preview, relation: relation)
             result.suggestedProvider = fdroidProviderSuggestion(for: result)
+            result.compatibility = compatibilityInfo(
+                packageID: result.packageID,
+                signerDigests: result.signerDigests,
+                versionCode: result.versionCode)
             importPreviews[preview.ticket] = result
             return result
         } catch {
@@ -517,19 +527,88 @@ public actor EmbeddedPackageService: RuntimeService {
                 throw PackageStoreFailure.packageNotFound
             }
             let settings = try await store.packageSettings(for: id) ?? PackageSettings()
-            return wireSettings(settings)
+            return wireSettings(settings, recommendations: try await recommendations(for: id))
         } catch {
             throw Self.wireError(for: error)
         }
     }
 
+    /// The `recommendedSettings` of the entry matching the record
+    /// (diagnostics.md §10.3); empty when the app is unknown.
+    private func recommendations(for packageID: PackageID) async throws -> [String: String] {
+        guard let record = try await record(for: packageID) else { return [:] }
+        return compatibilityDatabase.match(
+            packageID: record.packageId.rawValue,
+            signerDigests: record.signingCertificates.map(\.rawValue),
+            versionCode: record.versionCode
+        )?.recommendedSettings ?? [:]
+    }
+
+    /// The record of a managed package, `nil` when unmanaged.
+    private func record(for packageID: PackageID) async throws -> PackageRecord? {
+        try await store.listManagedPackages().first { $0.packageId == packageID }
+    }
+
+    /// The wire compatibility verdict of an entry (§10.3), `nil` without
+    /// a match. The database is advice and never blocks an install.
+    private func compatibilityInfo(
+        packageID: RuntimePackageID,
+        signerDigests: [RuntimeSHA256Digest],
+        versionCode: RuntimeVersionCode
+    ) -> RuntimeCompatibilityInfo? {
+        guard
+            let entry = compatibilityDatabase.match(
+                packageID: packageID.rawValue,
+                signerDigests: signerDigests.map(\.rawValue),
+                versionCode: versionCode
+            )
+        else { return nil }
+        return Self.runtimeCompatibilityInfo(for: entry)
+    }
+
+    /// The wire compatibility verdict of a store record (§10.3).
+    private func compatibilityInfo(for record: PackageRecord) -> RuntimeCompatibilityInfo? {
+        guard
+            let entry = compatibilityDatabase.match(
+                packageID: record.packageId.rawValue,
+                signerDigests: record.signingCertificates.map(\.rawValue),
+                versionCode: record.versionCode
+            )
+        else { return nil }
+        return Self.runtimeCompatibilityInfo(for: entry)
+    }
+
+    /// Maps a database entry to its wire form with the §4 display label.
+    private static func runtimeCompatibilityInfo(
+        for entry: CompatibilityEntry
+    ) -> RuntimeCompatibilityInfo {
+        let label: String
+        switch entry.level {
+        case .works: label = "Works"
+        case .compatibilityMode: label = "Works with limitations"
+        case .unsupported: label = "Unsupported"
+        }
+        return RuntimeCompatibilityInfo(
+            level: entry.level.rawValue,
+            label: label,
+            issues: entry.issues.map {
+                RuntimeCompatibilityIssue(
+                    id: $0.id, title: $0.title, workaround: $0.workaround)
+            },
+            recommendedKeys: entry.recommendedSettings.keys.sorted())
+    }
+
     /// Resolves every §3.1 key for the wire (configuration.md §3.2):
     /// global switches of `settings.json` win, then the stored value,
     /// then a compatibility recommendation (#91), then the default.
-    private func wireSettings(_ settings: PackageSettings) -> PackageSettingsWire {
+    private func wireSettings(
+        _ settings: PackageSettings,
+        recommendations: [String: String] = [:]
+    ) -> PackageSettingsWire {
         let global = GlobalSettings.load(from: paths.settingsFile)
         let resolver = PackageSettingsResolver(
-            globalIntegrationsEnabled: global.integrationsEnabled)
+            globalIntegrationsEnabled: global.integrationsEnabled,
+            recommendations: recommendations)
         let entries = PackageSettingsSchema.keys.map { key -> PackageSettingWire in
             let stored = settings.value(key.name)
             let recommended = resolver.isRecommended(key.name, in: settings)
@@ -582,7 +661,7 @@ public actor EmbeddedPackageService: RuntimeService {
                 patch[key] = .some(nil)
             }
             let settings = try await store.updatePackageSettings(id, patch: patch)
-            return wireSettings(settings)
+            return wireSettings(settings, recommendations: try await recommendations(for: id))
         } catch {
             throw Self.wireError(for: error)
         }
@@ -1096,7 +1175,8 @@ public actor EmbeddedPackageService: RuntimeService {
                         versionName: $0.versionName,
                         size: $0.size,
                         fileCount: $0.fileCount)
-                }
+                },
+                compatibility: compatibilityInfo(for: record)
             )
         } catch {
             throw Self.wireError(for: error)

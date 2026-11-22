@@ -27,3 +27,4 @@ Tests/Fixtures/AndroidApps/.kotlin/
 Tests/Fixtures/AndroidApps/build/
 Tests/Fixtures/AndroidApps/**/build/
 .claude/settings.local.json
+Tests/Compatibility/out/

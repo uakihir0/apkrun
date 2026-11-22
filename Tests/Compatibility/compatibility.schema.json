@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://apkrun.io/schemas/compatibility.schema.json",
+  "title": "APKRun compatibility database (diagnostics.md §10.2)",
+  "type": "object",
+  "required": ["schemaVersion", "generatedAt", "entries"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "entries": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["packageID", "level", "issues", "recommendedSettings", "testedWith", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "packageID": { "type": "string", "minLength": 1 },
+        "signerDigests": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "minItems": 1
+        },
+        "versionCodes": {
+          "type": "object",
+          "required": ["min", "max"],
+          "additionalProperties": false,
+          "properties": {
+            "min": { "type": ["integer", "null"], "minimum": 0 },
+            "max": { "type": ["integer", "null"], "minimum": 0 }
+          }
+        },
+        "level": { "type": "string", "enum": ["works", "compatibilityMode", "unsupported"] },
+        "issues": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/issue" }
+        },
+        "recommendedSettings": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "anyOf": [
+              { "pattern": "^window\\." },
+              { "pattern": "^input\\." },
+              { "pattern": "^integrations\\." },
+              { "const": "update.healthCheckLaunch" }
+            ]
+          },
+          "patternProperties": {
+            "^integrations\\.": { "const": false }
+          }
+        },
+        "testedWith": {
+          "type": "object",
+          "required": ["apkrun", "image", "date"],
+          "additionalProperties": false,
+          "properties": {
+            "apkrun": { "type": "string", "minLength": 1 },
+            "image": { "type": "string", "minLength": 1 },
+            "date": { "type": "string", "format": "date" }
+          }
+        },
+        "source": { "type": "string", "enum": ["lab", "report"] }
+      }
+    },
+    "issue": {
+      "type": "object",
+      "required": ["id", "title"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "title": { "$ref": "#/$defs/localized" },
+        "workaround": { "$ref": "#/$defs/localized" }
+      }
+    },
+    "localized": {
+      "type": "object",
+      "required": ["en", "ja"],
+      "additionalProperties": false,
+      "properties": {
+        "en": { "type": "string", "minLength": 1 },
+        "ja": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

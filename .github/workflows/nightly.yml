@@ -130,12 +130,16 @@ jobs:
         run: scripts/bootstrap
       - name: Verify corpus signer digests against apksigner
         run: scripts/dev/verify-corpus.sh
+      - name: Run the compatibility corpus
+        run: Tests/Compatibility/run-compatibility.sh
       - name: Upload corpus evidence
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: corpus-${{ github.sha }}
-          path: build/corpus/
+          path: |
+            build/corpus/
+            Tests/Compatibility/out/
           if-no-files-found: warn
           retention-days: 30
 

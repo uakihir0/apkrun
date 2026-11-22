@@ -30,7 +30,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// `DistributionWrapperResult` (wrapper.md §11). 1.37 adds
     /// RuntimeCompatibilityInfo on package details and import previews
     /// (#91).
-    public static let current = APIVersion(major: 1, minor: 37)
+    public static let current = APIVersion(major: 1, minor: 38)
+    /// 1.38 adds `StartRuntimeRequest.hold`, which keeps a CLI start
+    /// activity until its control connection closes (runtime-daemon.md §5).
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -309,10 +311,15 @@ public struct RuntimeStatusRequest: Codable, Equatable, Sendable {
 public struct StartRuntimeRequest: Codable, Equatable, Sendable {
     /// The request metadata.
     public let header: APIRequestHeader
+    /// Keeps the runtime active until the requesting client disconnects.
+    ///
+    /// Nil is equivalent to false and preserves compatibility with clients that omit this field.
+    public let hold: Bool?
 
     /// Creates a start request.
-    public init(header: APIRequestHeader) {
+    public init(header: APIRequestHeader, hold: Bool? = nil) {
         self.header = header
+        self.hold = hold
     }
 }
 

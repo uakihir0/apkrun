@@ -15,7 +15,7 @@ enum LocaleTimeReconnectReadiness {
                 return
             case .stopped, .incompatible, .unavailable:
                 return
-            case .connecting, .reconnecting, .unresponsive:
+            case .connecting, .reconnecting, .unresponsive, .paused:
                 continue
             }
         }

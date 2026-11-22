@@ -163,6 +163,7 @@ The tasks in working order ([../roadmap.md](../roadmap.md) §1.3). A task can st
 | #78 | Home and store UI | M7 | #49 |  |
 | #79 | Add flow | M7 | #78, #74 |  |
 | #80 | Per-app settings | M7 | #78, #40, #75 |  |
+| #116 | Keep-running task lifetime and idle activity | M7 | #69, #70, #80 |  |
 | #90 | Portable wrappers | M7 | #76 |  |
 | #52 | F-Droid provider | M8 | #51 |  |
 | #53 | GitHub provider | M8 | #51 |  |

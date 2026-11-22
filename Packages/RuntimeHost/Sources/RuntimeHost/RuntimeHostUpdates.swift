@@ -1080,16 +1080,17 @@ extension RuntimeHost {
 
         // A non-checkOnly run can install: hold the package-mutation guard so
         // stop/restart/reset cannot interrupt a stage→install transaction.
+        var mutationToken: UUID?
         if !checkOnly {
             do {
-                try beginPackageMutation()
+                mutationToken = try await beginPackageMutation()
             } catch {
                 finishOperation(
                     operationID, result: .failed(Self.sessionWireError(for: error)))
                 throw Self.sessionWireError(for: error)
             }
         }
-        defer { if !checkOnly { finishPackageMutation() } }
+        defer { if let mutationToken { finishPackageMutation(mutationToken) } }
 
         let results = await service.checkPackages(
             selected, context: service.providerContext(userInitiated: true),
@@ -1212,12 +1213,13 @@ extension RuntimeHost {
         }
         // A rollback is a package mutation: it blocks stop/restart/reset
         // like installs and uninstalls do (update-system.md §8.5).
+        let mutationToken: UUID
         do {
-            try beginPackageMutation()
+            mutationToken = try await beginPackageMutation()
         } catch {
             throw Self.sessionWireError(for: error)
         }
-        defer { finishPackageMutation() }
+        defer { finishPackageMutation(mutationToken) }
         do {
             switch try await service.rollbackPackage(
                 packageID: packageID, allowDataLoss: allowDataLoss)
@@ -1623,12 +1625,12 @@ extension RuntimeHost {
                 // The host's package-mutation guard makes a stop, restart,
                 // or reset wait for a queued install resuming without its
                 // original client request.
-                try await self.beginPackageMutation()
+                let token = try await self.beginPackageMutation()
                 let inner = await self.updateIdleController.assertActivity(.storeOperation)
                 return UpdateActivityAssertion {
                     inner.release()
                     Task {
-                        await self.finishPackageMutation()
+                        await self.finishPackageMutation(token)
                         await self.stopUpdateBootedRuntimeIfIdle()
                     }
                 }
@@ -1854,14 +1856,15 @@ extension RuntimeHost {
         // An update is a package mutation: it blocks stop/restart/reset like
         // installs and uninstalls do, so Android cannot be torn down while a
         // stage→install transaction is open.
+        let mutationToken: UUID
         do {
-            try beginPackageMutation()
+            mutationToken = try await beginPackageMutation()
         } catch {
             finishOperation(
                 operationID, result: .failed(Self.sessionWireError(for: error)))
             throw Self.sessionWireError(for: error)
         }
-        defer { finishPackageMutation() }
+        defer { finishPackageMutation(mutationToken) }
 
         let outcome: WireUpdateOutcome?
         do {

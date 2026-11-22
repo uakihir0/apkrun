@@ -220,7 +220,7 @@ extension RuntimeHost {
             case .stopped: .stopped
             case .ready: .ready
             case .failed: .failed
-            case .booting, .stopping: .other
+            case .booting, .stopping, .suspended: .other
             }
         return HealthVerdictContext(
             runtimeState: state,

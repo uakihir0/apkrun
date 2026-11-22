@@ -185,7 +185,7 @@ public final class RuntimeXPCServer: @unchecked Sendable {
     }
 }
 
-private enum RuntimeXPCConnectionKind: Equatable {
+enum RuntimeXPCConnectionKind: Equatable {
     case broker
     case control
     case maintenance
@@ -197,6 +197,8 @@ private struct RuntimeXPCConnectionRecord {
     let controlListener: RuntimeXPCControlListener?
     let outputQueue: DispatchQueue
     var activeRequests = 0
+    var activityAssertion: RuntimeActivityAssertion?
+    var activityHoldTokens = Set<UUID>()
 }
 
 private struct RuntimeXPCControlReservation {
@@ -294,7 +296,7 @@ private enum RuntimeXPCRequestAdmission {
     case rejected(RuntimeXPCRequestRejection)
 }
 
-private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
+final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
     private let lock = NSLock()
     private let eventHub: RuntimeEventHub
     /// Extra cleanup run after a connection is invalidated (e.g. stream teardown).
@@ -370,13 +372,59 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         return connections[connectionID]?.outputQueue
     }
 
+    func holdActivity(
+        _ assertion: RuntimeActivityAssertion,
+        for connectionID: ObjectIdentifier
+    ) -> UUID? {
+        let token = UUID()
+        lock.lock()
+        guard var record = connections[connectionID] else {
+            lock.unlock()
+            assertion.release()
+            return nil
+        }
+        let shouldRetainAssertion = record.activityAssertion == nil
+        if shouldRetainAssertion {
+            record.activityAssertion = assertion
+        }
+        record.activityHoldTokens.insert(token)
+        connections[connectionID] = record
+        lock.unlock()
+        if !shouldRetainAssertion {
+            assertion.release()
+        }
+        return token
+    }
+
+    func releaseActivityHold(_ token: UUID, for connectionID: ObjectIdentifier) {
+        lock.lock()
+        guard var record = connections[connectionID] else {
+            lock.unlock()
+            return
+        }
+        guard record.activityHoldTokens.remove(token) != nil else {
+            lock.unlock()
+            return
+        }
+        let assertion: RuntimeActivityAssertion?
+        if record.activityHoldTokens.isEmpty {
+            assertion = record.activityAssertion
+            record.activityAssertion = nil
+        } else {
+            assertion = nil
+        }
+        connections[connectionID] = record
+        lock.unlock()
+        assertion?.release()
+    }
+
     func isRegistered(_ connectionID: ObjectIdentifier) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         return !closed && connections[connectionID] != nil
     }
 
-    func reserveControlConnection(
+    fileprivate func reserveControlConnection(
         for clientKind: RuntimeClientKind,
         on brokerConnectionID: ObjectIdentifier,
         reservationID: UUID,
@@ -433,7 +481,7 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         lock.unlock()
     }
 
-    func beginRequest(
+    fileprivate func beginRequest(
         on connectionID: ObjectIdentifier,
         allowDuringShutdown: Bool = false
     ) -> RuntimeXPCRequestAdmission {
@@ -506,6 +554,9 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         lastActivity = ContinuousClock.now
         lock.unlock()
         eventHub.removeAll(connectionIDs: connectionIDs)
+        for record in records {
+            record.activityAssertion?.release()
+        }
         for controlListener in records.compactMap(\.controlListener) + reservedListeners {
             controlListener.listener.invalidate()
         }
@@ -541,13 +592,14 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         return lastActivity.duration(to: ContinuousClock.now) >= gracePeriod
     }
 
-    private func remove(_ identifier: ObjectIdentifier) {
+    func remove(_ identifier: ObjectIdentifier) {
         lock.lock()
         let record = connections.removeValue(forKey: identifier)
         if record != nil {
             lastActivity = ContinuousClock.now
         }
         lock.unlock()
+        record?.activityAssertion?.release()
         record?.controlListener?.listener.invalidate()
         eventHub.remove(connectionID: identifier)
         onConnectionRemoved?(identifier)
@@ -1807,10 +1859,43 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 response.send(Self.errorReply(for: failure))
                 return
             }
+            guard let decoded = try? JSONDecoder().decode(StartRuntimeRequest.self, from: request) else {
+                response.send(Self.errorReply(for: Self.malformedControlError))
+                return
+            }
+            let shouldHold = decoded.hold ?? false
+            if shouldHold, clientKind != .cli {
+                response.send(
+                    Self.errorReply(
+                        for: RuntimeControlError(
+                            code: "runtime.notAuthorized",
+                            message: safeMessage(for: "runtime.notAuthorized")
+                        )
+                    )
+                )
+                return
+            }
+            let holdToken: UUID?
+            if shouldHold {
+                guard let acquired = await host.assertRuntimeActivity(.cli) else {
+                    response.send(Self.errorReply(for: Self.internalControlError))
+                    return
+                }
+                guard let token = connectionRegistry.holdActivity(acquired, for: connectionID) else {
+                    response.send(Self.errorReply(for: Self.internalControlError))
+                    return
+                }
+                holdToken = token
+            } else {
+                holdToken = nil
+            }
             do {
                 try await host.startRuntime(reason: clientKind == .cli ? .cli : .user)
                 response.send(Self.encode(RuntimeControlReply(status: await host.status())))
             } catch {
+                if let holdToken {
+                    connectionRegistry.releaseActivityHold(holdToken, for: connectionID)
+                }
                 response.send(Self.errorReply(for: Self.controlError(for: error)))
             }
         }
@@ -5185,8 +5270,16 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         "malformedRequest",
         message: safeMessage(for: "runtime.malformedRequest")
     )
+    private static let malformedControlError = RuntimeControlError(
+        code: "runtime.malformedRequest",
+        message: safeMessage(for: "runtime.malformedRequest")
+    )
     private static let internalWireError = RuntimeWireError.runtime(
         "internal",
+        message: safeMessage(for: "runtime.internal")
+    )
+    private static let internalControlError = RuntimeControlError(
+        code: "runtime.internal",
         message: safeMessage(for: "runtime.internal")
     )
 

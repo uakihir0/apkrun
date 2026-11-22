@@ -25,13 +25,18 @@ public final class VsockLoopbackForwarder: @unchecked Sendable {
     private static let backlog: Int32 = 8
 
     private let connectGuest: @Sendable (UInt32) async throws -> VsockConnection
+    private let connectionCountChanged: (@Sendable (UInt64, Int) -> Void)?
     private let logger: APKLogger
     private let acceptQueue = DispatchQueue(label: "io.apkrun.vm.vsock.loopback.accept")
+    private let connectionCountCallbackQueue = DispatchQueue(
+        label: "io.apkrun.vm.vsock.loopback.connection-count"
+    )
     private let lock = NSLock()
     private var acceptSource: DispatchSourceRead?
     /// Signalled on the accept queue once the listener's descriptor has been closed.
     private var listenerClosed: DispatchSemaphore?
     private var sessions: [UUID: LoopbackSession] = [:]
+    private var connectionCountRevision: UInt64 = 0
     private var hasStarted = false
     private var isStopped = false
     private var boundPort: UInt16?
@@ -47,15 +52,20 @@ public final class VsockLoopbackForwarder: @unchecked Sendable {
     ///   - requestedPort: the loopback TCP port; `0` picks a free one.
     ///   - guestPort: the guest vsock port to open for each connection.
     ///   - logSink: where the forwarder's log entries go.
+    ///   - connectionCountChanged: called asynchronously on a private serial queue, in order, when the number of
+    ///     active TCP connections changes. The revision allows consumers to discard delayed callbacks. It is never
+    ///     called while the forwarder's lock is held.
     ///   - connectGuest: opens a host-to-guest connection to a vsock port, normally `VMController.connect`.
     public init(
         requestedPort: UInt16,
         guestPort: UInt32,
         logSink: (any LogSink)?,
+        connectionCountChanged: (@Sendable (UInt64, Int) -> Void)? = nil,
         connectGuest: @escaping @Sendable (UInt32) async throws -> VsockConnection
     ) {
         self.requestedPort = requestedPort
         self.guestPort = guestPort
+        self.connectionCountChanged = connectionCountChanged
         self.connectGuest = connectGuest
         logger = APKLogger(category: VMLogCategory.vsock, sink: logSink)
     }
@@ -151,6 +161,9 @@ public final class VsockLoopbackForwarder: @unchecked Sendable {
             listenerClosed = nil
             let open = Array(sessions.values)
             sessions.removeAll()
+            if !open.isEmpty {
+                scheduleConnectionCountCallbackLocked()
+            }
             return (source, closed, open)
         }
     }
@@ -189,6 +202,7 @@ public final class VsockLoopbackForwarder: @unchecked Sendable {
                 return false
             }
             sessions[identifier] = session
+            scheduleConnectionCountCallbackLocked()
             return true
         }
         guard accepted else {
@@ -203,7 +217,12 @@ public final class VsockLoopbackForwarder: @unchecked Sendable {
 
     private func serve(session: LoopbackSession, identifier: UUID) async {
         defer {
-            _ = lock.withLock { sessions.removeValue(forKey: identifier) }
+            lock.withLock {
+                guard sessions.removeValue(forKey: identifier) != nil else {
+                    return
+                }
+                scheduleConnectionCountCallbackLocked()
+            }
             session.closeDescriptor()
         }
         let guest: VsockConnection
@@ -227,6 +246,19 @@ public final class VsockLoopbackForwarder: @unchecked Sendable {
             }
         }
         guest.close()
+    }
+
+    /// Enqueues a snapshot while `lock` is held, preserving callback order with session mutations.
+    private func scheduleConnectionCountCallbackLocked() {
+        guard let connectionCountChanged else {
+            return
+        }
+        connectionCountRevision &+= 1
+        let revision = connectionCountRevision
+        let count = sessions.count
+        connectionCountCallbackQueue.async {
+            connectionCountChanged(revision, count)
+        }
     }
 
     /// Copies bytes from the TCP client to the guest until the client ends or a write fails.

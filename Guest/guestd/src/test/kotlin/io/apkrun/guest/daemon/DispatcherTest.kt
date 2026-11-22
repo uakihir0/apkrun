@@ -240,6 +240,21 @@ class DispatcherTest {
     }
 
     @Test
+    fun syncTimeIsUnsupportedInTheDevelopmentShellAgent() = runBlocking {
+        val request =
+            Request.newBuilder()
+                .setSyncTime(SyncTime.newBuilder().setUnixTimeMs(1_800_000_000_123L).setRttMs(37))
+                .build()
+
+        val response =
+            dispatcher(FakeOperations()).dispatch(1, request, everything + GuestCapability.LOCALE)
+
+        assertEquals(GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED, response.getError().getCode())
+        assertTrue(response.getError().getMessage().contains("privileged APKRun agent"))
+        assertFalse(GuestCapability.LOCALE in Connection.IMPLEMENTED)
+    }
+
+    @Test
     fun anOperationThisBuildDoesNotHaveIsUnsupported() = runBlocking {
         val request = Request.newBuilder().setShutdown(Shutdown.getDefaultInstance()).build()
         val response = dispatcher(FakeOperations()).dispatch(1, request, everything)

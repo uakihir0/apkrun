@@ -125,6 +125,8 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.23 | `listSessions`, `packageIcon`, the `sessions` topic |
 | 1.24 | `updatePackageSettings`, `packageSettings` |
 | 1.25 | `RuntimePackageDetails.previous` (the rollback slot) |
+| 1.38 | Optional `StartRuntimeRequest.hold` keeps a CLI start activity until its control connection closes |
+
 
 ### 2.2 Rules per endpoint
 
@@ -541,7 +543,7 @@ Lists are returned whole. A check requested while the same check runs joins it.
 
 | Request | Built fields | Target fields |
 |---|---|---|
-| `StartRuntimeRequest` | `header` | `hold` (Bool: keep a `cli` activity until the connection closes); `timeoutMs` (Int64?) |
+| `StartRuntimeRequest` | `header`, `hold` (optional Bool: keep a `cli` activity until the connection closes) | `timeoutMs` (Int64?) |
 | `StopRuntimeRequest` | `header` | `force` (Bool: stop even with sessions or activities) |
 | `RestartRuntimeRequest`, `RuntimeResetControlRequest` | `header` | — |
 

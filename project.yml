@@ -400,6 +400,7 @@ targets:
       - path: Tests/IntegrationTests/SecurityTests
       - path: Tests/IntegrationTests/AndroidInputTests
       - path: Tests/IntegrationTests/WrapperDesktopTests
+      - path: Tests/IntegrationTests/DaemonTests
       - path: Tests/IntegrationTests/Support
       - path: Tests/IntegrationTests/RunResources
         excludes:

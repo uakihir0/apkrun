@@ -78,6 +78,13 @@ import Testing
                 "linkRejected", "promptTimedOut", "notificationAccessMissing",
             ].map { "integration.\($0)" }
             + [
+                "providerNotConfigured", "providerUnreachable", "providerHTTPStatus",
+                "providerRateLimited", "providerMetadataInvalid", "providerSignatureInvalid",
+                "ambiguousAsset", "noCompatibleArtifact", "downloadFailed", "hashMismatch",
+                "tooLarge", "cancelled", "validation", "installFailed", "healthCheckFailed",
+                "rollbackFailed", "authorityDoesNotAllowUpdates",
+            ].map { "update.\($0)" }
+            + [
                 "unsupportedContainer", "unreadableArchive", "archiveLimitExceeded", "notAnAPK",
                 "missingBase", "multipleBases", "duplicateSplit", "inconsistentSplits",
                 "incompleteSplitSet", "unsignedAPK", "invalidSignature", "legacySignatureNotAllowed",
@@ -128,6 +135,7 @@ import Testing
                 || entry.code.hasPrefix("image.")
                 || entry.code.hasPrefix("wrapper.")
                 || entry.code.hasPrefix("integration.")
+                || entry.code.hasPrefix("update.")
                 || entry.code.hasPrefix("store.")
                 || entry.code.hasPrefix("update.")
         )

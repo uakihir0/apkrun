@@ -75,8 +75,10 @@ public struct CompatibilityEntry: Codable, Sendable, Equatable {
     public var level: CompatibilityLevel
     /// The known issues.
     public var issues: [CompatibilityIssue]
-    /// Per-package settings the app needs (the §10.2 key allowlist is
-    /// enforced by `scripts/check-compatibility-db.sh`).
+    /// Per-package settings the app needs in their settings-store string
+    /// form (the §10.2 key allowlist is enforced by
+    /// `scripts/check-compatibility-db.sh`). JSON Booleans and numbers
+    /// decode to their string form (see ``init(from:)``).
     public var recommendedSettings: [String: String]
     /// What the entry was tested with.
     public var testedWith: TestedWith
@@ -119,6 +121,53 @@ public struct CompatibilityEntry: Codable, Sendable, Equatable {
         self.recommendedSettings = recommendedSettings
         self.testedWith = testedWith
         self.source = source
+    }
+
+    /// The §10.2 format allows string, Boolean, and number setting values;
+    /// each decodes to its settings-store string form (`false`, `1`, `v`).
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        packageID = try container.decode(String.self, forKey: .packageID)
+        signerDigests = try container.decodeIfPresent([String].self, forKey: .signerDigests)
+        versionCodes = try container.decodeIfPresent(
+            CompatibilityVersionRange.self, forKey: .versionCodes)
+        level = try container.decode(CompatibilityLevel.self, forKey: .level)
+        issues = try container.decodeIfPresent([CompatibilityIssue].self, forKey: .issues) ?? []
+        let rawSettings =
+            try container.decodeIfPresent(
+                [String: SettingScalar].self, forKey: .recommendedSettings) ?? [:]
+        recommendedSettings = rawSettings.mapValues(\.settingsValue)
+        testedWith = try container.decode(TestedWith.self, forKey: .testedWith)
+        source = try container.decode(String.self, forKey: .source)
+    }
+
+    /// One JSON scalar of a §10.2 `recommendedSettings` value.
+    private enum SettingScalar: Decodable {
+        case string(String)
+        case flag(Bool)
+        case number(Double)
+
+        /// The settings-store string form.
+        var settingsValue: String {
+            switch self {
+            case .string(let value): return value
+            case .flag(let value): return value ? "true" : "false"
+            case .number(let value):
+                return value.truncatingRemainder(dividingBy: 1) == 0
+                    ? String(Int64(value)) : String(value)
+            }
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let flag = try? container.decode(Bool.self) {
+                self = .flag(flag)
+            } else if let number = try? container.decode(Double.self) {
+                self = .number(number)
+            } else {
+                self = .string(try container.decode(String.self))
+            }
+        }
     }
 }
 
@@ -165,22 +214,28 @@ public struct CompatibilityDatabase: Sendable {
     }
 
     /// The matching entry: package ID first, then signer digest when the
-    /// entry lists digests, then the version range. The narrowest range
-    /// wins (§10.2).
+    /// entry lists digests (the database's bare hex digests compare equal
+    /// to the canonical `sha256:`-prefixed form), then the version range.
+    /// An entry that names a range only matches a known `versionCode` —
+    /// without one its applicability cannot be verified. The narrowest
+    /// range wins (§10.2).
     public func match(
         packageID: String,
         signerDigests: [String] = [],
         versionCode: Int64? = nil
     ) -> CompatibilityEntry? {
+        let callerDigests = Set(signerDigests.map(Self.normalizedDigest))
         let candidates = entries.filter { entry in
             guard entry.packageID == packageID else { return false }
-            if let digests = entry.signerDigests,
-                !digests.contains(where: signerDigests.contains)
-            {
-                return false
+            if let digests = entry.signerDigests {
+                guard
+                    digests.contains(where: {
+                        callerDigests.contains(Self.normalizedDigest($0))
+                    })
+                else { return false }
             }
-            if let range = entry.versionCodes, let versionCode {
-                return range.contains(versionCode)
+            if let range = entry.versionCodes {
+                guard let versionCode, range.contains(versionCode) else { return false }
             }
             return true
         }
@@ -194,6 +249,13 @@ public struct CompatibilityDatabase: Sendable {
             }
         }
         return best
+    }
+
+    /// A digest compared without its `sha256:` prefix and case.
+    private static func normalizedDigest(_ value: String) -> String {
+        var digest = value.lowercased()
+        if digest.hasPrefix("sha256:") { digest = String(digest.dropFirst(7)) }
+        return digest
     }
 
     /// The `recommendedSettings` of the matching entry.

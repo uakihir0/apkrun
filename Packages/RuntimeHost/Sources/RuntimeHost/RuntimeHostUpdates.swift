@@ -37,7 +37,9 @@ public actor EmbeddedUpdateService {
         developerModeEnabled: @escaping @Sendable () -> Bool = { false },
         checkIntervalHours: @escaping @Sendable () -> Int = { 6 },
         guestFacts: @escaping @Sendable () -> GuestFacts = { GuestFacts() },
-        notifier: (any HostNotificationSink)? = nil
+        notifier: (any HostNotificationSink)? = nil,
+        compatibilityRecommendations:
+            @escaping @Sendable (PackageID) async -> [String: String] = { _ in [:] }
     ) {
         self.paths = paths
         self.store =
@@ -59,7 +61,8 @@ public actor EmbeddedUpdateService {
                 GlobalSettings.load(
                     from: APKRunPaths(allowingHomeOverride: true).settingsFile
                 ).updatesNotifyInstalled
-            }
+            },
+            compatibilityRecommendations: compatibilityRecommendations
         )
     }
 
@@ -774,15 +777,22 @@ extension RuntimeHost {
         // Share the package service's store: a second PackageStore over the
         // same directory would treat a pending install's `incoming/` as
         // orphaned scratch and delete it during open() cleanup.
+        let packageService = packageQueryServiceInstance()
         let service = EmbeddedUpdateService(
             paths: paths,
-            store: packageQueryServiceInstance().store,
+            store: packageService.store,
             developerModeEnabled: { [weak self] in
                 guard let self else { return false }
                 return GlobalSettings.load(from: self.paths.settingsFile).developerEnabled
             },
             checkIntervalHours: {
                 Self.updatesCheckIntervalHours()
+            },
+            // The #91 resolution order reaches the update path too: a
+            // recommended `update.healthCheckLaunch = false` is honored
+            // when no stored setting overrides it.
+            compatibilityRecommendations: { packageID in
+                (try? await packageService.recommendations(for: packageID)) ?? [:]
             }
         )
         updateService = service

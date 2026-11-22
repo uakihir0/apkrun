@@ -47,6 +47,63 @@ struct CompatibilityDatabaseTests {
         #expect(open.match(packageID: "com.a", signerDigests: [digestB]) != nil)
     }
 
+    @Test func signerDigestsMatchWithOrWithoutPrefix() {
+        // The database stores bare hex; the wire carries `sha256:`-prefixed
+        // digests — both compare equal (§10.2).
+        let db = CompatibilityDatabase(entries: [entry("com.a", signers: [digestA])])
+        #expect(db.match(packageID: "com.a", signerDigests: ["sha256:\(digestA)"]) != nil)
+        #expect(db.match(packageID: "com.a", signerDigests: ["sha256:\(digestB)"]) == nil)
+        // Case-insensitive on the hex part.
+        #expect(
+            db.match(packageID: "com.a", signerDigests: [digestA.uppercased()]) != nil)
+    }
+
+    @Test func rangedEntriesRequireAVersionCode() {
+        // Without a versionCode a ranged entry's applicability cannot be
+        // verified — the range-less entry wins instead.
+        let db = CompatibilityDatabase(entries: [
+            entry("com.a", min: 10, max: 20, level: .unsupported),
+            entry("com.a", level: .works),
+        ])
+        #expect(db.match(packageID: "com.a")?.level == .works)
+        let rangedOnly = CompatibilityDatabase(entries: [
+            entry("com.a", min: 10, max: 20)
+        ])
+        #expect(rangedOnly.match(packageID: "com.a") == nil)
+    }
+
+    @Test func recommendedSettingsDecodeScalars() throws {
+        // §10.2 allows string, Boolean, and number values; all decode to
+        // their settings-store string form instead of failing the load.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("compat-scalars-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try """
+        {
+          "schemaVersion": 1,
+          "generatedAt": "2026-11-22T00:00:00Z",
+          "entries": [{
+            "packageID": "com.example.app",
+            "level": "compatibilityMode",
+            "issues": [],
+            "recommendedSettings": {
+              "integrations.clipboard": false,
+              "window.displayMode": "compatibility",
+              "update.healthCheckLaunch": true,
+              "input.pointerScale": 1.5
+            },
+            "testedWith": {"apkrun": "1.0", "image": "android-17", "date": "2026-11-01"},
+            "source": "lab"
+          }]
+        }
+        """.write(to: url, atomically: true, encoding: .utf8)
+        let entry = try #require(CompatibilityDatabase.load(from: url).entries.first)
+        #expect(entry.recommendedSettings["integrations.clipboard"] == "false")
+        #expect(entry.recommendedSettings["window.displayMode"] == "compatibility")
+        #expect(entry.recommendedSettings["update.healthCheckLaunch"] == "true")
+        #expect(entry.recommendedSettings["input.pointerScale"] == "1.5")
+    }
+
     @Test func versionRangeIsInclusiveAndOpenEnded() {
         let db = CompatibilityDatabase(entries: [
             entry("com.a", min: 10, max: 20),

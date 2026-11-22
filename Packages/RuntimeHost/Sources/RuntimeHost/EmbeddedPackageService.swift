@@ -534,8 +534,9 @@ public actor EmbeddedPackageService: RuntimeService {
     }
 
     /// The `recommendedSettings` of the entry matching the record
-    /// (diagnostics.md §10.3); empty when the app is unknown.
-    private func recommendations(for packageID: PackageID) async throws -> [String: String] {
+    /// (diagnostics.md §10.3); empty when the app is unknown. Also feeds
+    /// `EmbeddedUpdateService` so the update path honors them (#91).
+    func recommendations(for packageID: PackageID) async throws -> [String: String] {
         guard let record = try await record(for: packageID) else { return [:] }
         return compatibilityDatabase.match(
             packageID: record.packageId.rawValue,

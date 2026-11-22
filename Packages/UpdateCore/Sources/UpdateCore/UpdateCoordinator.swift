@@ -116,6 +116,10 @@ public actor UpdateCoordinator {
     /// `updates.notifyInstalled` (§9): post "Updated" after a passed
     /// health check.
     private let installedNotificationEnabled: @Sendable () -> Bool
+    /// Compatibility-database recommendations (#91), consulted only when a
+    /// §3.1 key has no stored value — the resolution order of
+    /// `PackageSettingsResolver`.
+    private let compatibilityRecommendations: @Sendable (PackageID) async -> [String: String]
     /// Injected for tests: the poll tick between H1 queries.
     private let healthCheckTickSleep: @Sendable () async -> Void
     /// The hard size cap of one downloaded set (§5); 8 GiB.
@@ -143,7 +147,9 @@ public actor UpdateCoordinator {
         healthCheckTickSleep: @escaping @Sendable () async -> Void = {
             try? await Task.sleep(for: .seconds(1))
         },
-        installedNotificationEnabled: @escaping @Sendable () -> Bool = { false }
+        installedNotificationEnabled: @escaping @Sendable () -> Bool = { false },
+        compatibilityRecommendations:
+            @escaping @Sendable (PackageID) async -> [String: String] = { _ in [:] }
     ) {
         self.store = store
         self.stateStore = stateStore
@@ -157,6 +163,7 @@ public actor UpdateCoordinator {
         self.healthCheckBudget = healthCheckBudget
         self.healthCheckTickSleep = healthCheckTickSleep
         self.installedNotificationEnabled = installedNotificationEnabled
+        self.compatibilityRecommendations = compatibilityRecommendations
     }
 
     /// The current phase of a package, restoring a persisted `available` or
@@ -979,7 +986,13 @@ public actor UpdateCoordinator {
         // §8.1 health check (H1–H4 at the level of §8.1), then §8.3 outcomes.
         setPhase(packageID, .healthChecking)
         let settings = try? await store.packageSettings(for: packageID)
-        let launchEnabled = settings?.update["healthCheckLaunch"] != "false"
+        // A stored value wins; then the compatibility recommendation (#91),
+        // then the §3.1 default — the same order `PackageSettingsResolver`
+        // gives the settings UI, so a recommended `false` is honored here.
+        let recommendations = await compatibilityRecommendations(packageID)
+        let launchEnabled =
+            (settings?.update["healthCheckLaunch"]
+                ?? recommendations["update.healthCheckLaunch"] ?? "true") != "false"
         let autoRollback = settings?.update["autoRollback"] != "false"
         let hasLauncher =
             ((try? await store.installedPackageInfo(packageID))?.launchableComponent) != nil

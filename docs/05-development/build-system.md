@@ -397,20 +397,20 @@ The build is reproducible: the same sources and pinned tools give the same APK b
 
 ---
 
-## 9. AOSP product build (planned)
+## 9. AOSP product build
 
 The APKRun product (`Guest/product/`, [android-image.md](../02-design/android-image.md) §11) builds on the Linux builder of [environment-setup.md](environment-setup.md) §5.
 
 `scripts/aosp/build-product.sh --revision <commit> --variant userdebug|user` runs in the builder container:
 
-1. Syncs the tree to `Guest/product/manifest/pinned.xml` if needed.
-2. Writes `.repo/local_manifests/apkrun.xml`: this repository at `<commit>`, `Guest/product/` mapped to `device/apkrun/apkrun_arm64/`. The Rust crate has its own `Android.bp` in `Guest/vsockd/`, because Soong does not accept `..` in `srcs`. Kati and Soong must each see every product file exactly once. If a `repo` `<linkfile>` cannot do this, the script copies the directories.
-3. Runs `scripts/build-guest.sh` and copies the agent APKs to `Guest/product/prebuilt/` (git-ignored); `android_app_import` reads them with `certificate: "platform"`, `privileged: true`, `presigned: false`.
-4. Runs `lunch apkrun_arm64-trunk_staging-<variant>`, `m`, and `m dist`, with `BUILD_NUMBER=ar<counter>`.
-5. For `user` builds, signs the target files with the release keys and rebuilds the zip (flow fixed by #36; OQ-36).
+1. Syncs the tree to `Guest/product/manifest/pinned.xml` (`--update-manifest` syncs to the tree's current revisions and rewrites it; `--pin-manifest` writes it and stops).
+2. Writes `.repo/local_manifests/apkrun.xml`: this repository at `<commit>`, `Guest/product/` mapped to `device/apkrun/apkrun_arm64/` and `Guest/vsockd/` alongside it. The Rust crate has its own `Android.bp` in `Guest/vsockd/`, because Soong does not accept `..` in `srcs`.
+3. Runs `scripts/build-guest.sh` and `APKRunStore:assembleRelease`, and copies the agent APKs to `Guest/product/prebuilt/` (git-ignored); `android_app_import` reads them with `certificate: "platform"`, `privileged: true`, `presigned: false`.
+4. For `user` builds, `scripts/check-sepolicy.sh` runs first (R-13). Then `lunch apkrun_arm64-trunk_staging-<variant>`, `m`, and `m dist`, with `BUILD_NUMBER=ar<counter>`.
+5. For `user` builds, `sign_target_files_apks` signs the target files with the release keys (`--keys-dir`), and `img_from_target_files` rebuilds the image zip (OQ-36, ADR-0020).
 6. Writes `build-info.json`: pinned manifest SHA-256, container digest, APKRun revision, APK SHA-256s, `BUILD_NUMBER`.
 
-The result, `apkrun_arm64-img-ar<counter>.zip`, enters the stock pipeline (§10). For `user` builds, `scripts/check-sepolicy.sh` runs before step 4 (R-13).
+The result, `apkrun_arm64-img-ar<counter>.zip`, enters the stock pipeline (§10). Release keys live outside the repository (ADR-0020).
 
 ---
 

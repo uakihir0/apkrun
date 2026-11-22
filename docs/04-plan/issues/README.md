@@ -186,6 +186,7 @@ The tasks in working order ([../roadmap.md](../roadmap.md) §1.3). A task can st
 | #93 | Localization and accessibility | M12 | #78 |  |
 | #94 | Legal and licensing compliance | M12 | #21, #36 |  |
 | #95 | v1.0 release readiness | M12 | every other v1.0 task |  |
+| #120 | Release APKRun image | M12 | #36 |  |
 | #97 | Vulkan track | Post-v1 | #24, #36 |  |
 | #98 | Google Play authority | Post-v1 | #40, #50 |  |
 

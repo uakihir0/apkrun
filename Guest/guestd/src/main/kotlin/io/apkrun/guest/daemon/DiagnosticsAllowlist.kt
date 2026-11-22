@@ -19,7 +19,9 @@ object DiagnosticsAllowlist {
             "dalvik.vm.heap",
         )
 
-    /** Exact property names a report may keep. Mirrors `DiagnosticsAllowlists.getpropExact` (§6.2). */
+    /**
+     * Exact property names a report may keep. Mirrors `DiagnosticsAllowlists.getpropExact` (§6.2).
+     */
     private val EXACT =
         setOf(
             "ro.build.fingerprint",

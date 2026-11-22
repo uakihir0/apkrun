@@ -39,7 +39,6 @@ jobs:
       - name: Decode the signing key
         env:
           IMAGE_FEED_KEY: ${{ secrets.IMAGE_FEED_ED25519_KEY }}
-        env:
           RELEASE_MODE: ${{ inputs.mode }}
         run: |
           if [ "$RELEASE_MODE" = "dry-run" ]; then

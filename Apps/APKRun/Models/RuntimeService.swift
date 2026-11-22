@@ -50,8 +50,10 @@ extension RuntimeControlClient: RuntimeService {
     }
 
     func createWrapper(packageID: RuntimePackageID) async throws -> OperationHandle {
+        // "Create It Again" (§5.3 row 6) regenerates a modified wrapper, so it
+        // must replace the existing bundle instead of failing `wrapperExists`.
         try await createWrapper(
-            WrapperRequest(packageID: packageID),
+            WrapperRequest(packageID: packageID, replace: .sameWrapper),
             icon: nil,
             operationID: OperationID()
         )

@@ -192,15 +192,14 @@ if [[ "$variant" == "user" ]]; then
     (cd "$aosp_root" && sign_target_files_apks -d "$keys_dir" \
         "${target_files[0]}" "$signed_tf")
     (cd "$aosp_root" && img_from_target_files "$signed_tf" "$image_zip")
-    # Fail closed: vbmeta must be signed by the release AVB key.
+    # Fail closed: vbmeta must be signed by the release AVB key. The whole
+    # image zip is extracted so chained partitions and descriptors resolve.
     work_avb="$(mktemp -d)"
-    unzip -p "$image_zip" vbmeta.img > "$work_avb/vbmeta.img"
+    unzip -q "$image_zip" -d "$work_avb"
     avbtool="$aosp_root/external/avb/avbtool"
     [[ -f "$avbtool" ]] || avbtool="$aosp_root/external/avb/avbtool.py"
-    python3 "$avbtool" extract_public_key --key "$keys_dir/avb.pem" \
-        --output "$work_avb/avb_pub.bin"
     python3 "$avbtool" verify_image --image "$work_avb/vbmeta.img" \
-        --expected_public_key "$work_avb/avb_pub.bin" || {
+        --key "$keys_dir/avb.pem" --follow_chain_partitions || {
         printf 'build-product: vbmeta is not signed by %s/avb.pem\n' "$keys_dir" >&2
         exit 2
     }

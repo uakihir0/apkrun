@@ -66,12 +66,17 @@ public actor GuestBulkChannel {
     /// Recently completed inbound payloads, pruned to 16 entries.
     private var completed: [(id: UInt64, at: ContinuousClock.Instant, transfer: GuestInboundTransfer)] =
         []
-    /// Fetchers waiting on an announced transfer.
-    private var waiters: [UInt64: [CheckedContinuation<GuestInboundTransfer?, Never>]] = [:]
-    /// Transfers whose wait was settled before a late waiter registration
-    /// landed; registration answers nil instead of lingering forever. IDs are
-    /// never reused, so the set is bounded to the last 16 timed-out IDs.
-    private var retiredWaiters: [UInt64] = []
+    /// Fetchers waiting on an announced transfer, keyed by transfer id and
+    /// tagged with the fetch token that registered them.
+    private var waiters: [UInt64: [(
+        token: UInt64,
+        continuation: CheckedContinuation<GuestInboundTransfer?, Never>
+    )]] = [:]
+    /// Fetch tokens whose wait was settled before their waiter registration
+    /// landed; a late registration answers nil instead of lingering forever.
+    /// Tokens are unique per fetch, so a bounded FIFO keeps the newest 16.
+    private var retiredFetches: [UInt64] = []
+    private var nextFetchToken: UInt64 = 1
     /// Host-allocated transfer IDs are even (bulk.proto).
     private var nextTransferID: UInt64 = 2
 
@@ -113,8 +118,8 @@ public actor GuestBulkChannel {
         consumer = nil
         assemblies.removeAll()
         for (_, waiter) in waiters {
-            for continuation in waiter {
-                continuation.resume(returning: nil)
+            for entry in waiter {
+                entry.continuation.resume(returning: nil)
             }
         }
         waiters.removeAll()
@@ -170,15 +175,18 @@ public actor GuestBulkChannel {
         if let index = completed.firstIndex(where: { $0.id == transferID }) {
             return completed.remove(at: index).transfer
         }
-        // A fresh fetch waits normally even after an earlier wait timed out.
-        if let retiredIndex = retiredWaiters.firstIndex(of: transferID) {
-            retiredWaiters.remove(at: retiredIndex)
-        }
         let deadline = now.advanced(by: timeout)
+        let fetchToken = nextFetchToken
+        nextFetchToken += 1
         return await withTaskGroup(of: GuestInboundTransfer?.self) { group in
             group.addTask {
                 await withCheckedContinuation { continuation in
-                    self.addWaiter(transferID, deadline: deadline, continuation)
+                    self.addWaiter(
+                        transferID,
+                        deadline: deadline,
+                        token: fetchToken,
+                        continuation
+                    )
                 }
             }
             group.addTask {
@@ -190,7 +198,7 @@ public actor GuestBulkChannel {
             if result == nil {
                 // The continuation ignores cancellation: evict the waiter so
                 // it resumes and this group scope can actually exit.
-                await self.evictWaiter(transferID)
+                await self.evictWaiter(transferID, token: fetchToken)
             }
             return result ?? nil
         }
@@ -203,39 +211,60 @@ public actor GuestBulkChannel {
     private nonisolated func addWaiter(
         _ transferID: UInt64,
         deadline: ContinuousClock.Instant,
+        token: UInt64,
         _ continuation: CheckedContinuation<GuestInboundTransfer?, Never>
     ) {
-        Task { await self.registerWaiter(transferID, deadline: deadline, continuation) }
+        Task {
+            await self.registerWaiter(
+                transferID,
+                deadline: deadline,
+                token: token,
+                continuation
+            )
+        }
     }
 
     private func registerWaiter(
         _ transferID: UInt64,
         deadline: ContinuousClock.Instant,
+        token: UInt64,
         _ continuation: CheckedContinuation<GuestInboundTransfer?, Never>
     ) {
-        // A registration that lands after its fetch gave up — cancelled or
-        // past its deadline — answers nil at once; a fresh fetch carries a
-        // fresh deadline and waits normally.
+        // A registration that lands after its own fetch gave up — cancelled
+        // or past its deadline — answers nil at once; a different fetch still
+        // waits normally under its own token.
         if Task.isCancelled || ContinuousClock.now >= deadline
-            || retiredWaiters.contains(transferID)
+            || retiredFetches.contains(token)
         {
             continuation.resume(returning: nil)
         } else if let index = completed.firstIndex(where: { $0.id == transferID }) {
             continuation.resume(returning: completed.remove(at: index).transfer)
         } else {
-            waiters[transferID, default: []].append(continuation)
+            waiters[transferID, default: []].append(
+                (token: token, continuation: continuation)
+            )
         }
     }
 
-    /// Answers every waiter of `transferID` with nil (a fetch timeout) and
-    /// refuses later registrations for the same fetch.
-    private func evictWaiter(_ transferID: UInt64) {
-        retiredWaiters.append(transferID)
-        if retiredWaiters.count > 16 { retiredWaiters.removeFirst() }
-        if let waiter = waiters.removeValue(forKey: transferID) {
-            for continuation in waiter {
-                continuation.resume(returning: nil)
-            }
+    /// Answers this fetch's waiters of `transferID` with nil (a fetch
+    /// timeout) and refuses late registrations of the same fetch. Waiters of
+    /// other concurrent fetches keep waiting.
+    private func evictWaiter(_ transferID: UInt64, token: UInt64) {
+        retiredFetches.append(token)
+        if retiredFetches.count > 16 { retiredFetches.removeFirst() }
+        guard var entries = waiters[transferID] else { return }
+        var kept: [(token: UInt64, continuation: CheckedContinuation<GuestInboundTransfer?, Never>)] = []
+        var dead: [CheckedContinuation<GuestInboundTransfer?, Never>] = []
+        for entry in entries {
+            if entry.token == token { dead.append(entry.continuation) } else { kept.append(entry) }
+        }
+        if kept.isEmpty {
+            waiters.removeValue(forKey: transferID)
+        } else {
+            waiters[transferID] = kept
+        }
+        for continuation in dead {
+            continuation.resume(returning: nil)
         }
     }
 
@@ -267,8 +296,8 @@ public actor GuestBulkChannel {
                 bytes: assembly.bytes
             )
             if let waiter = waiters.removeValue(forKey: frame.transferID) {
-                for continuation in waiter {
-                    continuation.resume(returning: transfer)
+                for entry in waiter {
+                    entry.continuation.resume(returning: transfer)
                 }
             } else {
                 completed.append((frame.transferID, ContinuousClock.now, transfer))
@@ -279,8 +308,8 @@ public actor GuestBulkChannel {
         case .abort:
             assemblies.removeValue(forKey: frame.transferID)
             if let waiter = waiters.removeValue(forKey: frame.transferID) {
-                for continuation in waiter {
-                    continuation.resume(returning: nil)
+                for entry in waiter {
+                    entry.continuation.resume(returning: nil)
                 }
             }
         default:

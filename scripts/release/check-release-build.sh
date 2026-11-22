@@ -108,6 +108,15 @@ def parse_ed25519_public_key(data):
                 return key
     return None
 
+def parse_sparkle_private_key(data):
+    """A Sparkle `generate_keys` private key: base64 of the 64-byte ed25519 key."""
+    try:
+        decoded = base64.b64decode(data.decode("ascii").strip(), validate=True)
+    except (ValueError, binascii.Error, UnicodeDecodeError):
+        return None
+    return decoded if len(decoded) == 64 else None
+
+
 def parse_pkcs8_private_key(data):
     try:
         text = data.decode("ascii")
@@ -457,7 +466,11 @@ def add_key_tokens(path):
     elif unsupported is None and avb_public_key is not None:
         add_material_tokens(tokens, binary_tokens, avb_public_key)
     elif unsupported is None:
-        unsupported = f"{path}: unrecognized test signing fixture format"
+        sparkle_key = parse_sparkle_private_key(data)
+        if sparkle_key is not None:
+            add_material_tokens(tokens, binary_tokens, sparkle_key)
+        else:
+            unsupported = f"{path}: unrecognized test signing fixture format"
     if rsa_private_key is not None:
         for private_component in rsa_private_key[1]:
             tokens.add(private_component.hex())

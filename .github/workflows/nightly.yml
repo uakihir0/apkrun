@@ -164,18 +164,24 @@ jobs:
         run: |
           mkdir -p build/notary
           echo "$APKRUN_NOTARY_KEY_P8" | base64 -d > build/notary/key.p8
+          chmod 600 build/notary/key.p8
       - name: Install pinned repository tools
         run: scripts/bootstrap
       - name: Notarize and staple the Release build smoke check
         run: |
           # Exercises notarize.sh end to end on the lab Mac; the full
           # distribution-wrapper path needs a real package and is covered
-          # by the T1 signing fixtures.
+          # by the T1 signing fixtures. The Guest Agent is not embedded:
+          # it is built nowhere in this job and the smoke check does not
+          # need it.
           scripts/generate-project.sh
-          app="$(scripts/release/assemble-bundle.sh \
+          app="$(APKRUN_GUEST_EMBED=off scripts/release/assemble-bundle.sh \
               --build 0 --derived-data build/nightly/notarize/DerivedData \
               --developer-id "$APKRUN_DEVELOPER_ID" | tail -1)"
           scripts/release/notarize.sh "$app" \
               --key build/notary/key.p8 \
               --key-id "$APKRUN_NOTARY_KEY_ID" \
               --issuer "$APKRUN_NOTARY_ISSUER"
+      - name: Remove the notarization API key
+        if: always()
+        run: rm -f build/notary/key.p8

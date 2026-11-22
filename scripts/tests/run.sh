@@ -1120,7 +1120,7 @@ xcode_framework_root="$(new_module_fixture xcode-forbidden-framework)"
 expect_module_fail "XcodeGen SDK dependency" "undeclared sdk dependency.*modules.md" "$xcode_framework_root"
 
 xcode_missing_product_root="$(new_module_fixture xcode-missing-product)"
-expect_module_fail "missing XcodeGen third-party product" "missing third-party product edge 'APKRun -> Sparkle'" "$xcode_missing_product_root"
+expect_module_fail "missing XcodeGen third-party product" "third-party product 'KeychainAccess' is not allowed for Xcode target 'APKRun'" "$xcode_missing_product_root"
 
 helpers_directory_root="$(new_module_fixture helpers-directory)"
 expect_module_fail "forbidden Helpers directory" "forbidden dumping-ground directory 'Helpers'" "$helpers_directory_root"

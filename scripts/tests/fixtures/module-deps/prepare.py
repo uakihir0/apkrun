@@ -67,18 +67,24 @@ elif mode == "xcode-forbidden-framework":
 elif mode == "xcode-missing-product":
     project_path = destination / "project.yml"
     project = project_path.read_text()
-    project_path.write_text(
-        project.replace(
-            "packages:\n  APKRun:\n    path: .\n",
-            "packages:\n"
-            "  APKRun:\n"
-            "    path: .\n"
-            "  Sparkle:\n"
-            "    url: https://github.com/sparkle-project/Sparkle\n"
-            "    from: 2.6.4\n",
-            1,
-        )
+    project = project.replace(
+        "packages:\n  APKRun:\n    path: .\n",
+        "packages:\n"
+        "  APKRun:\n"
+        "    path: .\n"
+        "  KeychainAccess:\n"
+        "    url: https://github.com/kishikawakatsumi/KeychainAccess.git\n"
+        "    from: 4.2.2\n",
+        1,
     )
+    project = project.replace(
+        "      - package: Sparkle\n        product: Sparkle\n",
+        "      - package: Sparkle\n        product: Sparkle\n"
+        "      - package: KeychainAccess\n"
+        "        product: KeychainAccess\n",
+        1,
+    )
+    project_path.write_text(project)
 elif mode == "helpers-directory":
     helpers = destination / "Packages/DiagnosticsCore/Sources/DiagnosticsCore/Helpers"
     helpers.mkdir()

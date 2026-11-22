@@ -1416,7 +1416,9 @@ public actor RuntimeHost {
             if result.hadSession {
                 releaseSessionActivity(request.packageID.rawValue)
             }
-            if policy != .keepRunning {
+            // A keepRunning close that found no session marked no background
+            // task, so nothing releases the hold later.
+            if policy != .keepRunning || !result.hadSession {
                 releaseBackgroundTaskActivity(request.packageID.rawValue)
             }
             return result
@@ -6614,6 +6616,8 @@ public actor RuntimeHost {
         await supervisor?.stop(reason: .reset)
         await packageQueryService?.detachRuntime()
         headlessSessionService = nil
+        // The reset kills every retained keepRunning task with the guest.
+        releaseAllBackgroundTaskActivity()
         if request.keepBackup {
             _ = try await instanceStore.createRecoveryPoint(image: image)
         }

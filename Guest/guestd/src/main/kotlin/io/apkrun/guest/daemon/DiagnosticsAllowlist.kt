@@ -19,40 +19,19 @@ object DiagnosticsAllowlist {
             "dalvik.vm.heap",
         )
 
-    /** Exact property names a report may keep. */
+    /** Exact property names a report may keep. Mirrors `DiagnosticsAllowlists.getpropExact` (§6.2). */
     private val EXACT =
         setOf(
-            "ro.build.id",
-            "ro.build.display.id",
-            "ro.build.type",
-            "ro.build.tags",
-            "ro.product.name",
-            "ro.product.device",
-            "ro.product.board",
-            "ro.product.model",
-            "ro.product.brand",
-            "ro.product.manufacturer",
-            "ro.product.cpu.abi",
-            "ro.build.product",
-            "ro.build.characteristics",
-            "ro.build.flavor",
-            "ro.build.description",
             "ro.build.fingerprint",
-            "ro.bootimage.build.date",
-            "ro.bootimage.build.fingerprint",
-            "ro.debuggable",
-            "ro.secure",
-            "ro.kernel.qemu",
-            "ro.qemu.sf.fake_camera",
+            "ro.build.id",
+            "ro.build.type",
+            "ro.product.model",
+            "ro.product.device",
+            "ro.opengles.version",
+            "ro.kernel.version",
             "sys.boot_completed",
-            "dev.bootcomplete",
-            "init.svc.adbd",
-            "dalvik.vm.heapsize",
-            "persist.sys.timezone",
             "persist.sys.locale",
-            "ro.product.locale",
-            "ro.apkrun.agent.version",
-            "ro.apkrun.image.version",
+            "debug.hwui.renderer",
         )
 
     /** Property names that never appear, even under an allowed prefix. */

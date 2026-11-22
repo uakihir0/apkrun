@@ -61,7 +61,7 @@ class DiagnosticsServiceTest {
         val text = String(payload, Charsets.UTF_8)
         assertTrue(text.contains("ro.build.version.sdk"))
         assertTrue(text.contains("ro.product.model"))
-        assertTrue(text.contains("persist.sys.timezone"))
+        assertTrue(!text.contains("persist.sys.timezone"))
         assertTrue(!text.contains("serialno") && !text.contains("EMULATOR12345"))
     }
 

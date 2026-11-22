@@ -270,8 +270,18 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
 
         let packageID = request.packageID.rawValue
         guard let current = await registry.session(packageID: packageID) else {
-            markBackgroundTask(packageID, active: false)
-            return try await Self.terminateWithoutSession(request, using: guestAgent)
+            do {
+                // Release the hold only after Android confirms the stop: on
+                // a failure a retained task keeps running and stays
+                // protected.
+                let result = try await Self.terminateWithoutSession(request, using: guestAgent)
+                markBackgroundTask(packageID, active: false)
+                return result
+            } catch Self.packageNotInstalledError {
+                // Nothing can still run for a package that is not installed.
+                markBackgroundTask(packageID, active: false)
+                throw Self.packageNotInstalledError
+            }
         }
         let isInstalled: Bool
         do throws(GuestAgentFailure) {
@@ -453,7 +463,9 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         }
 
         let packageID = request.packageID.rawValue
-        markBackgroundTask(packageID, active: false)
+        // The hold of a keepRunning-retained task ends when the uninstall's
+        // task removal surfaces as a vanish event, not before the stop is
+        // confirmed; a failure here leaves the task protected.
         guard let current = await registry.session(packageID: packageID) else { return }
         var shouldForceStop = true
         if current.state != .closing {
@@ -484,6 +496,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         await stopDrainingFrames(for: current.id)
         _ = await registry.stopCompleted(sessionID: current.id, endReason: .packageUninstalled)
         await forgetSession(packageID: packageID, sessionID: current.id)
+        markBackgroundTask(packageID, active: false)
     }
 
     static func terminateWithoutSession(
@@ -634,6 +647,11 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         case .appeared(let package, _), .vanished(let package, _):
             packageID = package
         }
+        if case .vanished(let package, _) = event {
+            // A task a keepRunning close retained vanishes after its session
+            // is already gone; its hold ends here (§7.6).
+            markBackgroundTask(package, active: false)
+        }
         guard let current = await registry.session(packageID: packageID), !isShuttingDown else {
             return
         }
@@ -671,9 +689,6 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 await stopDrainingFrames(for: updated.id)
                 await forgetSession(packageID: package, sessionID: updated.id)
             }
-            // A task kept by a keepRunning close ends its hold here
-            // (display-and-windowing.md §7.6); the session is already gone.
-            markBackgroundTask(package, active: false)
         }
     }
 

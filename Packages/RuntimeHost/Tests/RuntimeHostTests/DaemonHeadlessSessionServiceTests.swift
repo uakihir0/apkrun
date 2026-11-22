@@ -123,6 +123,26 @@ func daemonCloseSessionKeepRunningMovesTheTaskToDisplayZeroAndKeepsABackgroundHo
     #expect(!(await fixture.service.hasBackgroundActivity(packageID: package)))
 }
 
+@Test(.timeLimit(.minutes(1)))
+func daemonCloseSessionKeepRunningReleasesItsHoldWhenTheRetainedTaskVanishes() async throws {
+    let fixture = makeHeadlessServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    _ = try await fixture.service.launch(RuntimeLaunchRequest(packageID: package))
+    _ = try await fixture.service.closeSession(
+        RuntimeCloseSessionRequest(packageID: package), policy: .keepRunning)
+    #expect(await fixture.service.hasBackgroundActivity(packageID: package))
+
+    await fixture.agent.sendTaskEvent(.vanished(packageID: package.rawValue, taskID: 41))
+    for _ in 0..<100 {
+        if await !fixture.service.hasBackgroundActivity(packageID: package) {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+
+    #expect(!(await fixture.service.hasBackgroundActivity(packageID: package)))
+}
+
 @Test
 func daemonCloseSessionWithoutASessionReportsHadSessionFalse() async throws {
     let fixture = makeHeadlessServiceFixture()

@@ -328,7 +328,7 @@ def emit_table(path, enum_name, keys):
         "    private static func splice(_ template: String, _ captures: [String]) -> String {",
         "        var result = template",
         "        for capture in captures {",
-        "            guard let range = result.range(of: #\"\\\\([^)]*?\\)\"#, options: .regularExpression) else { break }",
+        "            guard let range = result.range(of: #\"\\\\\\([^)]*?\\)\"#, options: .regularExpression) else { break }",
         "            result.replaceSubrange(range, with: capture)",
         "        }",
         "        return result",

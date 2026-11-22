@@ -68,6 +68,9 @@ public actor GuestBulkChannel {
         []
     /// Fetchers waiting on an announced transfer.
     private var waiters: [UInt64: [CheckedContinuation<GuestInboundTransfer?, Never>]] = [:]
+    /// Transfers whose wait was settled before a late waiter registration
+    /// landed; registration answers nil instead of lingering forever.
+    private var retiredWaiters: Set<UInt64> = []
     /// Host-allocated transfer IDs are even (bulk.proto).
     private var nextTransferID: UInt64 = 2
 
@@ -166,6 +169,8 @@ public actor GuestBulkChannel {
         if let index = completed.firstIndex(where: { $0.id == transferID }) {
             return completed.remove(at: index).transfer
         }
+        // A fresh fetch waits normally even after an earlier wait timed out.
+        retiredWaiters.remove(transferID)
         let deadline = now.advanced(by: timeout)
         return await withTaskGroup(of: GuestInboundTransfer?.self) { group in
             group.addTask {
@@ -208,7 +213,9 @@ public actor GuestBulkChannel {
         // A registration that lands after its fetch gave up — cancelled or
         // past its deadline — answers nil at once; a fresh fetch carries a
         // fresh deadline and waits normally.
-        if Task.isCancelled || ContinuousClock.now >= deadline {
+        if Task.isCancelled || ContinuousClock.now >= deadline
+            || retiredWaiters.contains(transferID)
+        {
             continuation.resume(returning: nil)
         } else if let index = completed.firstIndex(where: { $0.id == transferID }) {
             continuation.resume(returning: completed.remove(at: index).transfer)
@@ -217,8 +224,10 @@ public actor GuestBulkChannel {
         }
     }
 
-    /// Answers every waiter of `transferID` with nil (a fetch timeout).
+    /// Answers every waiter of `transferID` with nil (a fetch timeout) and
+    /// refuses later registrations for the same fetch.
     private func evictWaiter(_ transferID: UInt64) {
+        retiredWaiters.insert(transferID)
         if let waiter = waiters.removeValue(forKey: transferID) {
             for continuation in waiter {
                 continuation.resume(returning: nil)

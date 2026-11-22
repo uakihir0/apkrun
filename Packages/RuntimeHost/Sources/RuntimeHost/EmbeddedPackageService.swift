@@ -1383,7 +1383,7 @@ public actor EmbeddedPackageService: RuntimeService {
         from preview: PackageImportPreview,
         relation: RuntimeImportRelation
     ) throws -> RuntimeImportPreview {
-        guard let ticket = XX) else {
+        guard let ticket = RuntimeImportTicket(rawValue: preview.ticket.uuidString.lowercased()) else {
             throw EmbeddedPackageServiceFailure.invalidTicket
         }
         return RuntimeImportPreview(

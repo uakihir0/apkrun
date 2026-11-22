@@ -73,6 +73,8 @@ final class MenuBarModel: ObservableObject {
     private var reloadWasRequested = false
     private var topicsRequiringSnapshotAfterReconnect: Set<EventTopic> = []
     private var snapshotRetryTask: Task<Void, Never>?
+    /// The latest state per health check from the `health` topic.
+    private var healthStates: [String: String] = [:]
     private var subscriptionRetryTasks: [EventTopic: Task<Void, Never>] = [:]
     private var eventTasks: [EventTopic: Task<Void, Never>] = [:]
 
@@ -255,7 +257,7 @@ final class MenuBarModel: ObservableObject {
                 sessions: runningSessions,
                 hasOpenSessions: !sessions.isEmpty,
                 availableUpdates: nil,
-                liveHealthNeedsAttention: nil,
+                liveHealthNeedsAttention: healthStates.values.contains("failure"),
                 developerModeEnabled: nil
             )
             isConnected = true
@@ -340,7 +342,10 @@ final class MenuBarModel: ObservableObject {
         generation: UInt64
     ) {
         eventTasks[topic] = Task { [weak self] in
-            for await _ in stream {
+            for await envelope in stream {
+                if case .health(let event) = envelope.payload {
+                    self?.healthStates[event.result.id] = event.result.state
+                }
                 guard
                     !Task.isCancelled, let self,
                     self.hasStarted, self.listenerGeneration == generation

@@ -78,6 +78,7 @@ jobs:
         run: |
           mkdir -p build/notary
           echo "$APKRUN_NOTARY_KEY_P8" | base64 -d > build/notary/key.p8
+          chmod 600 build/notary/key.p8
 
       - name: Build, sign, and package
         env:
@@ -104,3 +105,7 @@ jobs:
         with:
           name: release-${{ steps.version.outputs.version }}
           path: build/release/
+
+      - name: Remove the notarization API key
+        if: always()
+        run: rm -f build/notary/key.p8

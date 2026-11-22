@@ -17,6 +17,11 @@ public struct SelfUpdateProbeState: Codable, Equatable, Sendable {
     public var notifiedBuilds: [Int]
     /// When the last critical-update notification went out.
     public var criticalNotifiedAt: Date?
+    /// The release the last successful check selected, so a `304 Not
+    /// Modified` after a daemon restart can restore the candidate (§3.4).
+    public var latestCandidate: AvailableRelease?
+    /// Whether `latestCandidate` was flagged critical.
+    public var candidateIsCritical: Bool
 
     /// Creates an empty probe state.
     public init() {
@@ -25,6 +30,22 @@ public struct SelfUpdateProbeState: Codable, Equatable, Sendable {
         lastModified = nil
         notifiedBuilds = []
         criticalNotifiedAt = nil
+        latestCandidate = nil
+        candidateIsCritical = false
+    }
+
+    /// Fields added after the first shipped schema decode as absent instead
+    /// of failing the whole `state.json` read (runtime-maintenance.md §9).
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        lastCheckedAt = try container.decodeIfPresent(Date.self, forKey: .lastCheckedAt)
+        etag = try container.decodeIfPresent(String.self, forKey: .etag)
+        lastModified = try container.decodeIfPresent(String.self, forKey: .lastModified)
+        notifiedBuilds = try container.decodeIfPresent([Int].self, forKey: .notifiedBuilds) ?? []
+        criticalNotifiedAt = try container.decodeIfPresent(Date.self, forKey: .criticalNotifiedAt)
+        latestCandidate = try container.decodeIfPresent(AvailableRelease.self, forKey: .latestCandidate)
+        candidateIsCritical =
+            try container.decodeIfPresent(Bool.self, forKey: .candidateIsCritical) ?? false
     }
 }
 
@@ -315,6 +336,12 @@ public actor SelfUpdateProbe {
             return finish(error: .unreachable(detail: String(describing: error)))
         }
         if response.status == 304 {
+            // The feed did not change: the saved candidate is still the
+            // right one — restore it after a daemon restart (§3.4).
+            if latest == nil {
+                latest = state.latestCandidate
+                critical = state.candidateIsCritical
+            }
             state.lastCheckedAt = now()
             persist(state)
             return status()
@@ -346,6 +373,8 @@ public actor SelfUpdateProbe {
         state.lastCheckedAt = now()
         if let etag = response.etag { state.etag = etag }
         if let lastModified = response.lastModified { state.lastModified = lastModified }
+        state.latestCandidate = chosen?.release
+        state.candidateIsCritical = chosen?.isCritical ?? false
         lastError = nil
         persist(state)
         await maybeNotify(chosen)

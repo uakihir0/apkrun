@@ -142,7 +142,8 @@ extension InstanceStore {
         let entries =
             (try? FileManager.default.contentsOfDirectory(atPath: paths.instanceDirectory.path))
             ?? []
-        for entry in entries.sorted(by: { ($0 == "instance.json") ? false : ($1 == "instance.json") }) {
+        for entry in entries.sorted(by: { ($0 == "instance.json") ? false : ($1 == "instance.json") })
+        where entry != "recovery-points" {
             let source = paths.instanceDirectory.appendingPathComponent(entry)
             let target = destination.appendingPathComponent(entry)
             do {

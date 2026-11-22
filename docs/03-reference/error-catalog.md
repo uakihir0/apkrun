@@ -627,6 +627,7 @@ The generated entries are in §9.1. The table below has the other image entries.
 | `imageArchiveSizeMismatch(expected:received:)` | `image.imageArchiveSizeMismatch` | the server sends more than the entry's archive size | ImageDownloader | "The Android system download was the wrong size." | "Try again." `retry` | 1 | runtime-maintenance.md §4.4 |
 | `imageArchiveHashMismatch` | `image.imageArchiveHashMismatch` | the archive SHA-256 differs from the feed entry | ImageDownloader | "The Android system download failed verification." | "Try again. The download starts over." `retry` | 1 | runtime-maintenance.md §4.4 |
 | `imageDownloadFailed(detail:)` | `image.imageDownloadFailed` | the archive download errors or loses connectivity | ImageDownloader | "The Android system download failed." | "Check the network and try again." `retry` | 1 | runtime-maintenance.md §4.4 |
+| `noRecoveryPoint` | `image.noRecoveryPoint` | rollback is requested after the recovery point was deleted or pruned | ImageMigrationService | "No recovery point exists to roll back to." | "Rollback is possible only right after an Android system update. Reinstall the previous image from a file if needed." `none` | 1 | [../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.8 |
 <!-- errorgen:end image -->
 
 ---

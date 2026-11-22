@@ -38,16 +38,20 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     APKRUN_CHANNEL: "dev"
     APKRUN_SU_FEED_URL: "https://apkrun.io/apkrun/appcast.xml"
-    APKRUN_SU_PUBLIC_ED_KEY: "SWpdhgyuYC9qtfgHtlSL8IwmHxmK0XqB21A6bc8GlKs="
     ENABLE_HARDENED_RUNTIME: YES
     SWIFT_TREAT_WARNINGS_AS_ERRORS: "$(APKRUN_CI)"
     GCC_TREAT_WARNINGS_AS_ERRORS: "$(APKRUN_CI)"
   configs:
     Debug:
       APKRUN_BUILD_IDENTITY: dev
+      # The committed test key is development-only (Tests/keys). A Release
+      # build ships an empty key unless the release pipeline exports
+      # `APKRUN_RELEASE_PUBLIC_ED_KEY` — a forged feed then verifies nothing.
+      APKRUN_SU_PUBLIC_ED_KEY: "SWpdhgyuYC9qtfgHtlSL8IwmHxmK0XqB21A6bc8GlKs="
       GCC_PREPROCESSOR_DEFINITIONS: "APKRUN_SELF_UPDATE=0"
     Release:
       APKRUN_BUILD_IDENTITY: release
+      APKRUN_SU_PUBLIC_ED_KEY: "$(APKRUN_RELEASE_PUBLIC_ED_KEY)"
       GCC_PREPROCESSOR_DEFINITIONS: "APKRUN_SELF_UPDATE=1"
 
 targets:

@@ -72,6 +72,9 @@ public enum ImageFailure: APKRunError, Equatable {
     /// apkrund found a `migration` record with no VM running (§12.3 crash safety).
     case migrationInterrupted
 
+    /// A rollback or restore was requested but no recovery point exists (§4.8).
+    case noRecoveryPoint
+
     /// The migrated image failed its health check and A was restored (§12.3 step 6b).
     case migrationHealthFailed(report: String)
 
@@ -135,6 +138,7 @@ public enum ImageFailure: APKRunError, Equatable {
         case .migrationSourceTooOld: "migrationSourceTooOld"
         case .imageArchiveUnsafeEntry: "imageArchiveUnsafeEntry"
         case .migrationInterrupted: "migrationInterrupted"
+        case .noRecoveryPoint: "noRecoveryPoint"
         case .migrationHealthFailed: "migrationHealthFailed"
         case .imageRejected: "imageRejected"
         case .imageUpdateBusy: "imageUpdateBusy"
@@ -195,7 +199,7 @@ public enum ImageFailure: APKRunError, Equatable {
             ["source": .text(source), "minimum": .text(minimum)]
         case .imageArchiveUnsafeEntry(let path):
             ["path": .fileName(path)]
-        case .migrationInterrupted:
+        case .migrationInterrupted, .noRecoveryPoint:
             [:]
         case .migrationHealthFailed(let report):
             ["report": .text(report)]

@@ -19,12 +19,12 @@ extension RuntimeHost {
             publish: { [eventHub] event in
                 eventHub.publishMaintenanceEvent(event)
             },
-            migrate: { [weak self] version, operationID in
+            migrate: { [weak self] version, operationID, restoring in
                 guard let self else {
                     throw ImageFailure.noCurrentImage
                 }
                 do {
-                    try await self.migrateImage(to: version, operationID: operationID)
+                    try await self.migrateImage(to: version, operationID: operationID, restoring: restoring)
                 } catch let failure as ImageFailure {
                     throw failure
                 } catch {
@@ -40,7 +40,21 @@ extension RuntimeHost {
     /// after this daemon's start (runtime-maintenance.md §4.3). Called from the
     /// startup sequence once `imageStore` and `instanceStore` are known.
     func reconcileImageUpdate() async {
-        let current = try? await imageStore?.current().version
+        var current = try? await imageStore?.current().version
+        // §12.3 crash safety: a `migration` record left in instance.json means
+        // the migration never completed — restore the recovery point instead of
+        // recording the half-applied image as installed.
+        if let images = imageStore, let instanceStore, let diagnostics,
+            let installed = try? await images.current(),
+            (try? await ImageMigrationService(store: instanceStore, diagnostics: diagnostics)
+                .hasInterruptedMigration(image: installed)) == true,
+            let previous = try? await images.previous()
+        {
+            let migration = ImageMigrationService(store: instanceStore, diagnostics: diagnostics)
+            try? await migration.abortMigration(restoredTo: previous)
+            image = try? await images.installed(previous.version)
+            current = previous.version
+        }
         await imageUpdateCoordinator.reconcile(currentImage: current ?? nil)
     }
 
@@ -48,7 +62,11 @@ extension RuntimeHost {
     /// (android-image.md §12.3): ends sessions, stops the VM, runs the
     /// ImageCore data steps, boots B and health-checks it. On failure the
     /// previous image is restored and the caller records the rejection (§4.8).
-    func migrateImage(to version: ImageCore.ImageVersion, operationID: UUID) async throws(ImageFailure) {
+    func migrateImage(
+        to version: ImageCore.ImageVersion,
+        operationID: UUID,
+        restoring: Bool = false
+    ) async throws(ImageFailure) {
         guard let images = imageStore, let instanceStore else {
             throw .noCurrentImage
         }
@@ -61,37 +79,53 @@ extension RuntimeHost {
         }
         imageMigrating = true
         defer { imageMigrating = false }
+        do {
+            try beginLifecycleOperation()
+        } catch {
+            throw .imageUpdateBusy(detail: "the runtime is not ready: \(error)")
+        }
+        defer { finishLifecycleOperation() }
         let activity = await updateIdleController.assertActivity(.migration)
         defer { activity.release() }
         let assertion = IOPMAssertion.begin(reason: "Updating Android")
         defer { assertion.end() }
 
-        // §12.3 precondition: no active sessions — end them first
-        // (`ended(.runtimeUpdating)`); the VM is then stopped gracefully.
+        let migration = ImageMigrationService(store: instanceStore, diagnostics: diagnostics)
+        let target = try await images.installed(version)
+        if !restoring {
+            // Preconditions first: a refused candidate leaves Android running.
+            let userdataSchema = await instanceStore.userdataSchemaVersion() ?? 0
+            try await migration.checkAllowed(
+                from: from,
+                to: target,
+                hostRuntimeVersion: buildIdentity.marketingVersion,
+                hostProtocol: (
+                    min: Int(ProtocolVersion.supportedMajors.lowerBound),
+                    max: Int(ProtocolVersion.supportedMajors.upperBound)
+                ),
+                userdataSchema: userdataSchema
+            )
+        }
+
+        // §12.3 precondition: in-flight package transactions finish first, then
+        // sessions end (`ended(.runtimeUpdating)`) and the VM stops gracefully.
+        await waitForPackageMutations()
         for packageID in await maintenanceSessionPackageIDs() {
             await endSessionForImageUpdate(packageID: packageID)
         }
         if let supervisor {
             await supervisor.stop(reason: .migration)
-            self.supervisor = nil
+            dropSupervisor()
         }
 
-        let migration = ImageMigrationService(store: instanceStore, diagnostics: diagnostics)
-        // Preconditions + steps 2–3: compatibility, recovery point, `migration`
-        // marker, `current` → B.
-        let target = try await images.installed(version)
-        let userdataSchema = await instanceStore.userdataSchemaVersion() ?? 0
-        try await migration.checkAllowed(
-            from: from,
-            to: target,
-            hostRuntimeVersion: buildIdentity.marketingVersion,
-            hostProtocol: (
-                min: Int(ProtocolVersion.supportedMajors.lowerBound),
-                max: Int(ProtocolVersion.supportedMajors.upperBound)
-            ),
-            userdataSchema: userdataSchema
-        )
-        try await migration.beginMigration(from: from, to: target, images: images)
+        if restoring {
+            // §4.8: back to A restores its recovery point — no compatibility
+            // check and no new recovery point.
+            try await migration.abortMigration(restoredTo: target)
+        } else {
+            // Steps 2–3: recovery point, `migration` marker, `current` → B.
+            try await migration.beginMigration(from: from, to: target, images: images)
+        }
         image = target
 
         // Step 4: boot B with the existing userdata. `bootPurpose` rides the
@@ -119,6 +153,7 @@ extension RuntimeHost {
         }
         // 6a: installed(B) — clear `migration`, keep only the newest point, GC images.
         try await migration.completeMigration()
+        await dropRuntimeAttachedServices()
         try? await images.garbageCollect(retaining: await imageUpdateCoordinator.gcRetainSet())
         logger?.notice("Migrated Android to image \(version.description, .public)")
     }
@@ -132,10 +167,11 @@ extension RuntimeHost {
     ) async throws(ImageFailure) {
         if let supervisor {
             await supervisor.stop(reason: .migration)
-            self.supervisor = nil
+            dropSupervisor()
         }
         try await migration.abortMigration(restoredTo: restored)
         image = try? await imageStore?.installed(restored.version)
+        await dropRuntimeAttachedServices()
         logger?.error("Image migration failed (\(report, .public)); restored \(restored.version.description, .public)")
     }
 
@@ -154,7 +190,9 @@ extension RuntimeHost {
             guard result.source != .noAndroidInventory else {
                 throw ImageFailure.migrationHealthFailed(report: "android inventory unavailable")
             }
-            let broken = result.packages.filter { $0.managed && $0.state != .installed }
+            let broken = result.packages.filter {
+                $0.managed && $0.state != .installed && $0.state != .uninstalledKeepingData
+            }
             guard broken.isEmpty else {
                 throw ImageFailure.migrationHealthFailed(
                     report: "missing packages: \(broken.map(\.packageID.rawValue).joined(separator: ","))"
@@ -359,6 +397,11 @@ extension RuntimeHost {
         }
         guard let abandoned = image?.version else {
             throw ImageFailure.noCurrentImage
+        }
+        guard let instanceStore,
+            (try? await instanceStore.listRecoveryPoints())?.isEmpty == false
+        else {
+            throw ImageFailure.noRecoveryPoint
         }
         try await imageUpdateCoordinator.rollback(to: previous.version, abandoned: abandoned)
         return "Rolled back to \(previous.version)."

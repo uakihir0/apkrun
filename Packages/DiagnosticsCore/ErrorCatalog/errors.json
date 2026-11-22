@@ -5779,6 +5779,26 @@
         "raisedBy": "ImageDownloader",
         "ref": "runtime-maintenance.md §4.4"
       }
+    },
+    {
+      "code": "image.noRecoveryPoint",
+      "parameters": [],
+      "message": {
+        "en": "No recovery point exists to roll back to.",
+        "ja": "ロールバック先の復旧ポイントがありません。"
+      },
+      "remediation": {
+        "en": "Rollback is possible only right after an Android system update. Reinstall the previous image from a file if needed.",
+        "ja": "ロールバックは Android システム更新直後にのみ可能です。必要なら以前のイメージをファイルから再インストールしてください。"
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "case": "noRecoveryPoint",
+        "when": "rollback is requested after the recovery point was deleted or pruned",
+        "raisedBy": "ImageMigrationService",
+        "ref": "[../02-design/runtime-maintenance.md](../02-design/runtime-maintenance.md) §4.8"
+      }
     }
   ]
 }

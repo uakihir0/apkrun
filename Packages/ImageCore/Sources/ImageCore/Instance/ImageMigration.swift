@@ -92,6 +92,11 @@ public actor ImageMigrationService {
     /// restored, `current` → A, and `instance.json` gets a new `userdataGeneration`
     /// and no `migration`.
     public func abortMigration(restoredTo image: InstalledImage) async throws(ImageFailure) {
+        // Refuse before touching the live instance: without a recovery point a
+        // restore would leave Android unbootable with its disks already moved.
+        guard try await !store.listRecoveryPoints().isEmpty else {
+            throw .noRecoveryPoint
+        }
         try await store.moveInstanceAside(tag: "failed")
         try await store.restoreLatestRecoveryPoint(image: image)
         logger.notice("Restored the recovery point of \(image.version.description, .public)")

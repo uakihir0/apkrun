@@ -451,10 +451,9 @@ public actor SharedFolderService {
         if package.rawValue == Self.browserOnlyPackage {
             root = try await checkedPickerCreate(package: package, rootID: rootID)
         } else {
-            root =
-                try await checkedAccess(
-                    package: package, rootID: rootID, write: true
-                ).0
+            root = try await checkedAccess(
+                package: package, rootID: rootID, write: true
+            ).0
         }
         return try await create(
             root: root, package: package,

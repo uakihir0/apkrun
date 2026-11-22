@@ -71,14 +71,32 @@ jobs:
           key="$(xcrun swift scripts/release/sign-update.swift --generate | awk '/^private:/ {print $2}')"
           echo "APKRUN_SPARKLE_ED_PRIVATE_KEY=$key" >> "$GITHUB_ENV"
 
+      - name: Store the notarization API key
+        if: github.event.inputs.mode != 'dry-run'
+        env:
+          APKRUN_NOTARY_KEY_P8: ${{ secrets.APKRUN_NOTARY_KEY_P8 }}
+        run: |
+          mkdir -p build/notary
+          echo "$APKRUN_NOTARY_KEY_P8" | base64 -d > build/notary/key.p8
+
       - name: Build, sign, and package
         env:
           APKRUN_SPARKLE_ED_PRIVATE_KEY: ${{ secrets.APKRUN_SPARKLE_ED_PRIVATE_KEY }}
+          APKRUN_NOTARY_KEY_ID: ${{ secrets.APKRUN_NOTARY_KEY_ID }}
+          APKRUN_NOTARY_ISSUER: ${{ secrets.APKRUN_NOTARY_ISSUER }}
+          APKRUN_DEVELOPER_ID: ${{ vars.APKRUN_DEVELOPER_ID }}
           DRY_RUN: ${{ github.event.inputs.mode == 'dry-run' && '1' || '0' }}
         run: |
           args=(--version "${{ steps.version.outputs.version }}" \
                 --build "${{ steps.version.outputs.build }}")
-          [[ "$DRY_RUN" == "1" ]] && args+=(--dry-run)
+          if [[ "$DRY_RUN" == "1" ]]; then
+            args+=(--dry-run)
+          else
+            args+=(--developer-id "$APKRUN_DEVELOPER_ID" --notarize \
+                   --notary-key build/notary/key.p8 \
+                   --notary-key-id "$APKRUN_NOTARY_KEY_ID" \
+                   --notary-issuer "$APKRUN_NOTARY_ISSUER")
+          fi
           scripts/release/build-release.sh "${args[@]}"
 
       - name: Upload the release artifacts

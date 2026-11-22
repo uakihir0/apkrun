@@ -138,3 +138,44 @@ jobs:
           path: build/corpus/
           if-no-files-found: warn
           retention-days: 30
+
+  notarize:
+    name: notarize (distribution wrapper)
+    if: github.ref == 'refs/heads/main'
+    runs-on:
+      - self-hosted
+      - macOS
+      - apkrun-lab
+    timeout-minutes: 30
+    environment: signing
+    env:
+      APKRUN_CI: "1"
+      APKRUN_DEVELOPER_ID: ${{ vars.APKRUN_DEVELOPER_ID }}
+      APKRUN_NOTARY_KEY_ID: ${{ secrets.APKRUN_NOTARY_KEY_ID }}
+      APKRUN_NOTARY_ISSUER: ${{ secrets.APKRUN_NOTARY_ISSUER }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Store the notarization API key
+        env:
+          APKRUN_NOTARY_KEY_P8: ${{ secrets.APKRUN_NOTARY_KEY_P8 }}
+        run: |
+          mkdir -p build/notary
+          echo "$APKRUN_NOTARY_KEY_P8" | base64 -d > build/notary/key.p8
+      - name: Install pinned repository tools
+        run: scripts/bootstrap
+      - name: Notarize and staple the Release build smoke check
+        run: |
+          # Exercises notarize.sh end to end on the lab Mac; the full
+          # distribution-wrapper path needs a real package and is covered
+          # by the T1 signing fixtures.
+          scripts/generate-project.sh
+          app="$(scripts/release/assemble-bundle.sh \
+              --build 0 --derived-data build/nightly/notarize/DerivedData \
+              --developer-id "$APKRUN_DEVELOPER_ID" | tail -1)"
+          scripts/release/notarize.sh "$app" \
+              --key build/notary/key.p8 \
+              --key-id "$APKRUN_NOTARY_KEY_ID" \
+              --issuer "$APKRUN_NOTARY_ISSUER"

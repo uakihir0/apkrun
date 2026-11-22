@@ -71,6 +71,7 @@ import Testing
                 "stagingExpired", "bundleInvalid",
                 "approvalDenied", "approvalTimedOut", "approvalNotFound",
                 "bootstrapInvalid", "bootstrapNotAllowed",
+                "distributionToolMissing", "identityNotFound", "notarizationFailed",
                 "launchServicesMissing", "refreshBlocked", "wrapperRunning",
             ].map { "wrapper.\($0)" }
             + [

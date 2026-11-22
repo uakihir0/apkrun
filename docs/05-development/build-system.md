@@ -469,7 +469,7 @@ The layout is fixed by [filesystem-layout.md](../01-architecture/filesystem-layo
 | Copy resources (planned, #91) | `compatibility.json` | `Tests/Compatibility/database/compatibility.json` ([diagnostics.md](../02-design/diagnostics.md) §10) |
 | `scripts/build/write-components.py` | `Contents/Resources/components.json` | §5 |
 
-Release assembly is `scripts/release/assemble-bundle.sh` (planned, #89): `xcodebuild -configuration Release` with `CODE_SIGNING_ALLOWED=NO`, then `scripts/release/sign-bundle.sh` (§12.3). The runtime image is never inside the app bundle ([decisions/0011-runtime-image-bundle.md](../01-architecture/decisions/0011-runtime-image-bundle.md)).
+Release assembly is `scripts/release/assemble-bundle.sh`: `xcodebuild -configuration Release` with `CODE_SIGNING_ALLOWED=NO`, then `scripts/release/sign-bundle.sh` (§12.3). The runtime image is never inside the app bundle ([decisions/0011-runtime-image-bundle.md](../01-architecture/decisions/0011-runtime-image-bundle.md)).
 
 ---
 
@@ -481,7 +481,7 @@ Release assembly is `scripts/release/assemble-bundle.sh` (planned, #89): `xcodeb
 |---|---|---|---|
 | Debug | "Sign to Run Locally" or the Apple Development certificate; Xcode adds `get-task-allow` | yes | no |
 | ReleaseUpdateTest (planned, #58) | Developer ID Application, CI only | yes | no |
-| Release | Developer ID Application, secure timestamp | yes | yes (planned, #89) |
+| Release | Developer ID Application, secure timestamp | yes | yes |
 | Local wrappers | ad-hoc, per wrapper (§12.5) | yes | no |
 | Distribution wrappers | the creator's Developer ID | yes | yes (§12.6) |
 
@@ -588,7 +588,7 @@ WrapperCore signs each local wrapper at run time, not at build time ([wrapper.md
 - The launcher must be re-signable this way: system frameworks only, arm64 only, no nested code. `scripts/check-launcher.sh` enforces it (planned, #69).
 - `scripts/dev/make-wrapper.sh <package> <out-dir>` (planned, #46) builds a wrapper by hand with the same command and registers it with `apkrun wrapper approve`.
 
-### 12.6 Notarization (planned)
+### 12.6 Notarization
 
 `scripts/release/notarize.sh <path>` handles the app and the DMG:
 
@@ -601,7 +601,7 @@ spctl --assess --type execute -vv APKRun.app
 
 In CI the script uses the API key form (`--key`, `--key-id`, `--issuer`) from the release secrets. `scripts/release/make-dmg.sh` then builds `APKRun-<version>.dmg` (`hdiutil create -format UDZO`), signs it with the Developer ID, notarizes it, and staples it.
 
-Distribution wrappers use the same tools on the creator's Mac: `apkrun wrap <package> --distribution --identity "Developer ID Application: Name (TEAMID)" [--notarize --keychain-profile <profile>]` ([wrapper.md](../02-design/wrapper.md) §11). The nightly `notarize` job (planned) keeps that path working with a HelloText distribution wrapper.
+Distribution wrappers use the same tools on the creator's Mac: `apkrun wrap <package> --distribution --identity "Developer ID Application: Name (TEAMID)" [--notarize --keychain-profile <profile>]` ([wrapper.md](../02-design/wrapper.md) §11). The nightly `notarize` job keeps that path working.
 
 ---
 

@@ -6183,6 +6183,70 @@
         "ref": "diagnostics.md §8"
       },
       "parameters": []
+    },
+    {
+      "code": "wrapper.distributionToolMissing",
+      "parameters": [
+        "tool"
+      ],
+      "message": {
+        "en": "APKRun couldn't find the ‹tool› tool on this Mac."
+      },
+      "remediation": {
+        "en": "Install the Xcode Command Line Tools (xcode-select --install), then try again."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "distributionToolMissing(String)",
+        "when": "xcrun --find does not locate notarytool or stapler",
+        "raisedBy": "DistributionWrapperBuilder",
+        "ref": "wrapper.md §11"
+      }
+    },
+    {
+      "code": "wrapper.identityNotFound",
+      "parameters": [
+        "identity"
+      ],
+      "message": {
+        "en": "The signing identity ‹identity› isn't installed on this Mac."
+      },
+      "remediation": {
+        "en": "Run `security find-identity -v -p codesigning` and pass --identity with one of those names."
+      },
+      "action": "none",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "identityNotFound(String)",
+        "when": "security find-identity -v -p codesigning does not list the identity",
+        "raisedBy": "DistributionWrapperBuilder",
+        "ref": "wrapper.md §11"
+      }
+    },
+    {
+      "code": "wrapper.notarizationFailed",
+      "parameters": [
+        "submissionID",
+        "summary"
+      ],
+      "message": {
+        "en": "Apple's notary service rejected the Mac app."
+      },
+      "remediation": {
+        "en": "Fix the problem the notarization log lists and try again."
+      },
+      "action": "retry",
+      "cliExit": 1,
+      "doc": {
+        "table": "wrapperFailure",
+        "case": "notarizationFailed(submissionID: String, summary: String)",
+        "when": "notarytool submit returns Invalid or times out",
+        "raisedBy": "DistributionWrapperBuilder",
+        "ref": "wrapper.md §11"
+      }
     }
   ]
 }

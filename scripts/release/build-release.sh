@@ -21,6 +21,11 @@ feed_base_url="https://updates.invalid/apkrun/"
 developer_id=""
 dry_run=0
 out_dir="build/release"
+notarize=0
+notary_profile=""
+notary_key=""
+notary_key_id=""
+notary_issuer=""
 
 while (($#)); do
     case "$1" in
@@ -30,6 +35,11 @@ while (($#)); do
         --feed-base-url) feed_base_url="$2"; shift 2 ;;
         --developer-id) developer_id="$2"; shift 2 ;;
         --dry-run) dry_run=1; shift ;;
+        --notarize) notarize=1; shift ;;
+        --notary-profile) notary_profile="$2"; shift 2 ;;
+        --notary-key) notary_key="$2"; shift 2 ;;
+        --notary-key-id) notary_key_id="$2"; shift 2 ;;
+        --notary-issuer) notary_issuer="$2"; shift 2 ;;
         --out) out_dir="$2"; shift 2 ;;
         *) echo "unknown argument: $1" >&2; exit 64 ;;
     esac
@@ -59,30 +69,38 @@ if [[ -z "${APKRUN_RELEASE_PUBLIC_ED_KEY:-}" && -n "${APKRUN_SPARKLE_ED_PRIVATE_
 fi
 
 # Build the Release products; the guest agent is embedded by the standard
-# build phase when its artifacts exist.
-scripts/generate-project.sh
-xcodebuild -project APKRun.xcodeproj -scheme APKRun \
-    -configuration Release -jobs 2 \
-    -derivedDataPath build/ReleaseDerivedData \
-    -resultBundlePath "$out_dir/APKRun-Release.xcresult" \
-    CURRENT_PROJECT_VERSION="$build" \
-    ${developer_id:+CODE_SIGN_IDENTITY=-} \
-    ${developer_id:-CODE_SIGNING_ALLOWED=NO} \
-    APKRUN_CHANNEL="$channel" \
-    build
-
-app="build/ReleaseDerivedData/Build/Products/Release/APKRun.app"
-if [[ ! -d "$app" ]]; then
-    echo "build-release: APKRun.app missing at $app" >&2
-    exit 66
-fi
-
+# build phase when its artifacts exist (build-system.md §11).
+assemble_args=(--build "$build" --channel "$channel" \
+    --result-bundle "$out_dir/APKRun-Release.xcresult")
 if [[ -n "$developer_id" ]]; then
-    scripts/release/sign-bundle.sh "$app" "$developer_id"
+    assemble_args+=(--developer-id "$developer_id")
 fi
+app="$(scripts/release/assemble-bundle.sh "${assemble_args[@]}" | tail -1)"
 
 # R1/R5/R6 checks (workflow.md §9.1).
 scripts/release/check-release-build.sh "$app"
+
+# Notarize + staple the bundle and build the signed DMG (§12.6). A dry run
+# stops before this (§9.7).
+if ((notarize)); then
+    if ((dry_run)); then
+        echo "build-release: --notarize and --dry-run are mutually exclusive" >&2
+        exit 64
+    fi
+    notary_args=()
+    if [[ -n "$notary_profile" ]]; then
+        notary_args=(--keychain-profile "$notary_profile")
+    elif [[ -n "$notary_key" && -n "$notary_key_id" && -n "$notary_issuer" ]]; then
+        notary_args=(--key "$notary_key" --key-id "$notary_key_id" --issuer "$notary_issuer")
+    else
+        echo "build-release: --notarize needs --notary-profile or the key/id/issuer triple" >&2
+        exit 64
+    fi
+    scripts/release/notarize.sh "$app" "${notary_args[@]}"
+    scripts/release/make-dmg.sh "$app" --version "$version" \
+        --identity "$developer_id" --out "$out_dir" \
+        --notarize "${notary_args[@]}"
+fi
 
 # The Sparkle archive (§3.3): a plain zip next to the bundle.
 archive="$out_dir/APKRun-$version.zip"

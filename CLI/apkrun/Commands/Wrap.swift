@@ -245,8 +245,15 @@
                             parameters: [:]
                         )
                     }
+                    // legal-and-licensing.md §9: the fixed redistribution
+                    // confirmation text for distribution wrappers.
                     try CLIConfirmation.confirm(
-                        "The Mac app will contain the APK. Confirm you may redistribute it?",
+                        "This app contains \(name ?? packageID.rawValue) "
+                            + "(\(packageID.rawValue)). You are about to sign it "
+                            + "with your Developer ID so that other people can "
+                            + "install it. Continue only if you have the right "
+                            + "to redistribute this app. You are responsible "
+                            + "for that, not APKRun.",
                         yes: false)
                 }
                 let outputDirectory = try WrapCommandSupport.distributionOutput(for: output)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import html
 import json
 import os
 import re
@@ -159,6 +160,71 @@ def _checksums(files: Sequence[Mapping[str, object]]) -> str:
     return "".join(f"{entry['sha256']}  {entry['path']}\n" for entry in files)
 
 
+def _source_offer_entries(source_offer: Path) -> list[Mapping[str, object]]:
+    """Parse source-offer.json (legal-and-licensing.md §7.2): a `modules` list
+    (or a bare list) of {module, license, project, revision, source}."""
+    document = json.loads(source_offer.read_text(encoding="utf-8"))
+    entries = document.get("modules") if isinstance(document, dict) else document
+    if not isinstance(entries, list):
+        raise BundleError(
+            f"{source_offer}: source offer must be a list or an object with a `modules` list."
+        )
+    for entry in entries:
+        for field in ("module", "license", "project", "revision"):
+            if not isinstance(entry, dict) or not isinstance(entry.get(field), str):
+                raise BundleError(
+                    f"{source_offer}: every entry needs module, license, project, revision."
+                )
+    return entries
+
+
+def render_notice(manifest: Mapping[str, Any], source_offer: Path) -> str:
+    """legal/notice.html for a release bundle (legal-and-licensing.md §7.3)."""
+    provenance = manifest["provenance"]
+    revisions = provenance.get("revisions") or {}
+    rows = []
+    for entry in _source_offer_entries(source_offer):
+        source = entry.get("source")
+        project = html.escape(str(entry["project"]))
+        cell = (
+            f'<a href="{html.escape(str(source), quote=True)}">{project}</a>'
+            if isinstance(source, str)
+            else project
+        )
+        rows.append(
+            "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+            % (
+                html.escape(str(entry["module"])),
+                html.escape(str(entry["license"])),
+                cell,
+                html.escape(str(entry["revision"])),
+            )
+        )
+    offer = (
+        "<h2>Source offers</h2><table><tr><th>Component</th><th>License</th>"
+        "<th>Project</th><th>Revision</th></tr>%s</table>" % "".join(rows)
+        if rows
+        else "<h2>Source offers</h2><p>No component requires a source offer.</p>"
+    )
+    return """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>APKRun Android image %(v)s — legal notices</title></head>
+<body>
+<h1>APKRun Android image %(v)s</h1>
+<p>Provenance: pinnedManifestSHA256 %(pin)s, revisions.guest %(guest)s, builderImageDigest %(digest)s.</p>
+<p>The full license notices of the Android system are in Android at
+Settings → About → Legal information. APKRun itself is distributed under
+the MIT license.</p>
+%(offer)s
+</body></html>
+""" % {
+        "v": html.escape(str(manifest["imageVersion"])),
+        "pin": html.escape(str(provenance.get("pinnedManifestSHA256"))),
+        "guest": html.escape(str(revisions.get("guest"))),
+        "digest": html.escape(str(provenance.get("builderImageDigest"))),
+        "offer": offer,
+    }
+
+
 @contextlib.contextmanager
 def _staging(output: Path) -> Iterator[Path]:
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -179,8 +245,13 @@ def build_bundle(
     source: Path | None = None,
     inventory_path: Path | None = None,
     sign_key: Path,
+    source_offer: Path | None = None,
+    release: bool = False,
 ) -> dict[str, object]:
     """Build a signed bundle in `output_directory`."""
+    if release and source_offer is None:
+        # legal-and-licensing.md §7.3: a release bundle needs a source offer.
+        raise BundleError("--release requires --source-offer <source-offer.json>.")
     if not SHORT_VERSION_PATTERN.fullmatch(image_version):
         raise BundleError("--image-version must be the short form YYYY.MM.N.")
     signing_key = _load_signing_key(sign_key)
@@ -344,6 +415,15 @@ def build_bundle(
             "compatibility": {"upgradeFrom": {"minimumImageVersion": image_version}},
             "files": files,
         }
+        if source_offer is not None:
+            notice_path = bundle / "legal/notice.html"
+            notice_path.parent.mkdir(parents=True)
+            notice_path.write_text(render_notice(manifest, source_offer), encoding="utf-8")
+            notice_entry = _file_entry(bundle, "legal/notice.html")
+            files.append(notice_entry)
+            files.sort(key=lambda entry: str(entry["path"]).encode("utf-8"))
+            manifest["legal"] = {"notice": notice_entry}
+            manifest["files"] = files
         violations = validate(manifest)
         if violations:
             first = violations[0]
@@ -378,6 +458,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ed25519 private key from `python3 -m apkrun_image keygen`",
     )
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument(
+        "--source-offer",
+        type=Path,
+        help="source-offer.json for the bundle's legal/notice.html (§7.3)",
+    )
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help="release bundle: requires --source-offer (legal-and-licensing.md §7.3)",
+    )
     return parser
 
 
@@ -400,6 +490,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             source=arguments.source,
             inventory_path=arguments.inventory,
             sign_key=arguments.sign_key,
+            source_offer=arguments.source_offer,
+            release=arguments.release,
         )
     except (
         AvbError,

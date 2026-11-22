@@ -22,6 +22,7 @@ checks+=(
     "scripts/check-raw-adb.sh"
     "scripts/check-strings.sh"
     "scripts/check-launcher.sh"
+    "scripts/check-licenses.sh"
 )
 if [[ -f "$repo_root/scripts/check-fixtures.sh" ]]; then
     checks+=("scripts/check-fixtures.sh")

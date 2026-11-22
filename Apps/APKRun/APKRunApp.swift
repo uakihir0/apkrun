@@ -104,6 +104,19 @@ struct APKRunApp: App {
         }
         .windowResizability(.contentSize)
         .defaultLaunchBehavior(approvalOnly ? .suppressed : .automatic)
+        .commands {
+            // legal-and-licensing.md §6.4: the Help menu opens the
+            // third-party notices shipped in the app bundle.
+            CommandGroup(replacing: .help) {
+                Button("Third-Party Notices") {
+                    if let url = Bundle.main.url(
+                        forResource: "ThirdPartyNotices", withExtension: "html"
+                    ) {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
+        }
 
         settingsScene
     }

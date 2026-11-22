@@ -364,3 +364,58 @@ def test_a_command_line_without_bootconfig_is_refused(tmp_path: Path) -> None:
             inventory_path=FIXTURE_INVENTORY,
             sign_key=TEST_KEY,
         )
+
+
+def test_release_bundle_carries_the_legal_notice(tmp_path: Path) -> None:
+    output = tmp_path / "bundle"
+    offer = tmp_path / "source-offer.json"
+    offer.write_text(
+        json.dumps(
+            {
+                "modules": [
+                    {
+                        "module": "kernel",
+                        "license": "GPL-2.0-only",
+                        "project": "kernel/common",
+                        "revision": "abc123",
+                        "source": "https://updates.example/apkrun/source/2026.10.0/kernel.tar.zst",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = build_bundle(
+        json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8")),
+        layout_path=_layout(tmp_path),
+        reference=None,
+        image_version="2026.10.0",
+        output_directory=output,
+        source=FIXTURE_ARCHIVE,
+        inventory_path=FIXTURE_INVENTORY,
+        sign_key=TEST_KEY,
+        source_offer=offer,
+        release=True,
+    )
+    notice = output / "legal/notice.html"
+    assert notice.is_file()
+    text = notice.read_text(encoding="utf-8")
+    assert "kernel/common" in text and "GPL-2.0-only" in text
+    assert manifest["legal"]["notice"]["path"] == "legal/notice.html"
+    assert manifest["legal"]["notice"]["sha256"] == _sha256(notice)
+    assert validate(manifest) == []
+
+
+def test_release_refuses_a_missing_source_offer(tmp_path: Path) -> None:
+    with pytest.raises(BundleError, match="--release requires --source-offer"):
+        build_bundle(
+            json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8")),
+            layout_path=_layout(tmp_path),
+            reference=None,
+            image_version="2026.10.0",
+            output_directory=tmp_path / "bundle",
+            source=FIXTURE_ARCHIVE,
+            inventory_path=FIXTURE_INVENTORY,
+            sign_key=TEST_KEY,
+            release=True,
+        )

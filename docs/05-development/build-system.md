@@ -662,7 +662,7 @@ Jobs marked *(planned)* do not exist yet.
 
 | Workflow | Trigger | Job | Tier | Runner | Content |
 |---|---|---|---|---|---|
-| `ci-policy.yml` | `pull_request_target` to `main`: opened, reopened, synchronize, edited, labeled, unlabeled | `workflow-policy` | — | `ubuntu-latest` | `scripts/ci/check-pr-control-changes.py` from `main`: head, base, changed paths, and reviews through the read-only API. Control paths: workflows, build and convention scripts, generators, pins, formatter and tool settings, test and build manifests, test trees, module graph. The approver applies `ci-policy-approved`; a new commit, reopen, PR edit, or later label event resets the check; removing the label revokes it |
+| `ci-policy.yml` | `pull_request_target` to `main`: opened, reopened, synchronize, edited, labeled, unlabeled | `workflow-policy` | — | `ubuntu-latest` | `scripts/ci/check-pr-control-changes.py` from `main`: head, base, changed paths, and reviews through the read-only API. Control paths: workflows, build and convention scripts, generators, pins, formatter and tool settings, test and build manifests, test trees, module graph. Report-only: the job prints the control paths a pull request changed and always succeeds |
 | `ci.yml` | every pull request; push to `main` | `lint` | — | `xcode-27` | `scripts/bootstrap`; `scripts/ci/run-checks.sh` (`tests/run.sh`, `check-module-deps.sh`, `check-logging.sh`, `check-todos.sh`, `check-format.sh`, `check-lock.sh`, `check-protos.sh`) |
 | | | `codegen` | — | `xcode-27` | `scripts/ci/codegen.sh` (§4) |
 | | | `third-party` | — | `xcode-27` | cache key from `build-third-party.sh --print-cache-key virgl-runtime`; restore; `build-third-party.sh virgl-runtime`; `generate-notices.py --check` |

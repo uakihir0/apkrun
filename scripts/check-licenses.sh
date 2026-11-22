@@ -57,34 +57,34 @@ def allowed(expr, licenses):
     # Normalise parentheses.
     tokens = re.findall(r"\(|\)|[^\s()]+", expr)
 
-    def parse(index):
-        # value := atom [WITH exc] | '(' expr ')' ; expr := value (AND|OR value)*
-        values = []
-        ops = []
-        while index < len(tokens):
-            tok = tokens[index]
-            if tok == "(":
-                sub, index = parse(index + 1)
-                values.append(sub)
-            elif tok == ")":
-                index += 1
-                break
-            elif tok in ("AND", "OR"):
-                ops.append(tok)
-                index += 1
-            else:
-                atom = tok
-                if index + 2 < len(tokens) and tokens[index + 1] == "WITH":
-                    atom = tok + " WITH " + tokens[index + 2]
-                    index += 2
-                values.append(atom in licenses)
-                index += 1
-        result = values[0] if values else False
-        for op, value in zip(ops, values[1:]):
-            result = (result and value) if op == "AND" else (result or value)
-        return result, index
+    # SPDX precedence: WITH binds to its atom, AND binds tighter than OR.
+    def parse_or(index):
+        value, index = parse_and(index)
+        while index < len(tokens) and tokens[index] == "OR":
+            rhs, index = parse_and(index + 1)
+            value = value or rhs
+        return value, index
 
-    value, _ = parse(0)
+    def parse_and(index):
+        value, index = parse_factor(index)
+        while index < len(tokens) and tokens[index] == "AND":
+            rhs, index = parse_factor(index + 1)
+            value = value and rhs
+        return value, index
+
+    def parse_factor(index):
+        if index < len(tokens) and tokens[index] == "(":
+            value, index = parse_or(index + 1)
+            if index < len(tokens) and tokens[index] == ")":
+                index += 1
+            return value, index
+        atom = tokens[index]
+        if index + 2 < len(tokens) and tokens[index + 1] == "WITH":
+            atom = atom + " WITH " + tokens[index + 2]
+            index += 2
+        return atom in licenses, index + 1
+
+    value, _ = parse_or(0)
     return value
 
 

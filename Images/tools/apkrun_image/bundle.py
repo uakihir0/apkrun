@@ -170,10 +170,10 @@ def _source_offer_entries(source_offer: Path) -> list[Mapping[str, object]]:
             f"{source_offer}: source offer must be a list or an object with a `modules` list."
         )
     for entry in entries:
-        for field in ("module", "license", "project", "revision"):
+        for field in ("module", "license", "project", "revision", "source"):
             if not isinstance(entry, dict) or not isinstance(entry.get(field), str):
                 raise BundleError(
-                    f"{source_offer}: every entry needs module, license, project, revision."
+                    f"{source_offer}: every entry needs module, license, project, revision, source."
                 )
     return entries
 
@@ -213,7 +213,7 @@ def render_notice(manifest: Mapping[str, Any], source_offer: Path) -> str:
 <p>Provenance: pinnedManifestSHA256 %(pin)s, revisions.guest %(guest)s, builderImageDigest %(digest)s.</p>
 <p>The full license notices of the Android system are in Android at
 Settings → About → Legal information. APKRun itself is distributed under
-the MIT license.</p>
+the Apache-2.0 license.</p>
 %(offer)s
 </body></html>
 """ % {

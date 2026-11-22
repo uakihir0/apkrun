@@ -73,6 +73,18 @@ class CheckLicensesTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("missing committed license copy", result.stderr)
 
+    def test_or_and_precedence(self):
+        # AND binds tighter than OR: `MIT OR GPL-3.0-only AND GPL-2.0-only`
+        # allows MIT even though the GPL pair is not on the list.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_root(tmp)
+            (root / "ThirdParty/licenses/demo/LICENSE").write_text("x")
+            (root / "Package.resolved").write_text('{"pins": []}')
+            entry = dict(ENTRY, license="MIT OR GPL-3.0-only AND GPL-2.0-only")
+            write_lock(root, [entry])
+            result = run_check(root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_reference_entry_needs_identified_license(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = make_root(tmp)

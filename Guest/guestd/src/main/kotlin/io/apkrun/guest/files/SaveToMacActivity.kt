@@ -39,14 +39,8 @@ class SaveToMacActivity : Activity() {
                 ?: ""
         var offered = 0
         for (uri in uris) {
-            try {
-                contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                )
-            } catch (error: SecurityException) {
-                // A transient grant is enough: the daemon reads the stream at once on accept.
-            }
+            // The transient grant ends with this activity; offerExport takes a
+            // persistable grant or opens the stream while the grant lives.
             if (bridge.offerExport(uri, sourcePackage, displayIdOf()) != null) {
                 offered += 1
             }

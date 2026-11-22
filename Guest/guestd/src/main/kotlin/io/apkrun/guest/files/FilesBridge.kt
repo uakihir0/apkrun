@@ -64,6 +64,8 @@ internal class FilesBridge(
         val size: Long,
         val sourcePackage: String,
         val displayId: Int,
+        /** Opened eagerly while the share grant lives, when no persistable grant exists. */
+        val stream: java.io.InputStream?,
     )
 
     private val offerIds = AtomicLong(System.currentTimeMillis() and 0x3FFFFFFF)
@@ -145,6 +147,33 @@ internal class FilesBridge(
         displayId: Int,
     ): Long? {
         val meta = describe(uri) ?: return null
+        // A transient share grant dies with the calling activity, so without a
+        // persistable grant the stream is opened now and kept for the resolve.
+        val persisted =
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+                true
+            } catch (error: SecurityException) {
+                false
+            } catch (error: Exception) {
+                false
+            }
+        val stream =
+            if (persisted) {
+                null
+            } else {
+                try {
+                    context.contentResolver.openInputStream(uri)
+                } catch (error: Exception) {
+                    AgentLog.warning(
+                        "the offered file could not be opened: ${error.javaClass.simpleName}"
+                    )
+                    return null
+                }
+            }
         val offerId = offerIds.incrementAndGet()
         synchronized(pendingExports) {
             pendingExports[offerId] =
@@ -156,6 +185,7 @@ internal class FilesBridge(
                     size = meta.size,
                     sourcePackage = sourcePackage,
                     displayId = displayId,
+                    stream = stream,
                 )
         }
         events.publish { event ->
@@ -174,10 +204,13 @@ internal class FilesBridge(
 
     /** Every pending offer of a package is dropped when its app session ends. */
     fun discardOffersOf(sourcePackage: String) {
-        synchronized(pendingExports) {
-            val doomed = pendingExports.filterValues { it.sourcePackage == sourcePackage }.keys
-            doomed.forEach { pendingExports.remove(it) }
-        }
+        val doomed =
+            synchronized(pendingExports) {
+                val keys =
+                    pendingExports.filterValues { it.sourcePackage == sourcePackage }.keys
+                keys.mapNotNull { pendingExports.remove(it) }
+            }
+        doomed.forEach { it.stream?.close() }
     }
 
     /**
@@ -190,19 +223,22 @@ internal class FilesBridge(
             synchronized(pendingExports) { pendingExports.remove(request.offerId) }
                 ?: return ExportStart.getDefaultInstance()
         if (request.decision != ExportDecision.EXPORT_DECISION_ACCEPT) {
+            offer.stream?.close()
             return ExportStart.getDefaultInstance()
         }
         // The file is framed as it is read; it never lands in memory whole
-        // (desktop-integration.md §6.3).
+        // (desktop-integration.md §6.3). An eagerly opened stream survives the
+        // share activity's transient grant; a persistable grant is reopened.
         val stream =
-            try {
-                context.contentResolver.openInputStream(offer.uri)
-            } catch (error: Exception) {
-                AgentLog.warning(
-                    "the offered file could not be read: ${error.javaClass.simpleName}"
-                )
-                null
-            } ?: return ExportStart.getDefaultInstance()
+            offer.stream
+                ?: try {
+                    context.contentResolver.openInputStream(offer.uri)
+                } catch (error: Exception) {
+                    AgentLog.warning(
+                        "the offered file could not be read: ${error.javaClass.simpleName}"
+                    )
+                    null
+                } ?: return ExportStart.getDefaultInstance()
         val transferId =
             bulkTransfers.sendStream(
                 BulkKind.BULK_KIND_FILE,

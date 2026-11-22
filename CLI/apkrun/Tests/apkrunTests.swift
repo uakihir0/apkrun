@@ -1431,6 +1431,33 @@ private let releaseBuildInfo = BuildInfo(
             WrapCommandSupport.verificationText(broken)
                 == golden("wrap-verify-problems.txt"))
     }
+
+    @Test func wrapGoldenDistributionTexts() {
+        let plain = DistributionWrapperResult(
+            appURL: URL(fileURLWithPath: "/Users/devin/HelloText.app"),
+            zipURL: URL(fileURLWithPath: "/Users/devin/HelloText.zip"),
+            bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+            cdhash: "0123456789abcdef0123456789abcdef01234567",
+            teamID: "ABCDE12345",
+            notarized: false
+        )
+        #expect(
+            WrapCommandSupport.distributionText(plain)
+                == golden("wrap-distribution.txt"))
+        let notarized = DistributionWrapperResult(
+            appURL: plain.appURL,
+            zipURL: plain.zipURL,
+            bundleID: plain.bundleID,
+            cdhash: plain.cdhash,
+            teamID: plain.teamID,
+            notarized: true,
+            submissionID: "SUB-1",
+            assessment: "source=Notarized Developer ID"
+        )
+        #expect(
+            WrapCommandSupport.distributionText(notarized)
+                == golden("wrap-distribution-notarized.txt"))
+    }
 #endif
 
 // MARK: - #80 `apkrun settings`

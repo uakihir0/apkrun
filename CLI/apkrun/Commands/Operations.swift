@@ -339,6 +339,14 @@
                     text += " \(result.failed.count) failed."
                 }
                 return text
+            case .distributionWrapper(let result):
+                var text =
+                    "Created \(DaemonInstallSupport.safeTerminalText(result.appURL.path)) and "
+                    + DaemonInstallSupport.safeTerminalText(result.zipURL.path)
+                if result.notarized {
+                    text += " (notarized)"
+                }
+                return text
             case .diagnostics(let info):
                 var text = "Wrote the diagnostics report (\(info.bytes) bytes)."
                 if !info.omitted.isEmpty {

@@ -27,6 +27,18 @@
         @Flag(name: .long, help: "Bundle the APK set so the Mac app can install it elsewhere (#90).")
         var portable = false
 
+        @Flag(name: .long, help: "Build a redistributable Mac app signed with Developer ID (#89).")
+        var distribution = false
+
+        @Option(name: .long, help: "The Developer ID signing identity (required with --distribution).")
+        var identity: String?
+
+        @Flag(name: .long, help: "Notarize and staple the Mac app (needs --keychain-profile).")
+        var notarize = false
+
+        @Option(name: .long, help: "The notarytool keychain profile (required with --notarize).")
+        var keychainProfile: String?
+
         @Option(name: .long, help: "A provider spec such as local:/path or direct:<https-url>.")
         var provider: String?
 
@@ -70,6 +82,34 @@
         var json = false
 
         mutating func run() async throws {
+            // The --distribution flags are checked before any work so a
+            // misspelled invocation fails fast (wrapper.md §11).
+            if distribution {
+                guard let identity, !identity.isEmpty else {
+                    throw CLIFailure.invalidArgument(
+                        argument: "identity",
+                        reason: "--distribution needs --identity")
+                }
+                if notarize {
+                    guard let keychainProfile, !keychainProfile.isEmpty else {
+                        throw CLIFailure.invalidArgument(
+                            argument: "keychain-profile",
+                            reason: "--notarize needs --keychain-profile")
+                    }
+                }
+                guard !portable else {
+                    throw CLIFailure.invalidArgument(
+                        argument: "portable",
+                        reason: "a distribution wrapper already bundles the APK")
+                }
+            } else {
+                guard identity == nil, !notarize, keychainProfile == nil else {
+                    throw CLIFailure.invalidArgument(
+                        argument: "distribution",
+                        reason: "--identity, --notarize and --keychain-profile need --distribution")
+                }
+            }
+
             // wrapper.md §12.2: a file goes through importPackage and the
             // preview's relation decides the row of the import/install
             // table; a package ID is wrapped as is.
@@ -191,6 +231,57 @@
                 }
             }
             defer { try? iconHandle?.close() }
+
+            if distribution {
+                // wrapper.md §11: the creator confirms the APK may be
+                // redistributed; --yes skips the prompt.
+                if !yes {
+                    guard isatty(STDIN_FILENO) == 1 else {
+                        throw RuntimeWireError(
+                            domain: "runtime",
+                            code: "runtime.malformedRequest",
+                            message: "Redistributing the APK needs confirmation.",
+                            remediation: "Answer yes with --yes.",
+                            parameters: [:]
+                        )
+                    }
+                    try CLIConfirmation.confirm(
+                        "The Mac app will contain the APK. Confirm you may redistribute it?",
+                        yes: false)
+                }
+                let outputDirectory = try WrapCommandSupport.distributionOutput(for: output)
+                let result: DistributionWrapperResult
+                do {
+                    result = try await WrapCommandSupport.buildDistribution(
+                        packageID: packageID,
+                        outputDirectory: outputDirectory,
+                        fileName: nil,
+                        displayName: name,
+                        icon: iconChoice,
+                        iconHandle: iconHandle,
+                        identity: identity ?? "",
+                        notarize: notarize,
+                        keychainProfile: keychainProfile,
+                        redistributionConfirmed: true,
+                        client: client
+                    )
+                } catch {
+                    if installedByThisRun {
+                        ErrorOutput.write(error, json: json)
+                        throw ExitCode(Int32(ExitCodes.partial))
+                    }
+                    throw error
+                }
+                if open {
+                    WrapCommandSupport.open(bundleURL: result.appURL)
+                }
+                if json {
+                    try OperationCommandOutput.writeJSON(result)
+                } else {
+                    Output.write(WrapCommandSupport.distributionText(result))
+                }
+                return
+            }
 
             let info: WrapperInfo
             do {
@@ -849,6 +940,167 @@
                 }
                 throw RuntimeWireError(domain: "wrapper", code: code, message: message)
             }
+        }
+
+        /// The `--output` directory of a distribution build; without it
+        /// the files land in the current directory (wrapper.md §11).
+        static func distributionOutput(for output: String?) throws -> URL {
+            guard let output else {
+                return URL(
+                    fileURLWithPath: FileManager.default.currentDirectoryPath,
+                    isDirectory: true)
+            }
+            let url = URL(fileURLWithPath: output).standardizedFileURL
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+                isDirectory.boolValue
+            else {
+                throw CLIFailure.invalidArgument(argument: "output", reason: "not a directory")
+            }
+            return url
+        }
+
+        /// Runs the `distributionWrapper` operation and, on
+        /// `wrapper.destinationNotAccessible`, places the staged products
+        /// itself (wrapper.md §11 note, §6.3).
+        static func buildDistribution(
+            packageID: RuntimePackageID,
+            outputDirectory: URL,
+            fileName: String?,
+            displayName: String?,
+            icon: WrapperIconChoice?,
+            iconHandle: FileHandle?,
+            identity: String,
+            notarize: Bool,
+            keychainProfile: String?,
+            redistributionConfirmed: Bool,
+            client: RuntimeControlClient
+        ) async throws -> DistributionWrapperResult {
+            let operationID = RuntimeAPI.OperationID()
+            let request = DistributionWrapperRequest(
+                packageID: packageID,
+                outputDirectory: outputDirectory,
+                fileName: fileName,
+                displayName: displayName,
+                icon: icon,
+                identity: identity,
+                notarize: notarize,
+                keychainProfile: keychainProfile,
+                redistributionConfirmed: redistributionConfirmed
+            )
+            let handle: OperationHandle
+            do {
+                handle = try await client.buildDistributionWrapper(
+                    request,
+                    icon: iconHandle,
+                    operationID: operationID
+                )
+            } catch {
+                throw await beginFailure(error, packageID: packageID, operationID: operationID)
+            }
+            let snapshot: OperationSnapshot
+            do {
+                snapshot = try await OperationCommandOutput.waitForTerminalSnapshot(
+                    using: client,
+                    operationID: handle.operationID,
+                    progressToStderr: OperationCommandOutput.shouldShowProgress
+                )
+            } catch {
+                throw await waitFailure(error, packageID: packageID, operationID: operationID)
+            }
+            do {
+                return try distributionResult(from: snapshot, expectedPackageID: packageID)
+            } catch let failure as RuntimeWireError {
+                return try placeDistribution(
+                    after: failure, outputDirectory: outputDirectory)
+            }
+        }
+
+        /// The `distributionWrapper` output of a finished operation.
+        static func distributionResult(
+            from snapshot: OperationSnapshot,
+            expectedPackageID: RuntimePackageID
+        ) throws -> DistributionWrapperResult {
+            guard snapshot.kind == .distributionWrapper else {
+                throw RuntimeWireError.runtime(
+                    "operationResultUnknown",
+                    message: "APKRun couldn't read the result of the wrap operation."
+                )
+            }
+            try OperationCommandOutput.requireSuccess(snapshot)
+            guard case .succeeded(.distributionWrapper(let result))? = snapshot.result else {
+                throw RuntimeWireError.runtime(
+                    "operationResultUnknown",
+                    message: "APKRun couldn't read the result of the wrap operation."
+                )
+            }
+            return result
+        }
+
+        /// Moves the staged `<name>.app` and `<name>.zip` into the output
+        /// directory after `wrapper.destinationNotAccessible` and reads
+        /// the result the daemon left in `result.json` (wrapper.md §11).
+        static func placeDistribution(
+            after failure: RuntimeWireError,
+            outputDirectory: URL
+        ) throws -> DistributionWrapperResult {
+            guard failure.code == "wrapper.destinationNotAccessible",
+                let token = failure.parameters["stagingToken"]
+            else {
+                throw failure
+            }
+            let stagingDir = APKRunPaths().wrapperStagingDirectory
+                .appendingPathComponent(token, isDirectory: true)
+            let resultURL = stagingDir.appendingPathComponent("result.json")
+            guard let data = try? Data(contentsOf: resultURL),
+                var result = try? JSONDecoder().decode(
+                    DistributionWrapperResult.self, from: data)
+            else {
+                throw failure
+            }
+            let products =
+                (try? FileManager.default.contentsOfDirectory(
+                    at: stagingDir, includingPropertiesForKeys: nil
+                ))?.filter {
+                    ["app", "zip"].contains($0.pathExtension)
+                } ?? []
+            guard products.contains(where: { $0.pathExtension == "app" }),
+                products.contains(where: { $0.pathExtension == "zip" })
+            else {
+                throw failure
+            }
+            do {
+                for product in products {
+                    let final = outputDirectory.appendingPathComponent(
+                        product.lastPathComponent)
+                    if FileManager.default.fileExists(atPath: final.path) {
+                        try FileManager.default.removeItem(at: final)
+                    }
+                    do {
+                        try FileManager.default.moveItem(at: product, to: final)
+                    } catch {
+                        try FileManager.default.copyItem(at: product, to: final)
+                        try? FileManager.default.removeItem(at: product)
+                    }
+                }
+                try? FileManager.default.removeItem(at: stagingDir)
+            } catch {
+                throw failure
+            }
+            result.appURL = outputDirectory.appendingPathComponent(result.appURL.lastPathComponent)
+            result.zipURL = outputDirectory.appendingPathComponent(result.zipURL.lastPathComponent)
+            return result
+        }
+
+        /// The human result of `wrap --distribution`.
+        static func distributionText(_ result: DistributionWrapperResult) -> String {
+            var text =
+                "Created \(DaemonInstallSupport.safeTerminalText(result.appURL.path)) and "
+                + DaemonInstallSupport.safeTerminalText(result.zipURL.path)
+            if result.notarized {
+                text += " (notarized)"
+            }
+            return text
         }
 
         /// Opens the created Mac app with LaunchServices (`--open`).

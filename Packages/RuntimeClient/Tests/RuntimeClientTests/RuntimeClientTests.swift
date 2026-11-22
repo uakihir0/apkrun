@@ -2102,6 +2102,25 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
     }
 
+    func healthReport(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                WireHealthReport(
+                    results: [],
+                    verdict: "healthy",
+                    statusLine: "All good",
+                    fixed: [],
+                    error: nil
+                ))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func applyHealthFixes(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await healthReport(request)
+    }
+
     func perfStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         lock.withLock { perfStatisticsRequestsValue.append(request) }
         do {

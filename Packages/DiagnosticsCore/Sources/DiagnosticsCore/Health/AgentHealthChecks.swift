@@ -324,23 +324,31 @@ public enum HealthChecks {
     }
 }
 
-/// Shares one `agentHealth()` call between all checks of a report run.
+/// Shares one `agentHealth()` call between all checks of a report run. The
+/// answer lives only for a few seconds: a re-run of the checks must ask the
+/// guest again, or a disconnect, recovery, or IME change would never show.
 private actor SharedAgentHealth {
     private let probe: any HealthDataProbe
+    private let validity: TimeInterval
     private var cached: AgentHealthSnapshot??
+    private var cachedAt: Date?
     private var inFlight: Task<AgentHealthSnapshot?, Never>?
 
-    init(probe: any HealthDataProbe) {
+    init(probe: any HealthDataProbe, validity: TimeInterval = 5) {
         self.probe = probe
+        self.validity = validity
     }
 
     func fetch() async -> AgentHealthSnapshot? {
-        if let cached { return cached }
+        if let cached, let cachedAt, Date().timeIntervalSince(cachedAt) < validity {
+            return cached
+        }
         if let inFlight { return await inFlight.value }
         let task = Task { await probe.agentHealth() }
         inFlight = task
         let value = await task.value
         cached = value
+        cachedAt = Date()
         inFlight = nil
         return value
     }

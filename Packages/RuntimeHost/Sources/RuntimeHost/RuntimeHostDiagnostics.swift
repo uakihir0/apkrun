@@ -86,10 +86,15 @@ extension RuntimeHost {
             (GlobalSettings.load(from: paths.settingsFile)
                 .extraValue("graphics.safeMode") ?? "false") == "true"
         let sessions = await sessionGraphicsStatistics(sessionID: nil)
+        let deviceStatistics = await supervisor?.graphicsDeviceStatistics
         return GraphicsHealthStatus(
-            deviceReady: true,
-            gpuRendering: !safeMode,
-            fastPresentation: sessions.contains { $0.fps > 0 },
+            deviceReady: deviceStatistics != nil,
+            gpuRendering: !safeMode && (deviceStatistics?.rendererFailures ?? 0) == 0,
+            // A still screen legitimately presents nothing; only a slow
+            // measured present time is a warning, never fps == 0 alone.
+            fastPresentation: sessions.allSatisfy { $0.presentGPUTimeP95Us < 33_000 },
+            // TODO(#61): wire the graphics resource-memory accounting so the
+            // memory check measures the limit instead of reporting never.
             memoryLimitReached: false,
             safeMode: safeMode
         )
@@ -97,9 +102,16 @@ extension RuntimeHost {
 
     /// Builds the context the health checks see from this daemon.
     private func healthContext() -> HealthContext {
-        HealthContext(
+        let runtimeRunning: Bool
+        switch runtimeStateSnapshot {
+        case .stopped, .failed:
+            runtimeRunning = false
+        default:
+            runtimeRunning = supervisor != nil
+        }
+        return HealthContext(
             daemonAvailable: true,
-            runtimeRunning: supervisor != nil,
+            runtimeRunning: runtimeRunning,
             lastKnown: healthLastKnown,
             buildInfo: buildInfo,
             paths: paths
@@ -152,17 +164,12 @@ extension RuntimeHost {
             requested.isEmpty
             ? failed
             : failed.filter { requested.contains($0.id) }
-        guard let first = targets.first else {
-            if let named = requested.first,
-                !results.contains(where: { $0.id == named })
-            {
-                throw RuntimeWireError(
-                    domain: "diagnostics", code: "diagnostics.unknownHealthCheck",
-                    message: "Unknown health check: \(named)")
-            }
+        if let named = requested.first,
+            !results.contains(where: { $0.id == named })
+        {
             throw RuntimeWireError(
-                domain: "diagnostics", code: "diagnostics.fixNotAvailable",
-                message: "No automatic fix exists for this check.")
+                domain: "diagnostics", code: "diagnostics.unknownHealthCheck",
+                message: "Unknown health check: \(named)")
         }
         var fixed: [String] = []
         for result in targets {
@@ -176,11 +183,16 @@ extension RuntimeHost {
                     message: "The fix for \(result.id) did not complete.")
             }
         }
+        guard !fixed.isEmpty else {
+            throw RuntimeWireError(
+                domain: "diagnostics", code: "diagnostics.fixNotAvailable",
+                message: "No automatic fix exists for this check.")
+        }
         let rerun = await registry.run(deep: false, context: healthContext())
         publishHealthChanges(rerun)
         return Self.wireReport(
             rerun, verdictContext: healthVerdictContext(),
-            fixed: fixed.isEmpty ? [first.id] : fixed)
+            fixed: fixed)
     }
 
     /// Emits a coalesced `healthChanged` event per changed result (§13).

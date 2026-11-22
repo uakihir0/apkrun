@@ -169,6 +169,11 @@ public actor RuntimeSupervisor {
     public var developmentADBHostPort: UInt16? {
         forwarder?.port
     }
+    /// The boot's GPU counters (graphics.md §7), nil before the device exists and after it is torn
+    /// down. `apkrun doctor` reads renderer failures from it.
+    public var graphicsDeviceStatistics: GraphicsCounters? {
+        graphicsDevice?.statistics
+    }
     /// Whether the ADB poller has connected to the development endpoint in this boot.
     private var isADBConnected = false
 

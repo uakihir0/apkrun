@@ -23,6 +23,8 @@ SUBCOMMANDS:
   launch                  Launch an installed Android app.
   stop                    Stop an Android app session.
   integrations            Inspect desktop integrations of an Android app.
+  shared-folders          List, add, and remove folders shared with Android
+                          apps.
   update                  Check for, list, and manage Android app updates.
   operations              Inspect or cancel long-running APKRun operations.
   wrap                    Install an APK and create its Mac app, or wrap an

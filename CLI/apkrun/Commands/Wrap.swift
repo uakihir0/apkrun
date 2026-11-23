@@ -58,6 +58,11 @@
             let isFile =
                 (fileExists && !isValidPackageID)
                 || (package.lowercased().hasSuffix(".apk") && (fileExists || !isValidPackageID))
+            // A missing APK under --install is a file error like
+            // `apkrun install` reports, not a usage error.
+            if install, !fileExists {
+                throw CLIFailure.fileNotAccessible(file: inputURL.path, .notFound)
+            }
             guard isFile == install else {
                 throw CLIFailure.invalidArgument(
                     argument: isFile ? "install" : "package",

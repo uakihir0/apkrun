@@ -1,8 +1,8 @@
 import APKStoreCore
 import Foundation
 import RuntimeAPI
-import Testing
 import RuntimeCore
+import Testing
 import UpdateCore
 
 @testable import RuntimeHost

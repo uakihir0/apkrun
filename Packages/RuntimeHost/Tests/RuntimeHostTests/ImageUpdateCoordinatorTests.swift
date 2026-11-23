@@ -25,7 +25,8 @@ private func coordinatorFixture(
 }
 
 private func version(_ text: String) throws -> ImageCore.ImageVersion {
-    guard let version = ImageCore.ImageVersion(text) else {
+    let full = text.contains("-") ? text : "\(text)-cf1-arm64"
+    guard let version = ImageCore.ImageVersion(full) else {
         Issue.record("invalid fixture version \(text)")
         throw CocoaError(.coderInvalidValue)
     }

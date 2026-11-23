@@ -127,6 +127,29 @@ struct Fixture {
         try? FileManager.default.removeItem(at: root)
     }
 
+    /// A single-APK `BootstrapSet` like the store hands to
+    /// `stageForDistribution` for a distribution request.
+    func bootstrapPayload(package: String = "com.example.game") throws -> BootstrapSet {
+        let source = root.appendingPathComponent("base.apk")
+        let bytes = Data("fixture-apk".utf8)
+        try bytes.write(to: source)
+        let digest =
+            "sha256:" + SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let entry = BootstrapFileEntry(name: "base.apk", sha256: digest, size: Int64(bytes.count))
+        return BootstrapSet(
+            document: BootstrapDocument(
+                packageId: package,
+                versionCode: 1,
+                setDigest: BootstrapSetDigest.compute(files: [entry]),
+                signers: ["sha256:" + String(repeating: "1", count: 64)],
+                files: [entry]),
+            files: [
+                BootstrapSet.SourceFile(
+                    name: "base.apk", sourceURL: source, sha256: digest,
+                    size: Int64(bytes.count))
+            ])
+    }
+
     func configuration(
         package: String = "com.example.game", name: String = "Test Game"
     ) throws -> WrapperConfiguration {
@@ -528,8 +551,11 @@ private func distributionIdentity() -> String {
 
 /// A fake that passes both `xcrun --find` checks and lists the identity.
 private func passingRunner(_ runner: FakeToolRunner = FakeToolRunner()) -> FakeToolRunner {
-    runner.answers.append { _ in
-        ToolResult(
+    runner.answers.append { line in
+        guard line.contains("--find") || line.contains("find-identity") else {
+            return nil
+        }
+        return ToolResult(
             status: 0,
             stdout: """
                   1) 1234ABCD "\(distributionIdentity())"
@@ -727,6 +753,7 @@ private func passingRunner(_ runner: FakeToolRunner = FakeToolRunner()) -> FakeT
     let generator = fixture.generator()
     var configuration = try fixture.request().configuration
     configuration.kind = .distribution
+    configuration.bootstrap = try fixture.bootstrapPayload()
     let staged = try await generator.stageForDistribution(
         WrapperGenerationRequest(
             configuration: configuration,

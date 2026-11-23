@@ -191,41 +191,36 @@ def render_notice(manifest: Mapping[str, Any], source_offer: Path) -> str:
             if isinstance(source, str)
             else project
         )
-        rows.append(
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
-                html.escape(str(entry["module"])),
-                html.escape(str(entry["license"])),
-                cell,
-                html.escape(str(entry["revision"])),
-            )
-        )
+        module = html.escape(str(entry["module"]))
+        license_ = html.escape(str(entry["license"]))
+        revision = html.escape(str(entry["revision"]))
+        rows.append(f"<tr><td>{module}</td><td>{license_}</td><td>{cell}</td><td>{revision}</td></tr>")
     offer = (
         "<h2>Source offers</h2><table><tr><th>Component</th><th>License</th>"
-        "<th>Project</th><th>Revision</th></tr>{}</table>".format("".join(rows))
+        f"<th>Project</th><th>Revision</th></tr>{''.join(rows)}</table>"
         if rows
         else "<h2>Source offers</h2><p>No component requires a source offer.</p>"
     )
-    return (
-        "<!DOCTYPE html>\n"
-        '<html><head><meta charset="utf-8">'
-        "<title>APKRun Android image {} — legal notices</title></head>\n"
-        "<body>\n"
-        "<h1>APKRun Android image {}</h1>\n"
-        "<p>Provenance: pinnedManifestSHA256 {}, revisions.guest {}, "
-        "builderImageDigest {}.</p>\n"
-        "<p>The full license notices of the Android system are in Android at\n"
-        "Settings → About → Legal information. APKRun itself is distributed under\n"
-        "the Apache-2.0 license.</p>\n"
-        "{}\n"
-        "</body></html>\n"
-    ).format(
-        html.escape(str(manifest["imageVersion"])),
-        html.escape(str(manifest["imageVersion"])),
-        html.escape(str(provenance.get("pinnedManifestSHA256"))),
-        html.escape(str(revisions.get("guest"))),
-        html.escape(str(provenance.get("builderImageDigest"))),
-        offer,
+    version = html.escape(str(manifest["imageVersion"]))
+    provenance_fields = (
+        f"pinnedManifestSHA256 {html.escape(str(provenance.get('pinnedManifestSHA256')))},"
+        f" revisions.guest {html.escape(str(revisions.get('guest')))},"
+        f" builderImageDigest {html.escape(str(provenance.get('builderImageDigest')))}"
     )
+    return f"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>APKRun Android image {version} — legal notices</title>
+</head>
+<body>
+<h1>APKRun Android image {version}</h1>
+<p>Provenance: {provenance_fields}.</p>
+<p>The full license notices of the Android system are in Android at
+Settings → About → Legal information. APKRun itself is distributed under
+the Apache-2.0 license.</p>
+{offer}
+</body></html>
+"""
 
 
 @contextlib.contextmanager

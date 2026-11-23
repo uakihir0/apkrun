@@ -82,7 +82,9 @@
                 || (package.lowercased().hasSuffix(".apk") && (fileExists || !isValidPackageID))
             // A missing .apk path is a file error like `apkrun install`
             // reports, not a package-ID lookup.
-            if !fileExists, package.lowercased().hasSuffix(".apk") {
+            if !fileExists, !isValidPackageID,
+                package.lowercased().hasSuffix(".apk")
+            {
                 throw CLIFailure.fileNotAccessible(file: inputURL.path, .notFound)
             }
 

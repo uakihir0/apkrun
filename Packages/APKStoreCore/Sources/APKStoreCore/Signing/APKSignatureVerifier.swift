@@ -134,6 +134,8 @@ struct APKSignatureVerifier: Sendable {
     }
 
     /// Verifies the signature of one APK file. `targetSDK` decides the v1-only rule (§4.5).
+    /// SECURITY: untrusted APK input; the Signing Block path is fuzzed by
+    /// `apk-signing-block` (#92).
     func verify(apk url: URL, targetSDK: Int) throws(StoreFailure) -> APKSignatureInfo {
         let file = url.lastPathComponent
         guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]), data.count > 22 else {

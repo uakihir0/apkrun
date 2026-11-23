@@ -140,11 +140,21 @@ public enum PackageChange: Codable, Equatable, Sendable {
     case updated(RuntimePackageSummary, from: RuntimeVersionCode)
     /// An Android package uninstall committed; `keptData` records the requested data policy.
     case removed(RuntimePackageID, keptData: Bool)
+    /// The store rendered a different icon for the package (package-store.md §10.2, API 1.17).
+    /// Wrappers refresh their icon when their own icon is not custom ([wrapper.md](../../docs/02-design/wrapper.md) §8.5).
+    case iconChanged(RuntimePackageID)
+    /// A `settings.json` patch changed the package's stored settings (host-ui.md §7, API 1.24).
+    /// Carries the dotted keys the patch touched.
+    case settingsChanged(RuntimePackageID, [String])
+    /// A `window.*` key changed while a session may be open; the session's
+    /// window applies it live (configuration.md §1.5, API 1.24).
+    case windowPrefsChanged(RuntimePackageID, WindowPrefs)
     /// The daemon reported a package change added by a newer API version.
     case unknown
 
     private enum AssociatedKey: String, CodingKey {
         case first = "_0"
+        case second = "_1"
         case from
         case keptData
     }
@@ -173,6 +183,20 @@ public enum PackageChange: Codable, Equatable, Sendable {
                 try payload.decode(RuntimePackageID.self, forKey: .first),
                 keptData: try payload.decode(Bool.self, forKey: .keptData)
             )
+        case "iconChanged":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .iconChanged(try payload.decode(RuntimePackageID.self, forKey: .first))
+        case "settingsChanged":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .settingsChanged(
+                try payload.decode(RuntimePackageID.self, forKey: .first),
+                try payload.decodeIfPresent([String].self, forKey: .second) ?? [])
+        case "windowPrefsChanged":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .windowPrefsChanged(
+                try payload.decode(RuntimePackageID.self, forKey: .first),
+                try payload.decode(WindowPrefs.self, forKey: .second))
+
         default:
             self = .unknown
         }
@@ -202,6 +226,26 @@ public enum PackageChange: Codable, Equatable, Sendable {
             )
             try payload.encode(packageID, forKey: .first)
             try payload.encode(keptData, forKey: .keptData)
+        case .iconChanged(let packageID):
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self,
+                forKey: RuntimeEventCodingKey("iconChanged")
+            )
+            try payload.encode(packageID, forKey: .first)
+        case .settingsChanged(let packageID, let keys):
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self,
+                forKey: RuntimeEventCodingKey("settingsChanged")
+            )
+            try payload.encode(packageID, forKey: .first)
+            try payload.encode(keys, forKey: .second)
+        case .windowPrefsChanged(let packageID, let prefs):
+            var payload = container.nestedContainer(
+                keyedBy: AssociatedKey.self,
+                forKey: RuntimeEventCodingKey("windowPrefsChanged")
+            )
+            try payload.encode(packageID, forKey: .first)
+            try payload.encode(prefs, forKey: .second)
         case .unknown:
             throw EncodingError.invalidValue(
                 self,
@@ -229,18 +273,30 @@ public enum EventPayload: Codable, Equatable, Sendable {
     case wrappers(WrapperChange)
     /// A Mac ↔ Android integration event, such as a guest clip for the key window.
     case integrations(IntegrationChange)
+    /// An app session appeared, changed phase, or ended.
+    case sessions(SessionChange)
+    /// A runtime maintenance event (host state, self-update status).
+    case maintenance(MaintenanceEvent)
     /// Events for the topic were dropped; fetch a fresh snapshot.
     case resyncRequired(EventTopic)
+    /// A sequenced event on an open stream (runtime-api.md §16.4).
+    case stream(StreamEnvelope)
+    /// A live health check's new result (runtime-api.md §13, topic `health`).
+    case health(HealthEvent)
     /// The daemon reported an event kind added by a newer API version.
     case unknown
 
     private enum CaseKey: String, CodingKey {
         case runtime
+        case sessions
         case packages
         case operations
-        case resyncRequired
         case wrappers
         case integrations
+        case maintenance
+        case health
+        case resyncRequired
+        case stream
     }
 
     private enum AssociatedKey: String, CodingKey {
@@ -274,6 +330,18 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case "integrations":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .integrations(try payload.decode(IntegrationChange.self, forKey: .first))
+        case "sessions":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .sessions(try payload.decode(SessionChange.self, forKey: .first))
+        case "maintenance":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .maintenance(try payload.decode(MaintenanceEvent.self, forKey: .first))
+        case "stream":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .stream(try payload.decode(StreamEnvelope.self, forKey: .first))
+        case "health":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .health(try payload.decode(HealthEvent.self, forKey: .first))
         default:
             self = .unknown
         }
@@ -298,9 +366,21 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case .integrations(let change):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .integrations)
             try payload.encode(change, forKey: .first)
+        case .sessions(let change):
+            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .sessions)
+            try payload.encode(change, forKey: .first)
+        case .maintenance(let event):
+            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .maintenance)
+            try payload.encode(event, forKey: .first)
         case .resyncRequired(let topic):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .resyncRequired)
             try payload.encode(topic, forKey: .first)
+        case .stream(let envelope):
+            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .stream)
+            try payload.encode(envelope, forKey: .first)
+        case .health(let event):
+            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .health)
+            try payload.encode(event, forKey: .first)
         case .unknown:
             throw EncodingError.invalidValue(
                 self,

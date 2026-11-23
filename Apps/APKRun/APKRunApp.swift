@@ -13,6 +13,8 @@ struct APKRunApp: App {
     @State private var isRegistrationErrorPresented = false
     @StateObject private var approvalCenter = ApprovalCenter.shared
     @State private var runtimeStatus = RuntimeStatusModel()
+    @State private var homeModel = HomeModel()
+    @State private var hostNotifier: HostNotifier?
 
     /// Whether apkrund opened the app for a wrapper approval (host-ui.md §3.3).
     /// Only the approval window is shown then.
@@ -26,6 +28,17 @@ struct APKRunApp: App {
         }
         Task { @MainActor in
             ApprovalCenter.shared.start()
+        }
+        let home = homeModel
+        Task { @MainActor in
+            OpenFileRouter.handler = { urls in
+                home.importFiles(urls)
+            }
+        }
+        // First launch registers the menu-bar login item and starts the
+        // helper when it is already enabled (menu-bar.md).
+        Task { @MainActor in
+            MenuBarItemSettingsModel().initializeForApplicationLaunch()
         }
 
         do {
@@ -45,10 +58,31 @@ struct APKRunApp: App {
 
     var body: some Scene {
         WindowGroup("APKRun") {
-            Text("APKRun")
-                .frame(minWidth: 480, minHeight: 320)
+            HomeView()
+                .frame(minWidth: 640, minHeight: 420)
                 .environment(runtimeStatus)
-                .task { runtimeStatus.start() }
+                .environment(homeModel)
+                .task {
+                    runtimeStatus.start()
+                    homeModel.start()
+                    let notifier =
+                        hostNotifier
+                        ?? HostNotifier { route in
+                            Task { @MainActor in homeModel.apply(route) }
+                        }
+                    hostNotifier = notifier
+                    notifier.start()
+                }
+                // apkrun:// URLs only navigate (host-ui.md §3.1); file
+                // opens (§3.2) start the add flow.
+                .onOpenURL { url in
+                    if url.isFileURL {
+                        homeModel.importFiles([url])
+                        return
+                    }
+                    guard let route = AppRouter.route(url) else { return }
+                    homeModel.apply(route)
+                }
                 // First-run provisioning (host-ui.md §4): the sheet reopens
                 // whenever setup is not `complete`; apkrund resumes at the
                 // first incomplete step.
@@ -70,6 +104,19 @@ struct APKRunApp: App {
         }
         .windowResizability(.contentSize)
         .defaultLaunchBehavior(approvalOnly ? .suppressed : .automatic)
+        .commands {
+            // legal-and-licensing.md §6.4: the Help menu opens the
+            // third-party notices shipped in the app bundle.
+            CommandGroup(replacing: .help) {
+                Button("Third-Party Notices") {
+                    if let url = Bundle.main.url(
+                        forResource: "ThirdPartyNotices", withExtension: "html"
+                    ) {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
+        }
 
         settingsScene
     }
@@ -94,7 +141,26 @@ private final class ApprovalWindowDelegate: NSObject, NSApplicationDelegate {
     private var windowController: NSWindowController?
     private var cancellable: AnyCancellable?
 
+    /// Double-click, Open With, `open -a APKRun file.apk` (host-ui.md §3.2).
+    func application(_ application: NSApplication, open urls: [URL]) {
+        Task { @MainActor in
+            OpenFileRouter.open(urls)
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // §3.7 first-launch tasks run before any view uses the runtime.
+        Task { @MainActor in
+            if let refreshCount = try? await FirstLaunchController()
+                .completeUpdateIfNeeded(),
+                refreshCount > 0
+            {
+                FirstLaunchRefreshPrompt.show(wrapperCount: refreshCount)
+            }
+        }
+        // §3.2: Sparkle starts when the build carries a feed; the
+        // controller itself skips --notify and --approve launches.
+        SelfUpdateController.shared.start()
         cancellable = ApprovalCenter.shared.$current.sink { [weak self] prompt in
             if prompt != nil {
                 self?.showApprovalWindow()
@@ -122,7 +188,7 @@ private final class ApprovalWindowDelegate: NSObject, NSApplicationDelegate {
 }
 
 @MainActor
-private enum RuntimeRegistrationCommand {
+enum RuntimeRegistrationCommand {
     private static let registeredPlistHashKey = "registeredAgentPlistSHA256"
 
     static func run() -> Never {

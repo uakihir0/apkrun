@@ -8,7 +8,7 @@ This document is the wire contract of RuntimeAPI, the XPC interface between apkr
 
 ### 1.1 Scope and modules
 
-Built operations: broker `hello`, `requestEndpoint`; control `runtimeStatus`, `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime`, `listPackages`, `packageInfo`, `importPackage`, `installImported`, `beginInstallImported`, `beginUninstallPackage`, `cancelOperation`, `listOperations`, `operationStatus`, `subscribe`, `unsubscribe`, `launch`, `terminate`; event sink `handshake`, `deliver`. Every other operation and type is target contract.
+Built operations: broker `hello`, `requestEndpoint`; control `runtimeStatus`, `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime`, `listPackages`, `packageInfo`, `importPackage`, `installImported`, `beginInstallImported`, `beginUninstallPackage`, `beginRepairPackage`, `cancelOperation`, `listOperations`, `operationStatus`, `subscribe`, `unsubscribe`, `launch`, `terminate`; event sink `handshake`, `deliver`. Every other operation and type is target contract.
 
 | Part | Module | Role |
 |---|---|---|
@@ -110,9 +110,24 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.9 | `subscribe`, `unsubscribe`; event-sink handshake; sequenced batches |
 | 1.10 | `packages.installed` and `packages.updated` events |
 | 1.11 | `beginUninstallPackage`; `PackageChange.removed`; `OperationSnapshot.requestFingerprint` |
+| 1.12 | `configuration` and `updateConfiguration` global settings operations |
 | 1.12 | `createWrapper`; the `wrappers` event topic and `WrapperChange`; `OperationOutput.wrapper` (`WrapperInfo`) |
 | 1.13 | `pendingApprovals`, `decideApproval`, `deniedWrappers`, `clearWrapperDenial`; broker `requestApproval` |
 | 1.14 | `perfStatistics`, `frameStatistics` (developer mode); `RuntimeLaunchRequest.launchTiming` |
+| 1.15 | gentle-update session rules; `PackageChange` `update` payloads |
+| 1.16 | update ownership and rollback surfaces (`setUpdateAuthority`, `rollbackPackage`, `updateSkipped`, `configuration`) |
+| 1.17 | `PackageChange.iconChanged` |
+| 1.18 | `placeStagedWrapper` |
+| 1.19 | `wrapperInfo` |
+| 1.20 | `listWrappers`, `removeWrapper`, `rescanWrappers` |
+| 1.21 | `refreshWrapper`, `refreshAllWrappers` |
+| 1.22 | `beginRepairPackage` |
+| 1.23 | `listSessions`, `packageIcon`, the `sessions` topic |
+| 1.24 | `updatePackageSettings`, `packageSettings` |
+| 1.25 | `RuntimePackageDetails.previous` (the rollback slot) |
+| 1.38 | Optional `StartRuntimeRequest.hold` keeps a CLI start activity until its control connection closes |
+| 1.39 | `closeSession` applies a package's close policy (`stop`/`keepRunning`) to its session |
+
 
 ### 2.2 Rules per endpoint
 
@@ -462,7 +477,7 @@ Cancellation points:
 | `wrappers` | `WrapperChange` (target) | C |
 | `integrations` | `IntegrationChange` (target) | C |
 
-API 1.10 publishes `packages.installed` and `packages.updated` after a successful install; `from` is the best pre-install version observed. API 1.11 publishes `packages.removed` after the uninstall commits; `keptData` says whether app data stayed. `uninstall --forget` removes only APKRun's record and publishes no event.
+API 1.10 publishes `packages.installed` and `packages.updated` after a successful install; `from` is the best pre-install version observed. API 1.11 publishes `packages.removed` after the uninstall commits; `keptData` says whether app data stayed. `uninstall --forget` removes only APKRun's record and publishes no event. API 1.12 adds authenticated global configuration reads and updates.
 
 ### 4.9 File handles, bookmarks, IOSurfaces
 
@@ -529,7 +544,7 @@ Lists are returned whole. A check requested while the same check runs joins it.
 
 | Request | Built fields | Target fields |
 |---|---|---|
-| `StartRuntimeRequest` | `header` | `hold` (Bool: keep a `cli` activity until the connection closes); `timeoutMs` (Int64?) |
+| `StartRuntimeRequest` | `header`, `hold` (optional Bool: keep a `cli` activity until the connection closes) | `timeoutMs` (Int64?) |
 | `StopRuntimeRequest` | `header` | `force` (Bool: stop even with sessions or activities) |
 | `RestartRuntimeRequest`, `RuntimeResetControlRequest` | `header` | — |
 
@@ -589,6 +604,7 @@ Target `RuntimeStatus` replaces `RuntimeHostStatus` for `runtimeStatus`. Fields:
 |---|---|---|---|---|---|
 | `launch` (built) | `RuntimeLaunchControlRequest` (`packageID`) → `RuntimeLaunchControlReply` (`result`: `RuntimeLaunchResult`) | C | W | `sessions.*` (target) | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.2 |
 | `terminate` (built) | `RuntimeTerminateControlRequest` (`packageID`) → `RuntimeTerminateControlReply` (`result`: `RuntimeTerminateResult`) | C | U | `sessions.ended` (target) | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.2 |
+| `closeSession` (target) | `RuntimeCloseSessionControlRequest` (`packageID`, `policy`: `stop`, `keepRunning`, or nil for `window.closeBehavior`) → `RuntimeCloseSessionControlReply` (`hadSession`) | W, L | U | `sessions.ended` (target) | [display-and-windowing.md](../02-design/display-and-windowing.md) §7.6 |
 | `openSession` (target) | `OpenSessionRequest` → `SessionDescriptor` + `[IOSurface]` | W, L | W | session channel, `sessions.opened` | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.1 |
 | `listSessions` (target) | — → `[SessionSummary]` | C | Q | — | [runtime-daemon.md](../02-design/runtime-daemon.md) §8.6 |
 
@@ -728,12 +744,12 @@ Store semantics: [package-store.md](../02-design/package-store.md) §11. A wrapp
 | `inspectFile` (target) | `ImportPackageRequest` + files → `OperationHandle` (`inspect`) | C | L | `operations.*` | [package-store.md](../02-design/package-store.md) §4.3 |
 | `cancelImport` (target) | `CancelImportRequest` (`ticket`) → `RuntimeEmpty` | C | U | — | [package-store.md](../02-design/package-store.md) §11.1 |
 | `packageIcon` (target) | `PackageIconRequest` (`packageID`, `sizePx`) → `PackageIcon` | C, L, W | Q | `packages.iconChanged` | [package-store.md](../02-design/package-store.md) §10 |
-| `repairPackage` (target) | `RuntimePackageRequest` → `OperationHandle` (`repair`) | C | L | `packages.stateChanged` | [package-store.md](../02-design/package-store.md) §11.1 |
+| `beginRepairPackage` (built) | `RuntimeBeginRepairPackageControlRequest` (`RuntimePackageRequest`) → `RuntimeBeginRepairPackageControlReply` (`result`: `OperationHandle`) | C | L | `operations.*`, `packages.stateChanged` | [package-store.md](../02-design/package-store.md) §11.1 |
 | `rollbackPackage` (target) | `RollbackPackageRequest` (`packageID`, `allowDataLoss`) → `OperationHandle` (`rollback`) | C | L | `packages.rolledBack`, `updates.phaseChanged` | [package-store.md](../02-design/package-store.md) §7.3, [update-system.md](../02-design/update-system.md) §8.5 |
 | `adoptPackage` (target) | `RuntimePackageRequest` → `RuntimePackageSummary` | C | U | `packages.installed`, `packages.unmanagedChanged` | [package-store.md](../02-design/package-store.md) §9.3 |
 | `updatePackageSettings` (target) | §14 | C | U | `packages.settingsChanged` | [package-store.md](../02-design/package-store.md) §2.4 |
 
-The Swift `RuntimePackageService.uninstallPackage` is the operation the daemon tracks as `beginUninstallPackage`. `rollbackPackage` is documented once here; [update-system.md](../02-design/update-system.md) §11.1 names it too.
+The Swift `RuntimePackageService.uninstallPackage` is the operation the daemon tracks as `beginUninstallPackage`; `repairPackage` is tracked as `beginRepairPackage`. `rollbackPackage` is documented once here; [update-system.md](../02-design/update-system.md) §11.1 names it too.
 
 ### 8.2 Import and install
 
@@ -819,7 +835,8 @@ Target `RollbackPackageRequest` (`packageID`, `allowDataLoss`): with `false`, fa
 | `installImported`, `beginInstallImported` | `store.importExpired`, `store.alreadyInstalled`, `store.downgradeRefused`, `store.signerMismatch`, `store.packageInUse`, `store.operationInProgress`, `store.guestInstallFailed`, `store.guestStorageFull`, `store.userActionRequired`, `store.runtimeUnavailable`, `store.capabilityMissing`, `update.*` |
 | `listPackages`, `packageInfo` | `store.packageNotFound`, `store.metadataUnreadable`, `store.androidInventoryUnreadable` |
 | `beginUninstallPackage` | `store.packageNotFound`, `store.operationInProgress`, `store.uninstallFailed`, `store.runtimeUnavailable` |
-| `repairPackage`, `rollbackPackage`, `adoptPackage` (target) | `store.packageNotFound`, `store.guestInstallFailed`, `store.rollbackUnavailable`, `store.rollbackFailed`, `store.packageInUse`, `store.operationInProgress` |
+| `beginRepairPackage` | `store.packageNotFound`, `store.notRepairable`, `store.guestInstallFailed`, `store.packageInUse`, `store.operationInProgress` |
+| `rollbackPackage`, `adoptPackage` (target) | `store.packageNotFound`, `store.guestInstallFailed`, `store.rollbackUnavailable`, `store.rollbackFailed`, `store.packageInUse`, `store.operationInProgress` |
 | all store operations | `store.journalUnreadable`, `store.storeReadOnly` |
 
 ---
@@ -1256,8 +1273,10 @@ A launcher reads its own settings from `packageInfo`, `SessionDescriptor.windowP
 
 ### 14.2 DTOs
 
-- `ConfigurationSnapshot`: `entries` (`ConfigurationEntry`: `key` (dotted), `value` (`JSONValue`), `defaultValue`, `isSet` (Bool: present in `settings.json`, even when equal to the default), `applies` (`SettingApplies`)).
+- `ConfigurationSnapshot`: `entries` (`ConfigurationEntry`: `key` (dotted), `value` (`JSONValue`), `defaultValue`, `isSet` (Bool: present in `settings.json`, even when equal to the default), `applies` (`SettingApplies`)). The locale-and-time implementation returns `system.syncLocale`, `system.syncTimeZone`, and `system.syncClockFormat`; other setting families are added with their owning tasks.
 - `ConfigurationPatch`: `patch` (`JSONValue`, RFC 7396 merge patch on the nested form, [configuration.md](configuration.md) §1.2).
+- `RuntimeConfigurationControlRequest` / `RuntimeUpdateConfigurationControlRequest`: authenticated control requests; the update request carries `ConfigurationPatch`.
+- `RuntimeConfigurationControlReply` / `RuntimeUpdateConfigurationControlReply`: a `ConfigurationSnapshot` result or a `RuntimeWireError`.
 - `PackageSettingsPatch`: `packageID`, `patch` (`JSONValue`, merge patch on package keys, [configuration.md](configuration.md) §3.1).
 - `ResolvedPackageSettings`: `packageID`, `entries` (`ResolvedSetting`: `key`, `value`, `source` (`SettingSource`), `defaultValue`, `recommended`? (compatibility database), `applies`), `window` (`WindowSettings`), `input` (`InputPrefs`).
 - `SettingSource`: `globalSwitch`, `user`, `recommended`, `default`, `unknown`. `SettingApplies`: `live`, `nextSession`, `runtimeRestart`, `nextCheck`, `nextLogin`, `newPackages`, `provisioning`, `nextBoot`, `nextHealthCheckResult`, `nextUpdate`, `unknown`. For compound values, `applies` is the first.
@@ -1272,6 +1291,7 @@ A launcher reads its own settings from `packageInfo`, `SessionDescriptor.windowP
 - Arrays are replaced whole. An unknown key group is `unknownSetting`.
 - A no-op patch is accepted: nothing is written, no event is posted.
 - An explicit default value is stored (`isSet = true`, source `user`).
+- The current implementation accepts locale-and-time keys under `system`; other global keys return `runtime.unknownSetting` until their owning tasks add them.
 - A patch containing `sharedFolders` returns `runtime.invalidSettingValue` (§11.1 is the only writer). A package patch containing `update.mode` returns `store.invalidSettingValue`; `setUpdatePolicy` is the only writer.
 - `updatePackageSettings` on an unmanaged package returns `store.packageNotFound`; the user adopts it first.
 - `config reset --all` and `settings reset --all` are built by the client as one patch with `null` for each set key.
@@ -1488,7 +1508,7 @@ Uses the control endpoint, and the maintenance endpoint only for `self-update fi
 | `list [--all]`, `info <package>` | `listPackages`, `packageInfo` | |
 | `inspect <file>…` | `inspectFile` (target) | |
 | `launch <package>`, `stop <package>` | `launch`, `terminate` | |
-| `repair`, `rollback`, `adopt <package>` | `repairPackage`, `rollbackPackage`, `adoptPackage` (target) | `--allow-data-loss` for rollback |
+| `repair`, `rollback`, `adopt <package>` | `beginRepairPackage`, `rollbackPackage`, `adoptPackage` | `--allow-data-loss` for rollback; rollback and adopt are target |
 | `settings <package> list`, `get` | `packageSettings` | |
 | `settings <package> set`, `reset` | `updatePackageSettings` | `reset` sends `null`; `--all` builds a patch (§14.3) |
 | `update [--check-only]` | `checkForUpdates` | `packages = nil`; `checkOnly` (target) |

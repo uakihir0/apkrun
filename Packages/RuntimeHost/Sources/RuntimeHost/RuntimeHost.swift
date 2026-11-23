@@ -1,6 +1,13 @@
+import APKStoreCore
+import AppKit
+import CoreGraphics
+import CryptoKit
 import DiagnosticsCore
+import Dispatch
 import Foundation
+import GuestProtocol
 import ImageCore
+import ImageIO
 import IntegrationCore
 import RuntimeAPI
 import RuntimeCore
@@ -8,6 +15,30 @@ import UpdateCore
 import WrapperCore
 
 typealias WireOperationID = RuntimeAPI.OperationID
+
+/// Runs the locale post-boot trigger only after a successful restart has cleared its lifecycle guard.
+enum LocaleTimeRestartCompletion {
+    static func finish(
+        didRestart: Bool,
+        activePackageLaunches: Int,
+        clearRestarting: () -> Void,
+        enqueuePostBoot: () -> Void
+    ) {
+        clearRestarting()
+        guard didRestart, activePackageLaunches == 0 else { return }
+        enqueuePostBoot()
+    }
+}
+
+protocol RuntimeHostPowerObserver: Sendable {
+    func start() throws(PowerObserverFailure)
+    func stop()
+}
+
+extension PowerObserver: RuntimeHostPowerObserver {}
+
+typealias RuntimeHostPowerObserverFactory =
+    @Sendable (@escaping PowerObserver.EventHandler) -> any RuntimeHostPowerObserver
 
 /// Failures that prevent the daemon from accepting lifecycle operations.
 public enum RuntimeHostError: Error, Equatable, Sendable {
@@ -27,6 +58,8 @@ public enum RuntimeHostError: Error, Equatable, Sendable {
     case shuttingDown
     /// The requested lifecycle change is not valid in the current runtime state.
     case invalidTransition
+    /// The daemon is updating or restarting to update (runtime-api.md §3.7).
+    case hostUpdating(String)
     /// The Guest Agent bundle is missing or invalid.
     case guestAgentBundle(String)
     /// Runtime boot failed.
@@ -38,9 +71,14 @@ public enum RuntimeHostError: Error, Equatable, Sendable {
 struct RuntimeTrackedOperation {
     let handle: OperationHandle
     let requestPayload: Data
+    var packageMutationToken: UUID? = nil
     var snapshot: OperationSnapshot
     var isCancellable: Bool
     var task: Task<Void, Never>?
+}
+
+private struct PackageMutationActivity {
+    let assertion: RuntimeActivityAssertion?
 }
 
 /// Composes the daemon's per-user runtime and owns it for the process lifetime.
@@ -48,47 +86,86 @@ struct RuntimeTrackedOperation {
 /// The host acquires the same instance lock used by `apkrun dev`, records its process state,
 /// opens the current image, and creates one RuntimeSupervisor. Runtime start remains on demand.
 public actor RuntimeHost {
+    static let newerSettingsSchemaFailureCode = "maintenance.dataCreatedByNewerVersion"
+
     nonisolated let eventHub = RuntimeEventHub()
+    /// Open notification/host streams (runtime-api.md §16.4).
+    nonisolated let streamCenter = RuntimeStreamCenter()
 
     let paths: APKRunPaths
-    private let buildInfo: BuildInfo
+    let configurationStore: RuntimeConfigurationStore
+    let buildInfo: BuildInfo
     private let environment: [String: String]
     private let executableURL: URL
+    private let adbHostPort: UInt16
     private let uncleanExitRecoveryOverride: (any DaemonUncleanExitRecovering)?
+    private let legacySettingsSuiteName: String
     /// When true, Android-bound operations fail with `runtime.notProvisioned` until `setup`
     /// completes (runtime-daemon.md §9.2). The daemon enforces it; dev and test hosts do not.
     private let enforceProvisioning: Bool
-    private var provisioningState: WireProvisioningState = .notStarted
-    private var imageStore: ImageStore?
-    private var diagnostics: DiagnosticsContext?
+    var provisioningState: WireProvisioningState = .notStarted
+    var imageStore: ImageStore?
+    var diagnostics: DiagnosticsContext?
     /// The health-check registry, for checks hosted outside this file
     /// (`updates.waiting` in RuntimeHostUpdates.swift).
     var healthCheckRegistry: HealthCheckRegistry? {
         diagnostics?.healthChecks
     }
-    private var logger: APKLogger?
+    /// The configured log sink, for loggers of sibling files
+    /// (RuntimeHostIntegrations's notification coordinator).
+    var hostLogSink: (any LogSink)? {
+        diagnostics?.logSink
+    }
+    var logger: APKLogger?
+    private let idleSettingsOverride: RuntimeIdleSettings?
+    private let idleClock: any RuntimeIdleClock
     private var instanceLock: InstanceLock?
     private var stateStore: DaemonStateStore?
-    private var startupAssessment: DaemonStartupAssessment?
-    private var image: InstalledImage?
-    private var instanceStore: InstanceStore?
+    var startupAssessment: DaemonStartupAssessment?
+    var image: InstalledImage?
+    var instanceStore: InstanceStore?
     var supervisor: RuntimeSupervisor?
     private var supervisorEventsTask: Task<Void, Never>?
+    private var idleSettings = RuntimeIdleSettings.default
+    private var idleController: IdleController?
+    private var packageStoreMutationTestGate: (@Sendable () async -> Void)?
+    private var sessionActivityAssertions: [String: RuntimeActivityAssertion] = [:]
+    /// `.backgroundTask` holds for tasks a keepRunning close retains
+    /// (display-and-windowing.md §7.6).
+    private var backgroundTaskAssertions: [String: RuntimeActivityAssertion] = [:]
+    private var adbClientActivityAssertion: RuntimeActivityAssertion?
+    private var adbClientActivityTracker = ADBClientActivityTracker()
+    private var isAcquiringADBClientActivity = false
+    private var packageMutationActivities: [UUID: PackageMutationActivity] = [:]
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+    private var prebootTask: Task<Void, Never>?
+    private var powerEventHandler: PowerObserver.EventHandler?
+    private var powerObserver: (any RuntimeHostPowerObserver)?
+    private var powerObserverFactory: RuntimeHostPowerObserverFactory = { handler in
+        PowerObserver(handler: handler)
+    }
     private var packageQueryService: EmbeddedPackageService?
     private var wrapperRegistry: WrapperRegistry?
     private var wrapperRegistryLoadTask: Task<WrapperRegistry, Never>?
     private var wrapperHealthChecksRegistered = false
+    var agentHealthChecksRegistered = false
+    /// Last results, for `HealthContext.lastKnown` and healthChanged diffs.
+    var healthLastKnown: [HealthCheckID: LastKnown] = [:]
+    /// The state last published on the `health` topic, per check.
+    var healthPublished: [HealthCheckID: HealthState] = [:]
     /// Package IDs with a `wrapperCreate` operation in flight.
     private var wrapperCreationsInFlight: Set<String> = []
+    /// The wrapper statuses of the last sweep or list pass (wrapper.md §9.1).
+    private var latestWrapperStatuses: [String: WrapperStatus] = [:]
     var headlessSessionService: (any RuntimeSessionService)?
     private var runtimeSessionGeneration: UInt64 = 0
     private var bootProgressEstimator: BootProgressEstimator?
     private var bootStartedAt: ContinuousClock.Instant?
-    private var bootPurpose: RuntimeAPI.BootPurpose?
+    var bootPurpose: RuntimeAPI.BootPurpose?
     private var bootProgressGeneration: UInt64 = 0
     private var runtimeStateSnapshotRevision: UInt64 = 0
     private var runtimeStateEventRevision: UInt64 = 0
-    private var runtimeStateSnapshot: RuntimeState = .stopped
+    var runtimeStateSnapshot: RuntimeState = .stopped
     private var recordedBootOperationIDs = Set<UUID>()
     private var hostState = "starting"
     private var startupFailure: (step: Int, code: String)?
@@ -99,7 +176,9 @@ public actor RuntimeHost {
     private var shutdownCompleted = false
     private var activeLifecycleOperations = 0
     private var activeRuntimeStarts = 0
-    private var activePackageMutations = 0
+    var activePackageMutations = 0
+    private var idleSuspendTransitionInProgress = false
+    private var idleSuspendTransitionWaiters: [CheckedContinuation<Void, Never>] = []
     private var runtimeStartTask: Task<Result<Void, RuntimeHostError>, Never>?
     /// Managed-package reinstalls still pending after the last userdata reset (§9.5).
     private var pendingReinstallIDs: Set<RuntimePackageID> = []
@@ -108,6 +187,14 @@ public actor RuntimeHost {
     private var isRuntimeStopping = false
     private var isRuntimeResetting = false
     private var isRuntimeRestarting = false
+    private var activePackageLaunches = 0
+    private var localeTimeGuestAgent: DevelopmentGuestAgent?
+    private var localeTimeResynchronizationHandlerID: UUID?
+    private var localeTimeSynchronizer: LocaleTimeSynchronizer?
+    private var localeTimeSyncTask: Task<Void, Never>?
+    private var localeTimeRefreshTask: Task<Void, Never>?
+    private var localeTimeNotificationRelay: LocaleTimeNotificationRelay?
+    private var localeTimeWarningsSnapshot = Set<LocaleTimeWarning>()
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
     private var packageMutationWaiters: [CheckedContinuation<Void, Never>] = []
     private var shutdownWaiters: [CheckedContinuation<Void, Never>] = []
@@ -115,6 +202,8 @@ public actor RuntimeHost {
     /// The lazily created update service (update-system.md). Internal for
     /// `RuntimeHostUpdates.swift`.
     var updateService: EmbeddedUpdateService?
+    /// The §3 update scheduler (RuntimeHostUpdates.swift).
+    var updateScheduler: UpdateScheduler?
     /// The §7.1 gentle-update gate shared by update installs, created with
     /// the pump tasks below on first use.
     var updateGate: GentleUpdateGate?
@@ -130,8 +219,46 @@ public actor RuntimeHost {
     /// The idle controller the `storeOperation` assertion holds (#75 wires
     /// its suspend/stop deadlines).
     let updateIdleController = IdleController()
+    /// §3.5: set when `ensureReady(.update)` booted a stopped runtime so
+    /// it stops again once the admitted installs finish (update-system.md).
+    var updateBootedForInstall = false
     /// `updates.waiting` registers once when the update service is created.
     var updatesHealthChecksRegistered = false
+    /// The lazily built maintenance coordinator (runtime-api.md §12).
+    var _maintenanceService: MaintenanceService?
+    var _bundleWatcher: BundleWatcher?
+    /// The lazily built background appcast probe (§3.4).
+    var _selfUpdateProbe: SelfUpdateProbe?
+    /// The 24 h probe task, started after startup (§3.4).
+    var selfUpdateProbeTask: Task<Void, Never>?
+    /// The §4.2/§4.6 loop: due feed checks plus the apply gate tick.
+    var imageUpdateLoopTask: Task<Void, Never>?
+    /// Whether APKRun.app reported during this daemon run (§3.4 pitfall).
+    var apkrunAppReported = false
+    /// Whether an image migration is in progress (#59 reports it here).
+    var imageMigrating = false
+    var _imageUpdateCoordinator: ImageUpdateCoordinator?
+    /// `restartForUpdate` set this; the daemon exits at the next idle check.
+    var restartExitRequested = false
+
+    /// Synchronous mirror of `MaintenanceService.state` for gates that run
+    /// off the async path (runtime-api.md §3.7). Updated after every op.
+    var maintenanceHostState: HostState = .normal {
+        didSet {
+            if maintenanceHostState != oldValue {
+                maintenanceHostStateSince = Date()
+            }
+        }
+    }
+    /// When `maintenanceHostState` last changed (§12 health check).
+    var maintenanceHostStateSince = Date()
+    /// The on-disk bundle build `BundleWatcher` last saw (§3.6/§12).
+    var lastOnDiskBundleBuild: Int?
+
+    /// Version and build the maintenance endpoint reports (§12).
+    var buildIdentity: (marketingVersion: String, buildNumberInt: Int) {
+        (buildInfo.marketingVersion, Int(buildInfo.buildNumber) ?? 0)
+    }
     private var packageActivityReservations = PackageActivityReservations()
     /// The perf record writer (`perf/launches.jsonl`), created with `paths`.
     private var perfRecords: PerfRecordWriter?
@@ -143,8 +270,36 @@ public actor RuntimeHost {
     /// The §2.3 policy and §4 clipboard coordinator (desktop-integration.md);
     /// internal so the RuntimeHostIntegrations extension can build it lazily.
     var clipboardCoordinator: ClipboardCoordinator?
+    /// The §5.3 notification coordinator; internal so the
+    /// RuntimeHostIntegrations extension can build it lazily.
+    var notificationCoordinatorLazy: NotificationCoordinator?
+    /// The §7.2 link forwarder; internal so the
+    /// RuntimeHostIntegrations extension can build it lazily.
+    var linkForwarderLazy: LinkForwarder?
+    /// The guest→forwarder open-url relay; alive while the agent is.
+    var linkRelayTask: Task<Void, Never>?
+    /// The `recording_changed` relay of desktop-integration.md §8.2.
+    var microphoneRelayTask: Task<Void, Never>?
+    /// `integrations.notificationListener` registers once when the
+    /// notification coordinator is created.
+    var integrationHealthChecksRegistered = false
+    /// The persistent `.guestBulk` connection of the current agent session
+    /// (guest-protocol.md §10), keyed by its session token.
+    var integrationBulkChannel: (token: Data, channel: GuestBulkChannel)?
     /// The guest→coordinator clip relay; alive while the guest agent is.
     var clipboardRelayTask: Task<Void, Never>?
+    /// The guest→coordinator notification relay; alive while the agent is.
+    var notificationRelayTask: Task<Void, Never>?
+    /// The §6.2–6.3 file transfer service; lazy like the other coordinators.
+    var fileTransferServiceLazy: FileTransferService?
+    /// The §6.4 document provider answering the agent's `Host*` ops.
+    var sharedFolderServiceLazy: SharedFolderService?
+    /// The persisted `sharedFolders.roots` store; lazy.
+    var sharedFolderRegistryLazy: SharedFolderRegistry?
+    /// The guest→window export-offer relay; alive while the agent is.
+    var exportRelayTask: Task<Void, Never>?
+    /// The agent→host `Host*` document request loop on the bulk channel.
+    var sharedFolderRequestTask: Task<Void, Never>?
     /// Cached settings and capabilities for the synchronous policy closures.
     let integrationSettings = IntegrationSettingsCache()
 
@@ -186,14 +341,47 @@ public actor RuntimeHost {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         executableURL: URL = URL(fileURLWithPath: CommandLine.arguments.first ?? "apkrund"),
         uncleanExitRecovery: (any DaemonUncleanExitRecovering)? = nil,
+        adbHostPort: UInt16 = BootOptions.defaultADBHostPort,
+        idleSettings: RuntimeIdleSettings? = nil,
+        idleClock: any RuntimeIdleClock = SuspendingRuntimeIdleClock(),
         enforceProvisioning: Bool = false
     ) {
         self.paths = paths
+        configurationStore = RuntimeConfigurationStore(fileURL: paths.settingsFile)
         self.buildInfo = buildInfo
         self.environment = environment
         self.executableURL = executableURL
+        self.adbHostPort = adbHostPort
         uncleanExitRecoveryOverride = uncleanExitRecovery
         self.enforceProvisioning = enforceProvisioning
+        idleSettingsOverride = idleSettings
+        self.idleClock = idleClock
+        legacySettingsSuiteName = "io.apkrun"
+    }
+
+    init(
+        paths: APKRunPaths,
+        buildInfo: BuildInfo = .current,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        executableURL: URL = URL(fileURLWithPath: CommandLine.arguments.first ?? "apkrund"),
+        uncleanExitRecovery: (any DaemonUncleanExitRecovering)? = nil,
+        adbHostPort: UInt16 = BootOptions.defaultADBHostPort,
+        idleSettings: RuntimeIdleSettings? = nil,
+        idleClock: any RuntimeIdleClock = SuspendingRuntimeIdleClock(),
+        enforceProvisioning: Bool = false,
+        legacySettingsSuiteName: String
+    ) {
+        self.paths = paths
+        configurationStore = RuntimeConfigurationStore(fileURL: paths.settingsFile)
+        self.buildInfo = buildInfo
+        self.environment = environment
+        self.executableURL = executableURL
+        self.adbHostPort = adbHostPort
+        uncleanExitRecoveryOverride = uncleanExitRecovery
+        self.legacySettingsSuiteName = legacySettingsSuiteName
+        self.enforceProvisioning = enforceProvisioning
+        idleSettingsOverride = idleSettings
+        self.idleClock = idleClock
     }
 
     /// Performs daemon startup. The LaunchAgent listener is published after the instance lock and
@@ -228,6 +416,33 @@ public actor RuntimeHost {
         self.diagnostics = diagnostics
         let logger = APKLogger(category: RuntimeLogCategory.host, sink: diagnostics.logSink)
         self.logger = logger
+        try? await diagnostics.healthChecks.register(
+            LocaleTimeHealthCheck { [weak self] in
+                guard let self else { return [] }
+                return await self.localeTimeWarnings()
+            }
+        )
+        observeLocaleTimeChanges()
+        startLocaleTimeRefreshLoop()
+        Task { await self.registerSelfUpdateHealthCheck() }
+        if let idleSettingsOverride {
+            idleSettings = idleSettingsOverride
+        } else {
+            do {
+                idleSettings = try RuntimeIdleSettingsLoader.load(from: paths.settingsFile)
+            } catch {
+                idleSettings = .default
+                logger.warning(
+                    "Runtime idle settings are invalid; using defaults",
+                    errorCode: "runtime.idleSettingsInvalid"
+                )
+            }
+        }
+        let idleController = IdleController(settings: idleSettings, clock: idleClock) { [weak self] action in
+            await self?.handleIdleAction(action)
+        }
+        self.idleController = idleController
+        await idleController.start()
         recordedBootOperationIDs = Set(
             BootRecordLog.read(from: paths.bootPerformanceFile).map(\.operationID)
         )
@@ -237,6 +452,13 @@ public actor RuntimeHost {
         // Load the wrapper registry and recover pending/refreshing entries at
         // daemon start (wrapper.md §6.2), independent of the first verify call.
         Task { _ = await self.wrapperRegistryInstance() }
+        // Quick wrapper sweep at apkrund start + 60 s (wrapper.md §9.1).
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(60))
+            await self?.runWrapperSweep()
+        }
+        // apkrund-start trigger (update-system.md §3.3): arm the scheduler.
+        Task { await self.updateSchedulerInstance().start() }
 
         // Startup step 2: the kernel releases this lock automatically after a crash.
         do {
@@ -270,6 +492,22 @@ public actor RuntimeHost {
                 }
             } catch {
                 recordDegradedStartup(step: 3, code: "hostStartupFailed")
+            }
+        }
+
+        // Startup step 4: only the lock owner may migrate or read global settings.
+        if instanceLock != nil {
+            do {
+                let settings = try configurationStore.readLocaleTimeSettings()
+                logConfigurationStoreIssues(settings.issues)
+                migrateLegacyLocaleTimeSettings()
+            } catch RuntimeConfigurationStoreError.unsupportedSchema(_) {
+                recordDegradedStartup(
+                    step: 4,
+                    code: Self.newerSettingsSchemaFailureCode
+                )
+            } catch {
+                recordDegradedStartup(step: 4, code: "runtime.hostStartupFailed")
             }
         }
 
@@ -310,6 +548,9 @@ public actor RuntimeHost {
             } catch {
                 recordDegradedStartup(step: 5, code: error.qualifiedCode)
             }
+            // #59: a daemon restart may leave a migration half-applied;
+            // reconcile update-state.json against what is actually installed.
+            await reconcileImageUpdate()
         }
 
         // Startup step 7: the provisioning record feeds status and the notProvisioned gate.
@@ -334,14 +575,28 @@ public actor RuntimeHost {
                     options: BootOptions(
                         gpuProfile: .drmVirgl,
                         developerMode: buildInfo.configuration == .debug,
-                        captureLogcat: false
+                        captureLogcat: false,
+                        adbHostPort: adbHostPort
                     ),
                     diagnostics: diagnostics,
                     guestAgentBundle: guestAgent,
-                    guestAgentTimeout: .seconds(30)
+                    guestAgentTimeout: .seconds(30),
+                    soundOutputProvider: Self.soundOutputProvider(settingsFile: paths.settingsFile),
+                    microphoneProvider: Self.microphoneProvider(
+                        settingsFile: paths.settingsFile,
+                        packagesDirectory: paths.packagesDirectory,
+                        cache: integrationSettings),
+                    adbClientConnectionCountChanged: { [weak self] generation, revision, connectionCount in
+                        Task {
+                            await self?.updateADBClientActivity(
+                                generation: generation,
+                                revision: revision,
+                                connectionCount: connectionCount
+                            )
+                        }
+                    }
                 )
-                supervisor = runtimeSupervisor
-                observeSupervisorEvents(from: runtimeSupervisor)
+                finishSupervisorSetup(runtimeSupervisor)
             } catch {
                 recordDegradedStartup(step: 8, code: error.qualifiedCode)
             }
@@ -352,12 +607,405 @@ public actor RuntimeHost {
             return
         }
         hostState = startupFailure == nil ? "running" : "degraded"
+        startPowerObserver()
+        startMemoryPressureObserver()
+        schedulePrebootIfNeeded()
         logger.notice("Daemon startup completed with host state \(hostState, .public)")
+        startBundleWatcher()
+        startSelfUpdateProbeLoop()
+        startImageUpdateLoop()
         completeStartup()
+    }
+
+    private func handleIdleAction(_ action: IdleControllerAction) async {
+        switch action {
+        case .activityBegan:
+            do {
+                try await startRuntime(reason: .automatic)
+            } catch {
+                logger?.warning(
+                    "Android could not be made ready for active work",
+                    errorCode: Self.runtimeHostErrorCode(error)
+                )
+            }
+        case .suspend:
+            _ = await handleSuspendAction(ignoringActivityKinds: [])
+        case .stop:
+            guard !isShuttingDown, !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting,
+                activeRuntimeStarts == 0, activePackageMutations == 0
+            else {
+                return
+            }
+            isRuntimeStopping = true
+            defer { isRuntimeStopping = false }
+            do {
+                try await stopRuntimeBody(reason: .idle)
+            } catch {
+                logger?.error(
+                    "The idle policy could not stop Android",
+                    errorCode: Self.runtimeHostErrorCode(error)
+                )
+            }
+        }
+    }
+
+    @discardableResult
+    private func handleSuspendAction(ignoringActivityKinds: Set<RuntimeCore.ActivityKind>) async -> Bool {
+        guard beginIdleSuspendTransition() else { return false }
+        defer { finishIdleSuspendTransition() }
+
+        guard !isShuttingDown, let idleController, let supervisor, await supervisor.state == .ready else {
+            return false
+        }
+        let blockingActivityKinds = await idleController.activeActivityKinds.subtracting(ignoringActivityKinds)
+        guard blockingActivityKinds.isEmpty else { return false }
+        if ignoringActivityKinds.contains(.session) {
+            let hasVisibleSession: Bool
+            if let sessionService = headlessSessionService as? DaemonHeadlessSessionService {
+                hasVisibleSession = await sessionService.hasVisibleSession()
+            } else {
+                hasVisibleSession = false
+            }
+            guard !hasVisibleSession,
+                !(await idleController.hasActivity(of: .backgroundTask)),
+                !packageActivityReservations.hasActiveLaunches
+            else {
+                return false
+            }
+        }
+        do {
+            try await supervisor.suspend()
+            return true
+        } catch {
+            logger?.error(
+                "The idle policy could not suspend Android",
+                errorCode: error.qualifiedCode
+            )
+            return false
+        }
+    }
+
+    private func beginIdleSuspendTransition() -> Bool {
+        guard !idleSuspendTransitionInProgress else { return false }
+        idleSuspendTransitionInProgress = true
+        return true
+    }
+
+    private func finishIdleSuspendTransition() {
+        idleSuspendTransitionInProgress = false
+        let waiters = idleSuspendTransitionWaiters
+        idleSuspendTransitionWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func waitForIdleSuspendTransition() async {
+        guard idleSuspendTransitionInProgress else { return }
+        await withCheckedContinuation { continuation in
+            if idleSuspendTransitionInProgress {
+                idleSuspendTransitionWaiters.append(continuation)
+            } else {
+                continuation.resume()
+            }
+        }
+    }
+
+    private func startMemoryPressureObserver() {
+        guard memoryPressureSource == nil else { return }
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical],
+            queue: DispatchQueue(label: "io.apkrun.runtime.memory-pressure")
+        )
+        source.setEventHandler { [weak self, weak source] in
+            guard let source else { return }
+            let events = source.data
+            let isWarning = events.contains(.warning)
+            let isCritical = events.contains(.critical)
+            Task {
+                await self?.handleMemoryPressure(isWarning: isWarning, isCritical: isCritical)
+            }
+        }
+        source.resume()
+        memoryPressureSource = source
+    }
+
+    private func handleMemoryPressure(isWarning: Bool, isCritical: Bool) async {
+        if isWarning {
+            logger?.warning(
+                "runtime.memoryPressure is warning",
+                errorCode: "runtime.memoryPressure.warning"
+            )
+        }
+        guard isCritical, !isShuttingDown, let supervisor, await supervisor.state == .ready else {
+            return
+        }
+        if await handleSuspendAction(ignoringActivityKinds: [.session]) {
+            logger?.warning("runtime.memoryPressure is critical; the runtime was suspended")
+        }
+    }
+
+    private func stopMemoryPressureObserver() {
+        let source = memoryPressureSource
+        memoryPressureSource = nil
+        source?.setEventHandler {}
+        source?.cancel()
+    }
+
+    private func schedulePrebootIfNeeded() {
+        guard idleSettings.startPolicy == .atLogin, prebootTask == nil else { return }
+        prebootTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(60))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            await self?.performConfiguredPreboot()
+        }
+    }
+
+    private func performConfiguredPreboot() async {
+        guard !isShuttingDown, idleSettings.startPolicy == .atLogin else { return }
+        let bootLoopBlocked: Bool
+        do {
+            bootLoopBlocked = try stateStore?.bootLoopGuardIsActive() ?? false
+        } catch {
+            logger?.warning(
+                "Preboot was skipped because the boot-loop guard could not be checked"
+            )
+            return
+        }
+        let powerSource = RuntimePrebootPolicy.currentPowerSourceState()
+        guard
+            RuntimePrebootPolicy.shouldPreboot(
+                settings: idleSettings,
+                bootLoopBlocked: bootLoopBlocked,
+                powerSource: powerSource
+            )
+        else {
+            if case .battery(let percentage) = powerSource, percentage < 30 {
+                logger?.notice("Preboot was skipped because battery power is below 30 percent")
+            }
+            return
+        }
+        do {
+            try await startRuntime(reason: .preboot)
+        } catch {
+            logger?.warning(
+                "Configured preboot did not start Android",
+                errorCode: Self.runtimeHostErrorCode(error)
+            )
+        }
+    }
+
+    /// Applies a `runtime.idleSuspendMinutes`/`runtime.idleStopMinutes`
+    /// config change to the live idle controller.
+    func reloadIdleSettingsIfIdleKey(_ key: String) async {
+        guard key == "runtime.idleSuspendMinutes" || key == "runtime.idleStopMinutes",
+            idleSettingsOverride == nil,
+            let loaded = try? RuntimeIdleSettingsLoader.load(from: paths.settingsFile)
+        else {
+            return
+        }
+        idleSettings = loaded
+        await idleController?.update(settings: loaded)
+    }
+
+    private func releaseSessionActivity(_ packageID: String) {
+        sessionActivityAssertions.removeValue(forKey: packageID)?.release()
+    }
+
+    /// Holds `.session` activity for a package whose session is (re)starting,
+    /// matching what `launch` does before the first window draws.
+    func acquireSessionActivityIfNeeded(_ packageID: RuntimePackageID) async {
+        guard sessionActivityAssertions[packageID.rawValue] == nil,
+            let idleController
+        else {
+            return
+        }
+        sessionActivityAssertions[packageID.rawValue] =
+            await idleController.assertActivity(.session)
+    }
+
+    private func releaseBackgroundTaskActivity(_ packageID: String) {
+        backgroundTaskAssertions.removeValue(forKey: packageID)?.release()
+    }
+
+    private func releaseAllBackgroundTaskActivity() {
+        let assertions = backgroundTaskAssertions.values
+        backgroundTaskAssertions.removeAll()
+        for assertion in assertions {
+            assertion.release()
+        }
+    }
+
+    func releaseSessionActivityIfInactive(_ packageID: RuntimePackageID) async {
+        if let headlessSessionService {
+            guard let sessionHandling = headlessSessionService as? any PackageMutationSessionHandling else {
+                return
+            }
+            guard !(await sessionHandling.hasActiveSession(packageID: packageID)) else { return }
+        }
+        releaseSessionActivity(packageID.rawValue)
+    }
+
+    private func updateADBClientActivity(
+        generation: UInt64,
+        revision: UInt64,
+        connectionCount: Int
+    ) async {
+        guard
+            adbClientActivityTracker.receive(
+                generation: generation,
+                revision: revision,
+                connectionCount: connectionCount
+            )
+        else { return }
+        guard adbClientActivityTracker.connectionCount > 0 else {
+            adbClientActivityAssertion?.release()
+            adbClientActivityAssertion = nil
+            return
+        }
+        guard !isShuttingDown, !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
+            return
+        }
+        guard adbClientActivityAssertion == nil, !isAcquiringADBClientActivity,
+            let idleController
+        else {
+            return
+        }
+        isAcquiringADBClientActivity = true
+        await waitForIdleSuspendTransition()
+        guard adbClientActivityTracker.connectionCount > 0 else {
+            isAcquiringADBClientActivity = false
+            return
+        }
+        let assertion = await idleController.assertActivity(.adbClient)
+        isAcquiringADBClientActivity = false
+        guard adbClientActivityTracker.connectionCount > 0 else {
+            assertion.release()
+            return
+        }
+        if adbClientActivityAssertion == nil {
+            adbClientActivityAssertion = assertion
+        } else {
+            assertion.release()
+        }
+    }
+
+    private func releaseADBClientActivity() async {
+        if let supervisor {
+            let generation = await supervisor.developmentADBForwarderGeneration
+            adbClientActivityTracker.invalidate(afterGeneration: generation)
+        } else {
+            adbClientActivityTracker.clearConnectionCount()
+        }
+        adbClientActivityAssertion?.release()
+        adbClientActivityAssertion = nil
+    }
+
+    private func releaseAllSessionActivity() {
+        let assertions = sessionActivityAssertions.values
+        sessionActivityAssertions.removeAll()
+        for assertion in assertions {
+            assertion.release()
+        }
+        releaseAllBackgroundTaskActivity()
+    }
+
+    private static func runtimeHostErrorCode(_ error: any Error) -> String {
+        if let error = error as? any APKRunError {
+            return error.qualifiedCode
+        }
+        return String(describing: error)
+    }
+
+    private func startPowerObserver() {
+        guard !isShuttingDown, powerObserver == nil else { return }
+        let observer = powerObserverFactory { [weak self] event in
+            await self?.receivePowerObserverEvent(event)
+        }
+        do {
+            try observer.start()
+            powerObserver = observer
+            logger?.notice("Registered for host sleep and wake events")
+        } catch {
+            observer.stop()
+            logger?.warning("Host sleep and wake notifications could not be registered")
+        }
+    }
+
+    private func receivePowerObserverEvent(_ event: PowerObserverEvent) async {
+        await powerEventHandler?(event)
+    }
+
+    private func stopPowerObserver() {
+        let observer = powerObserver
+        powerObserver = nil
+        observer?.stop()
+        powerEventHandler = nil
+    }
+
+    func configurePowerObserverForTesting(factory: @escaping RuntimeHostPowerObserverFactory) {
+        precondition(!hasStarted)
+        powerObserverFactory = factory
+    }
+
+    func developmentADBHostPortForTesting() async -> UInt16? {
+        await supervisor?.developmentADBHostPort
+    }
+
+    func hasReadyFrameForTesting(sessionID: UUID) async -> Bool {
+        guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
+            return false
+        }
+        return await service.hasReadyFrameForTesting(sessionID: sessionID)
+    }
+
+    func launchComponentForTesting(sessionID: UUID) async -> String? {
+        guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
+            return nil
+        }
+        return await service.launchComponentForTesting(sessionID: sessionID)
+    }
+
+    func performanceEventsForTesting() -> [PerfEvent] {
+        diagnostics?.perfTimeline.snapshot() ?? []
+    }
+
+    func idleActivityKindsForTesting() async -> Set<RuntimeCore.ActivityKind> {
+        await idleController?.activeActivityKinds ?? []
+    }
+
+    func assertRuntimeActivity(_ kind: RuntimeCore.ActivityKind) async -> RuntimeActivityAssertion? {
+        guard !isShuttingDown, let idleController else {
+            return nil
+        }
+        return await idleController.assertActivity(kind)
+    }
+
+    func configurePackageStoreMutationGateForTesting(_ gate: @escaping @Sendable () async -> Void) {
+        precondition(!hasStarted)
+        packageStoreMutationTestGate = gate
     }
 
     /// Boots Android on demand. An explicit start is allowed after the crash-loop guard activates.
     public func startRuntime(reason: StartReason = .user) async throws(RuntimeHostError) {
+        // §3.7: a host update in flight or a restart to finish one refuses
+        // Android-starting ops (maintenance gate §3.7 for `updating`).
+        switch maintenanceHostState {
+        case .restartPending:
+            throw .hostUpdating("APKRun is restarting to finish an update.")
+        case .updating:
+            throw .hostUpdating("APKRun is updating itself.")
+        case .normal, .unknown:
+            break
+        }
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, !imageMigrating else {
+            throw .invalidTransition
+        }
+        await waitForIdleSuspendTransition()
         guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
             throw .invalidTransition
         }
@@ -385,6 +1033,7 @@ public actor RuntimeHost {
 
         if let runtimeStartTask {
             try await runtimeStartTask.value.get()
+            await idleController?.resetIdlePeriod()
             return
         }
 
@@ -405,6 +1054,10 @@ public actor RuntimeHost {
         runtimeStartTask = task
         defer { runtimeStartTask = nil }
         try await task.value.get()
+        if activePackageLaunches == 0 {
+            enqueueLocaleTimeTrigger(.postBoot)
+        }
+        await idleController?.resetIdlePeriod()
     }
 
     private func performRuntimeStart(
@@ -441,7 +1094,7 @@ public actor RuntimeHost {
                     throw .stateStore(error)
                 }
                 logger?.notice("The user explicitly cleared the runtime crash-loop guard")
-            case .automatic:
+            case .automatic, .preboot:
                 throw .crashLoopActive
             }
         }
@@ -487,6 +1140,27 @@ public actor RuntimeHost {
             if bootProgressGeneration == progressGeneration {
                 bootProgressGeneration &+= 1
                 bootPurpose = nil
+            }
+        }
+        // §4.10: an image whose manifest no longer covers this host never
+        // boots; Android stays stopped and the boot fails as an image error.
+        do {
+            let wanted = image.manifest.requirements
+            if compareVersions(buildIdentity.marketingVersion, wanted.minimumRuntimeVersion) < 0 {
+                throw .image(
+                    .incompatibleRuntime(
+                        minimum: wanted.minimumRuntimeVersion,
+                        found: buildIdentity.marketingVersion))
+            }
+            let range = wanted.guestProtocol
+            if range.max < Int(ProtocolVersion.supportedMajors.lowerBound)
+                || range.min > Int(ProtocolVersion.supportedMajors.upperBound)
+            {
+                throw .image(
+                    .incompatibleProtocol(
+                        minimum: range.min, maximum: range.max,
+                        hostMinimum: Int(ProtocolVersion.supportedMajors.lowerBound),
+                        hostMaximum: Int(ProtocolVersion.supportedMajors.upperBound)))
             }
         }
         do {
@@ -545,21 +1219,33 @@ public actor RuntimeHost {
             throw .invalidTransition
         }
         isRuntimeRestarting = true
-        defer { isRuntimeRestarting = false }
+        var restartCompleted = false
+        defer {
+            LocaleTimeRestartCompletion.finish(
+                didRestart: restartCompleted,
+                activePackageLaunches: activePackageLaunches,
+                clearRestarting: { isRuntimeRestarting = false },
+                enqueuePostBoot: { enqueueLocaleTimeTrigger(.postBoot) }
+            )
+        }
         try await stopRuntimeBody(reason: .user)
         try await startRuntimeBody(reason: reason)
+        restartCompleted = true
     }
 
-    private func stopRuntimeBody(reason: StopReason) async throws(RuntimeHostError) {
+    func stopRuntimeBody(reason: StopReason) async throws(RuntimeHostError) {
         try await waitForStartupCompletion()
         try beginLifecycleOperation()
         defer { finishLifecycleOperation() }
         runtimeSessionGeneration &+= 1
+        await waitForLocaleTimeSyncToFinish()
         if let service = headlessSessionService as? DaemonHeadlessSessionService {
             await service.shutdown()
         }
         await supervisor?.stop(reason: reason)
         await packageQueryService?.detachRuntime()
+        releaseAllSessionActivity()
+        await releaseADBClientActivity()
         headlessSessionService = nil
     }
 
@@ -569,6 +1255,9 @@ public actor RuntimeHost {
             activePackageMutations == 0
         else {
             throw .invalidTransition
+        }
+        guard !imageMigrating else {
+            throw RuntimeHostError.invalidTransition
         }
         isRuntimeResetting = true
         defer { isRuntimeResetting = false }
@@ -614,9 +1303,21 @@ public actor RuntimeHost {
     /// Debug-only headless acceptance hook. The headless session owns a DisplayPool lease and
     /// leaves frame surfaces unconsumed.
     public func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeWireError) -> RuntimeLaunchResult {
+        await waitForIdleSuspendTransition()
         try beginPackageLaunch(request.packageID)
-        defer { finishPackageLaunch(request.packageID) }
+        activePackageLaunches += 1
+        var launchCountReleased = false
+        defer {
+            if !launchCountReleased {
+                activePackageLaunches -= 1
+                if activePackageLaunches == 0 {
+                    enqueueLocaleTimeTrigger(.sessionRunning)
+                }
+            }
+            finishPackageLaunch(request.packageID)
+        }
         let launchTracking = await beginLaunchRecord(request)
+        await acquireSessionActivityIfNeeded(request.packageID)
         do {
             guard headlessLaunchHookIsEnabled else {
                 throw Self.launchUnavailableError
@@ -641,6 +1342,7 @@ public actor RuntimeHost {
             completeLaunchRecord(launchTracking, sessionID: result.sessionID)
             return result
         } catch {
+            await releaseSessionActivityIfInactive(request.packageID)
             failLaunchRecord(
                 launchTracking,
                 code: (error as? RuntimeWireError)?.code ?? "runtime.internal"
@@ -648,6 +1350,15 @@ public actor RuntimeHost {
             throw (error as? RuntimeWireError)
                 ?? .runtime("internal", message: "APKRun's background service failed.")
         }
+        try requirePackageLaunchAllowed(request.packageID)
+        let service = try await makeHeadlessSessionService()
+        try requirePackageLaunchAllowed(request.packageID)
+        let result = try await service.launch(request)
+        activePackageLaunches -= 1
+        launchCountReleased = true
+        enqueueLocaleTimeTrigger(.sessionRunning)
+        await releaseSessionActivityIfInactive(request.packageID)
+        return result
     }
 
     /// Stops a package session through the daemon-owned Guest Agent.
@@ -658,7 +1369,11 @@ public actor RuntimeHost {
             return RuntimeTerminateResult(packageID: request.packageID, hadSession: false)
         }
         if let headlessSessionService {
-            return try await headlessSessionService.terminate(request)
+            let result = try await headlessSessionService.terminate(request)
+            if result.hadSession {
+                releaseSessionActivity(request.packageID.rawValue)
+            }
+            return result
         }
         guard let guestAgent = await supervisor.developmentGuestAgent else {
             throw Self.guestAgentUnavailableError
@@ -667,6 +1382,56 @@ public actor RuntimeHost {
             request,
             using: guestAgent
         )
+    }
+
+    /// Closes a package session per `window.closeBehavior`
+    /// (display-and-windowing.md §7.6). For `keepRunning` a `.backgroundTask`
+    /// activity assertion is acquired before the `.session` hold releases so
+    /// the idle controller never sees a false idle transition; it releases on
+    /// task disappearance, terminate, uninstall, or runtime teardown.
+    public func closeSession(_ request: RuntimeCloseSessionRequest) async throws(RuntimeWireError)
+        -> RuntimeCloseSessionResult
+    {
+        guard let supervisor, await supervisor.state == .ready else {
+            return RuntimeCloseSessionResult(packageID: request.packageID, hadSession: false)
+        }
+        let policy: WireClosePolicy
+        if let requested = request.policy {
+            policy = requested
+        } else {
+            let stored = try? await packageSettings(request.packageID)
+            policy = WireClosePolicy(rawValue: stored?.value("window.closeBehavior") ?? "") ?? .stop
+        }
+        guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
+            throw Self.guestAgentUnavailableError
+        }
+        if policy == .keepRunning, backgroundTaskAssertions[request.packageID.rawValue] == nil,
+            let idleController
+        {
+            backgroundTaskAssertions[request.packageID.rawValue] =
+                await idleController.assertActivity(.backgroundTask)
+        }
+        do {
+            let result = try await service.closeSession(request, policy: policy)
+            if result.hadSession {
+                releaseSessionActivity(request.packageID.rawValue)
+            }
+            // Keep the hold only while the package has a retained
+            // keepRunning task: a close that marked none (no session, or
+            // every task already gone) releases the acquired assertion;
+            // a repeated close keeps the earlier retain (§7.6).
+            var holdRetained = false
+            if policy == .keepRunning {
+                holdRetained = await service.hasBackgroundActivity(packageID: request.packageID)
+            }
+            if !holdRetained {
+                releaseBackgroundTaskActivity(request.packageID.rawValue)
+            }
+            return result
+        } catch {
+            releaseBackgroundTaskActivity(request.packageID.rawValue)
+            throw error
+        }
     }
 
     /// Imports and inspects APK files without starting Android.
@@ -700,21 +1465,88 @@ public actor RuntimeHost {
         return try await service.adoptPackage(request)
     }
 
+    /// The stored `settings.json` of a package (host-ui.md §7).
+    public func packageSettings(
+        _ packageID: RuntimePackageID
+    ) async throws(RuntimeWireError) -> PackageSettingsWire? {
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        return try await service.packageSettings(for: packageID)
+    }
+
+    /// Applies a `settings.json` patch and publishes `settingsChanged`
+    /// (host-ui.md §7, API 1.24).
+    public func updatePackageSettings(
+        _ request: RuntimeUpdatePackageSettingsRequest
+    ) async throws(RuntimeWireError) -> PackageSettingsWire {
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        let result = try await service.updatePackageSettings(request)
+        eventHub.publishPackageChange(
+            .settingsChanged(
+                request.packageID,
+                request.patch.set.keys.sorted() + request.patch.clear.sorted()),
+            operationID: nil)
+        // `window.*` keys reach an open session's window live
+        // (configuration.md §1.5, package-metadata-json.md §3.4).
+        let touched =
+            Set(request.patch.set.keys).union(request.patch.clear)
+            .intersection(["window.resizable", "window.alwaysOnTop", "window.zoom"])
+        if !touched.isEmpty,
+            let prefs = Self.windowPrefs(from: result)
+        {
+            eventHub.publishPackageChange(
+                .windowPrefsChanged(request.packageID, prefs), operationID: nil)
+        }
+        // A changed `integrations.*` key may alter the guest's forwarding
+        // allowlists; push them so titles, text, and links stop leaving
+        // Android at once (desktop-integration.md §3.2).
+        if Set(request.patch.set.keys).union(request.patch.clear)
+            .contains(where: { $0.hasPrefix("integrations.") })
+        {
+            await refreshIntegrationSettings(for: request.packageID)
+            await pushNotificationForwarding()
+            await pushUrlRedirect()
+            await pushMicrophoneAccess()
+        }
+        return result
+    }
+
+    /// `SessionDescriptor.windowPrefs` of a resolved settings reply
+    /// (runtime-api.md §10.2): missing keys keep their defaults.
+    static func windowPrefs(from settings: PackageSettingsWire) -> WindowPrefs? {
+        func value(_ key: String) -> String? {
+            settings.entries.first { $0.key == key }?.value
+        }
+        guard let resizable = value("window.resizable"),
+            let alwaysOnTop = value("window.alwaysOnTop"),
+            let zoom = value("window.zoom"),
+            let zoomValue = Double(zoom)
+        else {
+            return nil
+        }
+        return WindowPrefs(
+            resizable: resizable == "true",
+            alwaysOnTop: alwaysOnTop == "true",
+            zoom: zoomValue)
+    }
+
     /// Starts Android on demand, attaches its package channel, and installs an inspected import.
     public func installImported(
         _ request: RuntimeInstallImportedRequest
     ) async throws(RuntimeWireError) -> RuntimePackageSummary {
         let packageID = try await resolvePackageIDForInstall(request)
         try reservePackageInstall(packageID)
+        let mutationToken: UUID
         do {
-            try beginPackageMutation()
+            mutationToken = try await beginPackageMutation()
         } catch {
             packageActivityReservations.finishInstall(packageID: packageID.rawValue)
             throw Self.sessionWireError(for: error)
         }
         defer {
             packageActivityReservations.finishInstall(packageID: packageID.rawValue)
-            finishPackageMutation()
+            finishPackageMutation(mutationToken)
         }
 
         return try await performInstallImported(
@@ -781,12 +1613,6 @@ public actor RuntimeHost {
             return existing.handle
         }
         try reservePackageInstall(packageID)
-        do {
-            try beginPackageMutation()
-        } catch {
-            packageActivityReservations.finishInstall(packageID: packageID.rawValue)
-            throw Self.sessionWireError(for: error)
-        }
 
         let handle = OperationHandle(operationID: requestedID, kind: .install)
         let snapshot = OperationSnapshot(
@@ -836,7 +1662,7 @@ public actor RuntimeHost {
         _ request: RuntimeUninstallPackageRequest,
         operationID requestedID: WireOperationID,
         clientKind: RuntimeClientKind
-    ) throws(RuntimeWireError) -> OperationHandle {
+    ) async throws(RuntimeWireError) -> OperationHandle {
         guard !request.options.forget || !request.options.keepData else {
             throw Self.incompatibleUninstallOptionsError
         }
@@ -871,16 +1697,6 @@ public actor RuntimeHost {
             }
         } catch {
             throw Self.packageOperationInProgressError
-        }
-        do {
-            try beginPackageMutation()
-        } catch {
-            if request.options.forget {
-                packageActivityReservations.finishForget(packageID: request.packageID.rawValue)
-            } else {
-                packageActivityReservations.finishUninstall(packageID: request.packageID.rawValue)
-            }
-            throw Self.sessionWireError(for: error)
         }
 
         let handle = OperationHandle(operationID: requestedID, kind: .uninstall)
@@ -917,6 +1733,82 @@ public actor RuntimeHost {
                 }
             } else {
                 await self.runUninstallOperation(request, operationID: requestedID, clientKind: clientKind)
+            }
+        }
+        trackedOperations[requestedID]?.task = task
+        return handle
+    }
+
+    /// Starts a package repair asynchronously (package-store.md §11.1): a
+    /// `broken` package is reinstalled from its retained `current/` artifacts.
+    func beginRepairPackage(
+        _ request: RuntimePackageRequest,
+        operationID requestedID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) async throws(RuntimeWireError) -> OperationHandle {
+        let requestPayload: Data
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            requestPayload = try encoder.encode(request)
+        } catch {
+            throw .runtime(
+                "malformedRequest",
+                message: "APKRun's background service couldn't read the request."
+            )
+        }
+
+        if let existing = trackedOperations[requestedID] {
+            guard existing.handle.kind == .repair, existing.requestPayload == requestPayload else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The operation ID is already being used for a different request."
+                )
+            }
+            return existing.handle
+        }
+
+        do {
+            try packageActivityReservations.beginInstall(packageID: request.packageID.rawValue)
+        } catch {
+            throw Self.packageOperationInProgressError
+        }
+
+        let handle = OperationHandle(operationID: requestedID, kind: .repair)
+        let snapshot = OperationSnapshot(
+            operationID: requestedID,
+            kind: .repair,
+            packageID: request.packageID,
+            requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(
+                stage: "startingRuntime",
+                message: "Starting Android…"
+            )
+        )
+        trackedOperations[requestedID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: requestPayload,
+            snapshot: snapshot,
+            isCancellable: true,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: requestedID)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            if let diagnosticsID = DiagnosticsCore.OperationID(wire: requestedID.wireValue) {
+                let context = OperationContext(operationID: diagnosticsID)
+                await OperationContext.$current.withValue(context) {
+                    await self.runRepairPackageOperation(
+                        request,
+                        operationID: requestedID,
+                        clientKind: clientKind
+                    )
+                }
+            } else {
+                await self.runRepairPackageOperation(
+                    request, operationID: requestedID, clientKind: clientKind)
             }
         }
         trackedOperations[requestedID]?.task = task
@@ -982,9 +1874,27 @@ public actor RuntimeHost {
         operationID: WireOperationID,
         clientKind: RuntimeClientKind
     ) async {
+        var mutationToken: UUID?
         defer {
             packageActivityReservations.finishInstall(packageID: packageID.rawValue)
-            finishPackageMutation()
+            if let mutationToken {
+                finishPackageMutation(mutationToken)
+            }
+        }
+        // Acquiring the mutation drives the `.activityBegan` idle action and
+        // can wait for Android to boot; it runs inside the tracked task so
+        // admission already published the operation record and handle.
+        do {
+            mutationToken = try await beginPackageMutation()
+        } catch {
+            finishOperation(
+                operationID,
+                result: Task.isCancelled ? .cancelled : .failed(Self.operationWireError(for: error)))
+            return
+        }
+        guard !Task.isCancelled else {
+            finishOperation(operationID, result: .cancelled)
+            return
         }
         do {
             let result = try await performInstallImported(
@@ -1014,13 +1924,31 @@ public actor RuntimeHost {
         operationID: WireOperationID,
         clientKind: RuntimeClientKind
     ) async {
+        var mutationToken: UUID?
         defer {
             if request.options.forget {
                 packageActivityReservations.finishForget(packageID: request.packageID.rawValue)
             } else {
                 packageActivityReservations.finishUninstall(packageID: request.packageID.rawValue)
             }
-            finishPackageMutation()
+            if let mutationToken {
+                finishPackageMutation(mutationToken)
+            }
+        }
+        // Acquiring the mutation can wait for Android to boot; it runs inside
+        // the tracked task so admission already published the operation.
+        do {
+            mutationToken = try await beginPackageMutation(
+                activity: request.options.forget ? nil : .storeOperation)
+        } catch {
+            finishOperation(
+                operationID,
+                result: Task.isCancelled ? .cancelled : .failed(Self.operationWireError(for: error)))
+            return
+        }
+        guard !Task.isCancelled else {
+            finishOperation(operationID, result: .cancelled)
+            return
         }
         do {
             try await performUninstallPackage(
@@ -1041,6 +1969,74 @@ public actor RuntimeHost {
             let wireError = Self.operationWireError(for: error)
             finishOperation(operationID, result: .failed(wireError))
             logger?.error("Package uninstall operation failed", errorCode: wireError.code)
+        }
+    }
+
+    private func runRepairPackageOperation(
+        _ request: RuntimePackageRequest,
+        operationID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) async {
+        var mutationToken: UUID?
+        defer {
+            packageActivityReservations.finishInstall(packageID: request.packageID.rawValue)
+            if let mutationToken {
+                finishPackageMutation(mutationToken)
+            }
+        }
+        // Acquiring the mutation can wait for Android to boot; it runs inside
+        // the tracked task so admission already published the operation.
+        do {
+            mutationToken = try await beginPackageMutation()
+        } catch {
+            finishOperation(
+                operationID,
+                result: Task.isCancelled ? .cancelled : .failed(Self.operationWireError(for: error)))
+            return
+        }
+        guard !Task.isCancelled else {
+            finishOperation(operationID, result: .cancelled)
+            return
+        }
+        do {
+            let service = packageQueryServiceInstance()
+            do {
+                try await service.open()
+            } catch {
+                throw Self.operationWireError(for: error)
+            }
+            try await startRuntimeForPackageMutation(reason: clientKind == .cli ? .cli : .user)
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            guard !Task.isCancelled else {
+                throw Self.cancelledOperationError
+            }
+            try await enterPackageStoreMutation(
+                operationID: operationID,
+                stage: "repairing",
+                message: "Reinstalling the Android package…"
+            )
+            let change = try await service.repairPackage(request)
+            let summary: RuntimePackageSummary
+            switch change {
+            case .installed(let installed), .updated(let installed, _):
+                summary = installed
+            default:
+                throw Self.operationWireError(for: CancellationError())
+            }
+            eventHub.publishPackageChange(change, operationID: operationID)
+            finishOperation(operationID, result: .succeeded(.package(summary)))
+            logger?.notice(
+                "Package repair operation completed for \(request.packageID.rawValue, .public)"
+            )
+        } catch {
+            if Task.isCancelled {
+                finishOperation(operationID, result: .cancelled)
+                logger?.notice("Package repair operation was cancelled")
+                return
+            }
+            let wireError = Self.operationWireError(for: error)
+            finishOperation(operationID, result: .failed(wireError))
+            logger?.error("Package repair operation failed", errorCode: wireError.code)
         }
     }
 
@@ -1164,6 +2160,16 @@ public actor RuntimeHost {
         if let change = result.change {
             eventHub.publishPackageChange(change, operationID: operationID)
         }
+        // §8: the Mac app goes to the Trash unless the caller asked to keep
+        // it (`--keep-wrapper`); a missing wrapper is fine.
+        if request.options.trashWrappers {
+            do {
+                _ = try await removeWrapper(packageID: request.packageID, trash: true)
+            } catch {
+                logger?.info(
+                    "Uninstall had no wrapper to trash for \(request.packageID.rawValue, .public)")
+            }
+        }
     }
 
     private static func operationWireError(for error: any Error) -> RuntimeWireError {
@@ -1276,10 +2282,15 @@ public actor RuntimeHost {
         operationID: WireOperationID?,
         stage: String,
         message: String
-    ) throws(RuntimeWireError) {
+    ) async throws(RuntimeWireError) {
         guard !Task.isCancelled else {
             throw Self.cancelledOperationError
         }
+        await packageStoreMutationTestGate?()
+        guard !Task.isCancelled else {
+            throw Self.cancelledOperationError
+        }
+        try assertMaintenanceGateAllowsWork()
         if let operationID {
             // PackageStore reconciles ambiguous guest results and journals the transaction to a
             // terminal state once its Store Agent operation begins.
@@ -1287,7 +2298,7 @@ public actor RuntimeHost {
         }
     }
 
-    func finishOperation(_ operationID: WireOperationID, result: OperationResult) {
+    func finishOperation(_ operationID: WireOperationID, result: RuntimeAPI.OperationResult) {
         guard var operation = trackedOperations[operationID], operation.snapshot.result == nil else {
             return
         }
@@ -1353,6 +2364,410 @@ public actor RuntimeHost {
         return try await service.packageInfo(request)
     }
 
+    /// Snapshots of the live app sessions (host-ui.md §5.2).
+    public func listSessions() async -> [WireSessionSummary] {
+        guard let service = sessionServiceForIntegrations() else {
+            return []
+        }
+        return await service.sessionSnapshots().compactMap(Self.wireSessionSummary)
+    }
+
+    /// Returns the global configuration entries implemented by this runtime.
+    public func configuration() throws -> ConfigurationSnapshot {
+        try requireConfigurationAccess()
+        let settings = try configurationStore.readLocaleTimeSettings()
+        logConfigurationStoreIssues(settings.issues)
+        let values = settings.values
+        return Self.configurationSnapshot(for: values)
+    }
+
+    /// Validates and persists supported global settings before publishing their change event.
+    public func updateConfiguration(_ patch: ConfigurationPatch) throws -> ConfigurationSnapshot {
+        try requireConfigurationAccess()
+        let mutations = try Self.localeTimeMutations(from: patch.patch)
+        let update = try configurationStore.updateLocaleTimeSettings(mutations)
+        logConfigurationStoreIssues(update.issues)
+        if !update.changedKeys.isEmpty {
+            eventHub.publishRuntimeChange(.configurationChanged(keys: update.changedKeys))
+            enqueueLocaleTimeTrigger(.hostPreferencesChanged)
+        }
+        return Self.configurationSnapshot(for: update.values)
+    }
+
+    /// The composed Mac icon PNG of one package (host-ui.md §5.3).
+    ///
+    /// Returns `nil` when the store holds no rendered icon; callers fall back
+    /// to the host preview placeholder.
+    public func packageIcon(packageID: RuntimePackageID) async -> Data? {
+        let service = packageQueryServiceInstance()
+        try? await service.open()
+        guard
+            let rendered = await service.renderedIconLayers(for: packageID),
+            let master = Self.composedIconMaster(
+                kind: rendered.manifest.kind, layers: rendered.layers),
+            let png = try? IconComposer.pngData(master)
+        else { return nil }
+        return png
+    }
+
+    /// Maps a session snapshot to its wire summary (host-ui.md §5.2).
+    static func wireSessionSummary(_ snapshot: AppSessionSnapshot) -> WireSessionSummary? {
+        let phase: WireSessionPhase
+        switch snapshot.state {
+        case .requested, .waitingForRuntime, .acquiringDisplay, .launching:
+            phase = .starting
+        case .running:
+            phase = .running
+        case .backgrounded:
+            phase = .backgrounded
+        case .closing:
+            phase = .closing
+        case .ended:
+            phase = .closing
+        }
+        guard case .app(let sessionID) = snapshot.id,
+            let packageID = RuntimePackageID(rawValue: snapshot.packageID)
+        else { return nil }
+        return WireSessionSummary(
+            sessionID: sessionID,
+            packageID: packageID,
+            phase: phase
+        )
+    }
+
+    private func observeLocaleTimeChanges() {
+        guard localeTimeNotificationRelay == nil else { return }
+        let bindings: [LocaleTimeNotificationRelay.Binding] = [
+            .init(center: .default, name: NSLocale.currentLocaleDidChangeNotification, trigger: .hostLocaleChanged),
+            .init(center: .default, name: .NSSystemTimeZoneDidChange, trigger: .timeZoneChanged),
+            .init(center: .default, name: .NSSystemClockDidChange, trigger: .systemClockChanged),
+            LocaleTimeNotificationRelay.workspaceWakeBinding(
+                notificationCenter: NSWorkspace.shared.notificationCenter
+            ),
+        ]
+        let relay = LocaleTimeNotificationRelay(bindings: bindings) { [weak self] trigger in
+            await self?.enqueueLocaleTimeTrigger(trigger)
+        }
+        relay.start()
+        localeTimeNotificationRelay = relay
+    }
+
+    private func startLocaleTimeRefreshLoop() {
+        guard localeTimeRefreshTask == nil else { return }
+        localeTimeRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(30 * 60))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                await self?.enqueueLocaleTimeTrigger(.periodic)
+            }
+        }
+    }
+
+    func enqueueLocaleTimeTrigger(_ trigger: LocaleTimeSyncTrigger) {
+        guard !isShuttingDown, !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else { return }
+        let previous = localeTimeSyncTask
+        localeTimeSyncTask = Task { [weak self] in
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            await self?.performLocaleTimeTrigger(trigger)
+        }
+    }
+
+    private func performLocaleTimeTrigger(_ trigger: LocaleTimeSyncTrigger) async {
+        guard !isShuttingDown, !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting,
+            let supervisor,
+            await supervisor.state == .ready,
+            let guestAgent = await supervisor.developmentGuestAgent
+        else {
+            return
+        }
+        await bindLocaleTimeSynchronizer(to: guestAgent)
+        guard await guestAgent.supervisor.state == .ready,
+            let synchronizer = localeTimeSynchronizer,
+            localeTimeGuestAgent === guestAgent
+        else {
+            return
+        }
+
+        let roundTripMilliseconds = await guestAgent.supervisor.lastPingRoundTripMilliseconds
+        let settings: LocaleTimeConfigurationValues
+        do {
+            let result = try configurationStore.readLocaleTimeSettings()
+            logConfigurationStoreIssues(result.issues)
+            settings = result.values
+        } catch {
+            logger?.warning(
+                "Locale and time settings could not be read.",
+                errorCode: "runtime.internal"
+            )
+            return
+        }
+        let warnings = await synchronizer.synchronize(
+            trigger: trigger,
+            settings: LocaleTimeSyncSettings(
+                syncLocale: settings.syncLocale,
+                syncTimeZone: settings.syncTimeZone,
+                syncClockFormat: settings.syncClockFormat
+            ),
+            sessionIsRunning: activePackageLaunches == 0,
+            roundTripMilliseconds: roundTripMilliseconds
+        )
+        recordLocaleTimeWarnings(warnings)
+    }
+
+    private func bindLocaleTimeSynchronizer(to guestAgent: DevelopmentGuestAgent) async {
+        guard localeTimeGuestAgent !== guestAgent || localeTimeSynchronizer == nil else { return }
+        await unbindLocaleTimeSynchronizer()
+
+        let guestSupervisor = guestAgent.supervisor
+        let synchronizer = LocaleTimeSynchronizer(
+            channel: DevelopmentGuestLocaleTimeChannel(agent: guestAgent),
+            onWarningsChanged: { [weak self] warnings in
+                await self?.recordLocaleTimeWarnings(warnings)
+            },
+            onLocaleApplied: { [weak self] in
+                await self?.refreshPackageLabelsAfterLocaleUpdate()
+            }
+        )
+        localeTimeGuestAgent = guestAgent
+        localeTimeSynchronizer = synchronizer
+        let handlerID = await guestSupervisor.addResynchronizationHandler(
+            deliveringCurrentSnapshot: false
+        ) { [weak self] _ in
+            Task { [weak self] in
+                guard let self else { return }
+                let states = await guestSupervisor.stateUpdates()
+                await LocaleTimeReconnectReadiness.waitForReady(states: states) {
+                    await self.enqueueLocaleTimeTrigger(.guestReconnected)
+                }
+            }
+        }
+        guard !isShuttingDown, !isRuntimeStopping, !isRuntimeRestarting,
+            await supervisor?.developmentGuestAgent === guestAgent
+        else {
+            await guestSupervisor.removeResynchronizationHandler(handlerID)
+            localeTimeGuestAgent = nil
+            localeTimeSynchronizer = nil
+            return
+        }
+        localeTimeResynchronizationHandlerID = handlerID
+    }
+
+    private func refreshPackageLabelsAfterLocaleUpdate() async {
+        guard !isShuttingDown, let supervisor, await supervisor.state == .ready else { return }
+        let service = packageQueryServiceInstance()
+        do {
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            try await service.refreshLocaleDependentPackageLabels(
+                registry: await wrapperRegistryInstance())
+        } catch {
+            logger?.warning(
+                "Android package labels may not reflect the current locale.",
+                errorCode: "integration.displayNameRefreshFailed"
+            )
+        }
+    }
+
+    private func unbindLocaleTimeSynchronizer() async {
+        if let guestAgent = localeTimeGuestAgent,
+            let handlerID = localeTimeResynchronizationHandlerID
+        {
+            await guestAgent.supervisor.removeResynchronizationHandler(handlerID)
+        }
+        localeTimeResynchronizationHandlerID = nil
+        localeTimeGuestAgent = nil
+        localeTimeSynchronizer = nil
+        localeTimeWarningsSnapshot.removeAll()
+    }
+
+    private func waitForLocaleTimeSyncToFinish() async {
+        if let localeTimeSyncTask {
+            await localeTimeSyncTask.value
+            self.localeTimeSyncTask = nil
+        }
+        await unbindLocaleTimeSynchronizer()
+    }
+
+    private func stopLocaleTimeObservers() async {
+        localeTimeRefreshTask?.cancel()
+        localeTimeRefreshTask = nil
+        localeTimeNotificationRelay?.stop()
+        localeTimeNotificationRelay = nil
+        await waitForLocaleTimeSyncToFinish()
+    }
+
+    private func migrateLegacyLocaleTimeSettings() {
+        guard let defaults = UserDefaults(suiteName: legacySettingsSuiteName) else { return }
+        let keys = [
+            LocaleTimeConfigurationValues.syncLocaleKey,
+            LocaleTimeConfigurationValues.syncTimeZoneKey,
+            LocaleTimeConfigurationValues.syncClockFormatKey,
+        ]
+        var legacyValues: [String: Bool] = [:]
+        for key in keys {
+            if let value = defaults.object(forKey: key) as? Bool {
+                legacyValues[key] = value
+            }
+        }
+        do {
+            let importedKeys = try configurationStore.importLegacyPreferences(legacyValues)
+            for key in keys {
+                defaults.removeObject(forKey: key)
+            }
+            if !importedKeys.isEmpty {
+                logger?.notice("Migrated legacy locale and time preferences into settings.json")
+            }
+        } catch {
+            logger?.warning(
+                "Legacy locale and time preferences could not be migrated.",
+                errorCode: "runtime.internal"
+            )
+        }
+    }
+
+    private func requireConfigurationAccess() throws {
+        guard instanceLock != nil else {
+            throw RuntimeHostError.runtimeFailure(.instanceLocked(owner: .unknown))
+        }
+        if let startupFailure, startupFailure.step == 4 {
+            throw RuntimeHostError.startupFailed(step: startupFailure.step, code: startupFailure.code)
+        }
+    }
+
+    private func logConfigurationStoreIssues(_ issues: [RuntimeConfigurationStoreIssue]) {
+        for issue in issues {
+            switch issue {
+            case .corruptFileQuarantined:
+                logger?.error(
+                    "The global settings file was corrupt and has been quarantined.",
+                    errorCode: "runtime.internal"
+                )
+            case .unknownSetting(let key):
+                logger?.warning(
+                    "Unknown global setting \(key, .public) was ignored.",
+                    errorCode: "runtime.unknownSetting"
+                )
+            case .invalidSettingValue(let key):
+                logger?.error(
+                    "Invalid global setting value for \(key, .public) was ignored.",
+                    errorCode: "runtime.invalidSettingValue"
+                )
+            }
+        }
+    }
+
+    private static func configurationSnapshot(
+        for values: LocaleTimeConfigurationValues
+    ) -> ConfigurationSnapshot {
+        let entries = [
+            LocaleTimeConfigurationValues.syncLocaleKey,
+            LocaleTimeConfigurationValues.syncTimeZoneKey,
+            LocaleTimeConfigurationValues.syncClockFormatKey,
+        ].map { key in
+            ConfigurationEntry(
+                key: key,
+                value: .bool(values[key]),
+                defaultValue: .bool(true),
+                isSet: values.explicitlySetKeys.contains(key),
+                applies: .live
+            )
+        }
+        return ConfigurationSnapshot(entries: entries)
+    }
+
+    private static func localeTimeMutations(
+        from patch: JSONValue
+    ) throws -> [String: LocaleTimeSettingMutation] {
+        guard case .object(let root) = patch else {
+            throw RuntimeConfigurationStoreError.invalidSettingValue("configuration")
+        }
+        var mutations: [String: LocaleTimeSettingMutation] = [:]
+        for (group, value) in root {
+            if group == "sharedFolders" {
+                throw RuntimeConfigurationStoreError.invalidSettingValue(group)
+            }
+            guard group == "system" else {
+                throw RuntimeConfigurationStoreError.unknownSetting(group)
+            }
+            guard case .object(let system) = value else {
+                throw RuntimeConfigurationStoreError.invalidSettingValue(group)
+            }
+            for (key, value) in system {
+                let qualifiedKey = "\(group).\(key)"
+                guard
+                    [
+                        LocaleTimeConfigurationValues.syncLocaleKey,
+                        LocaleTimeConfigurationValues.syncTimeZoneKey,
+                        LocaleTimeConfigurationValues.syncClockFormatKey,
+                    ].contains(qualifiedKey)
+                else {
+                    throw RuntimeConfigurationStoreError.unknownSetting(qualifiedKey)
+                }
+                switch value {
+                case .bool(let value):
+                    mutations[qualifiedKey] = .set(value)
+                case .null:
+                    mutations[qualifiedKey] = .reset
+                default:
+                    throw RuntimeConfigurationStoreError.invalidSettingValue(qualifiedKey)
+                }
+            }
+        }
+        return mutations
+    }
+
+    private func recordLocaleTimeWarnings(_ warnings: [LocaleTimeWarning]) {
+        let current = Set(warnings)
+        guard current != localeTimeWarningsSnapshot else { return }
+        let recovered = !localeTimeWarningsSnapshot.isEmpty && current.isEmpty
+        localeTimeWarningsSnapshot = current
+        if recovered {
+            logger?.notice("Locale and time synchronization recovered")
+        } else if !current.isEmpty {
+            logger?.warning(
+                "Locale and time synchronization needs attention",
+                errorCode: "runtime.timeSyncFailed"
+            )
+        }
+    }
+
+    private func localeTimeWarnings() -> [LocaleTimeWarning] {
+        localeTimeWarningsSnapshot.sorted { $0.rawValue < $1.rawValue }
+    }
+
+    /// The `sessions` topic event for one committed session snapshot.
+    static func sessionChange(for snapshot: AppSessionSnapshot) -> SessionChange? {
+        guard let summary = wireSessionSummary(snapshot) else {
+            return nil
+        }
+        if case .ended(let reason) = snapshot.state {
+            return .ended(
+                sessionID: summary.sessionID,
+                packageID: summary.packageID,
+                reason: sessionEndReasonName(reason))
+        }
+        return .changed(summary)
+    }
+
+    /// The `SessionEndReason` case name sent on the wire.
+    static func sessionEndReasonName(_ reason: SessionEndReason) -> String {
+        switch reason {
+        case .userClosed: return "userClosed"
+        case .appExited: return "appExited"
+        case .appCrashed: return "appCrashed"
+        case .runtimeStopped: return "runtimeStopped"
+        case .updating: return "updating"
+        case .runtimeUpdating: return "runtimeUpdating"
+        case .packageUninstalled: return "packageUninstalled"
+        case .updateHealthCheck: return "updateHealthCheck"
+        case .error: return "error"
+        }
+    }
+
     /// Verifies a wrapper bundle against the registry and the package store (runtime-api.md §10.4).
     ///
     /// The check never starts Android and never reads the store beyond one package list. When the
@@ -1375,11 +2790,33 @@ public actor RuntimeHost {
             registry: registry,
             currentLauncher: launcherBuild(),
             packageExists: { knownPackages?.contains($0) ?? true },
+            iconDigest: { packageID in
+                // §8.5: the digest of the icon master the store would
+                // produce today, or nil when the store has none.
+                guard let runtimeID = RuntimePackageID(rawValue: packageID) else {
+                    return nil
+                }
+                guard
+                    let rendered = await service.renderedIconLayers(for: runtimeID),
+                    let composed = RuntimeHost.composedIcon(
+                        kind: rendered.manifest.kind, layers: rendered.layers)
+                else { return nil }
+                return composed.digest
+            },
             sink: diagnostics?.logSink
         )
         do {
             let verification = try await validator.verify(
                 url: request.bundleURL, deep: request.deep)
+            // The §9.1 hash list travels only with `deep`; it is the wrapper
+            // the update must leave unchanged (#50).
+            let fileHashes: [WrapperFileHashWire]? =
+                if request.deep {
+                    try? WrapperFileHashes.compute(bundleURL: request.bundleURL)
+                        .map { WrapperFileHashWire(path: $0.path, sha256: $0.sha256) }
+                } else {
+                    nil
+                }
             return WrapperVerification(
                 bundleURL: verification.bundleURL,
                 bundleID: verification.bundleID,
@@ -1394,26 +2831,28 @@ public actor RuntimeHost {
                 cdhash: verification.cdhash,
                 launcherVersion: verification.launcherVersion,
                 launcherAPI: verification.launcherAPI.flatMap(Self.launcherAPIVersion(_:)),
-                bundledVersion: nil
+                bundledVersion: nil,
+                fileHashes: fileHashes
             )
         } catch {
             throw Self.wrapperWireError(for: error)
         }
     }
 
-    /// Starts a `wrapperCreate` operation for an installed package
-    /// (runtime-api.md §10.3). Portable wrappers and `importTicket` are #90;
-    /// `updateDefaults` is only valid with an import ticket.
+    /// Starts a `wrapperCreate` operation (runtime-api.md §10.3). An
+    /// `importTicket` builds the portable wrapper of an uninstalled package
+    /// (#90); `updateDefaults` is only valid with one.
     func createWrapper(
         _ request: WrapperRequest,
         icon: FileHandle?,
         operationID requestedID: WireOperationID,
         clientKind: RuntimeClientKind
     ) throws(RuntimeWireError) -> OperationHandle {
-        guard !request.portable, request.importTicket == nil else {
+        try assertMaintenanceGateAllowsWork()
+        guard request.importTicket == nil || request.portable else {
             throw .runtime(
                 "malformedRequest",
-                message: "Portable wrappers are not supported yet."
+                message: "An import ticket makes a portable wrapper."
             )
         }
         guard request.updateDefaults == nil else {
@@ -1536,22 +2975,42 @@ public actor RuntimeHost {
         let registry = await wrapperRegistryInstance()
 
         // The package record supplies the display name, the update authority,
-        // and (with #56) the Android icon.
+        // and (with #56) the Android icon. A portable wrapper of an
+        // uninstalled package takes them from its import ticket instead
+        // (wrapper.md §10.1).
         let service = packageQueryServiceInstance()
         try await service.open()
         try await attachPackageQueriesIfRuntimeIsReady(to: service)
-        let details: RuntimePackageDetails
-        do {
-            details = try await service.packageInfo(
-                RuntimePackageRequest(packageID: request.packageID))
-        } catch {
-            guard error.code == "store.packageNotFound" else { throw error }
-            throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
-        }
-        guard details.summary.managed, details.summary.state == .installed else {
-            throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+        var details: RuntimePackageDetails?
+        var ticketBootstrap: (set: ArtifactSet, directory: URL, displayName: String)?
+        if let importTicket = request.importTicket {
+            guard let ticketID = UUID(uuidString: importTicket.rawValue) else {
+                throw .runtime(
+                    "malformedRequest", message: "The import ticket is not readable.")
+            }
+            do {
+                ticketBootstrap = try await service.store.bootstrapSet(ticket: ticketID)
+            } catch {
+                throw EmbeddedPackageService.wireError(for: error)
+            }
+            guard ticketBootstrap?.set.packageID.rawValue == request.packageID.rawValue else {
+                throw Self.wrapperWireError(for: .bootstrapInvalid(.packageMismatch))
+            }
+        } else {
+            do {
+                details = try await service.packageInfo(
+                    RuntimePackageRequest(packageID: request.packageID))
+            } catch {
+                guard error.code == "store.packageNotFound" else { throw error }
+                throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+            }
+            guard details?.summary.managed == true, details?.summary.state == .installed else {
+                throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+            }
         }
 
+        var iconDigest: String?
+        var customIconPNG: Data?
         let iconSource: WrapperIconSource
         switch request.icon {
         case .custom:
@@ -1559,9 +3018,33 @@ public actor RuntimeHost {
             guard let data, !data.isEmpty else {
                 throw Self.wrapperWireError(for: .customIconInvalid(.unreadable))
             }
-            iconSource = .preview(data)
+            // A custom icon is validated, composed, and never tracked by
+            // iconDigest (wrapper.md §8.2 `custom`, §8.5). Its PNG master is
+            // kept so `Wrappers/icons/<bundleId>.png` can reuse it (§4.2).
+            let customURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("apkrun-custom-icon-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: customURL) }
+            do {
+                try data.write(to: customURL)
+                iconSource = .rendered(try IconComposer.customIconData(at: customURL))
+                customIconPNG = try? IconComposer.customIconPNG(at: customURL)
+            } catch let failure as WrapperFailure {
+                throw Self.wrapperWireError(for: failure)
+            } catch {
+                throw Self.wrapperWireError(for: .customIconInvalid(.unreadable))
+            }
         case .android, .none:
-            iconSource = .placeholder
+            // Store-rendered layers compose the icon; otherwise the
+            // placeholder (wrapper.md §8.2; issue #56 step 3).
+            if let rendered = await service.renderedIconLayers(for: request.packageID),
+                let composed = Self.composedIcon(
+                    kind: rendered.manifest.kind, layers: rendered.layers)
+            {
+                iconSource = .rendered(composed.icns)
+                iconDigest = composed.digest
+            } else {
+                iconSource = .placeholder
+            }
         }
 
         var window = WindowDefaults()
@@ -1570,23 +3053,51 @@ public actor RuntimeHost {
             window.defaultHeight = windowDefaults.defaultHeight ?? window.defaultHeight
             window.resizable = windowDefaults.resizable ?? window.resizable
         }
-        let updates = WrapperUpdateDefaults(
-            authority: details.summary.updateAuthority == .apkrun ? .apkrun : .manual,
-            mode: .automatic,
-            provider: nil
-        )
+        var bootstrap: BootstrapSet?
+        let updates: WrapperUpdateDefaults
+        if let ticketBootstrap {
+            bootstrap = Self.bootstrapSet(
+                from: ticketBootstrap.set, in: ticketBootstrap.directory)
+            updates = try Self.wrapperUpdateDefaults(from: request.updateDefaults)
+        } else {
+            updates = WrapperUpdateDefaults(
+                authority: details?.summary.updateAuthority == .apkrun ? .apkrun : .manual,
+                mode: .automatic,
+                provider: nil
+            )
+            if request.portable {
+                guard let packageID = PackageID(rawValue: request.packageID.rawValue) else {
+                    throw .runtime("malformedRequest", message: "The package ID is not readable.")
+                }
+                do {
+                    let installed = try await service.store.bootstrapSet(for: packageID)
+                    bootstrap = Self.bootstrapSet(from: installed.set, in: installed.directory)
+                } catch {
+                    throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+                }
+            }
+        }
         let configuration = WrapperConfiguration(
             packageID: request.packageID,
-            displayName: request.displayName ?? details.summary.displayName,
+            displayName: request.displayName ?? ticketBootstrap?.displayName
+                ?? details?.summary.displayName ?? request.packageID.rawValue,
             icon: iconSource,
             window: window,
             updates: updates,
-            kind: .local
+            kind: request.portable ? .portable : .local,
+            bootstrap: bootstrap
         )
         let destination: WrapperDestination
         switch request.destination {
-        case .userApplications, .none:
+        case .userApplications:
             destination = .userApplications
+        case .none:
+            // `nil` = `wrappers.defaultLocation` (runtime-api.md §10.3); an
+            // `ask` default cannot ask here, so it falls back to the user's
+            // Applications folder.
+            let configured = GlobalSettings.load(from: paths.settingsFile)
+                .extras["wrappers.defaultLocation"]
+            destination = configured == "allUsersApplications" ? .applications : .userApplications
         case .applications:
             destination = .applications
         case .directory(let url):
@@ -1614,25 +3125,1484 @@ public actor RuntimeHost {
             throw Self.wrapperWireError(for: error)
         }
 
+        if iconDigest != nil {
+            try? await registry.setIconDigest(bundleID: generated.bundleID, digest: iconDigest)
+        }
+        if let customIconPNG {
+            let iconFile = "\(generated.bundleID).png"
+            let iconURL = paths.wrapperIconsDirectory.appendingPathComponent(iconFile)
+            do {
+                try FileManager.default.createDirectory(
+                    at: paths.wrapperIconsDirectory, withIntermediateDirectories: true)
+                try customIconPNG.write(to: iconURL)
+                try await registry.setCustomIconFile(
+                    bundleID: generated.bundleID, fileName: iconFile)
+            } catch {
+                // The icon is already in the bundle; only refresh bookkeeping
+                // is lost when the source copy cannot be stored.
+            }
+        }
         guard let entry = await registry.entry(bundleID: generated.bundleID) else {
             throw .runtime("internal", message: "APKRun couldn't register the Mac app.")
         }
         let summary = Self.wrapperSummary(for: entry, packageID: request.packageID)
         eventHub.publishWrapperChange(.created(summary), operationID: operationID)
-        return WrapperInfo(
-            summary: summary,
+        return Self.wrapperInfo(for: entry, packageID: request.packageID)
+    }
+
+    /// Starts a `distributionWrapper` operation (wrapper.md §11): a
+    /// portable bundle Developer ID signed and optionally notarized,
+    /// delivered to `outputDirectory` without placement or registration.
+    func buildDistributionWrapper(
+        _ request: DistributionWrapperRequest,
+        icon: FileHandle?,
+        operationID requestedID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) throws(RuntimeWireError) -> OperationHandle {
+        try assertMaintenanceGateAllowsWork()
+        guard request.redistributionConfirmed else {
+            throw .runtime(
+                "malformedRequest",
+                message: "Redistribution of the APK must be confirmed."
+            )
+        }
+        guard !request.identity.isEmpty else {
+            throw .runtime(
+                "malformedRequest",
+                message: "A signing identity is required."
+            )
+        }
+        guard !request.notarize || request.keychainProfile != nil else {
+            throw .runtime(
+                "malformedRequest",
+                message: "Notarization needs a keychain profile."
+            )
+        }
+
+        let requestPayload: Data
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            requestPayload = try encoder.encode(request)
+        } catch {
+            throw .runtime(
+                "malformedRequest",
+                message: "APKRun's background service couldn't read the request."
+            )
+        }
+        if let existing = trackedOperations[requestedID] {
+            guard existing.handle.kind == .distributionWrapper,
+                existing.requestPayload == requestPayload
+            else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The operation ID is already being used for a different request."
+                )
+            }
+            return existing.handle
+        }
+        // Same serialization as wrapperCreate: a distribution build reads
+        // the package's bootstrap set while a create may regenerate it.
+        guard wrapperCreationsInFlight.insert(request.packageID.rawValue).inserted else {
+            throw Self.packageOperationInProgressError
+        }
+        do {
+            try beginLifecycleOperation()
+        } catch {
+            wrapperCreationsInFlight.remove(request.packageID.rawValue)
+            throw Self.sessionWireError(for: error)
+        }
+
+        let handle = OperationHandle(operationID: requestedID, kind: .distributionWrapper)
+        let snapshot = OperationSnapshot(
+            operationID: requestedID,
+            kind: .distributionWrapper,
+            packageID: request.packageID,
+            requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(
+                stage: "signing",
+                message: "Building the distributable Mac app…"
+            )
+        )
+        trackedOperations[requestedID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: requestPayload,
+            snapshot: snapshot,
+            isCancellable: false,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: requestedID)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            if let diagnosticsID = DiagnosticsCore.OperationID(wire: requestedID.wireValue) {
+                let context = OperationContext(operationID: diagnosticsID)
+                await OperationContext.$current.withValue(context) {
+                    await self.runDistributionWrapperOperation(
+                        request,
+                        icon: icon,
+                        operationID: requestedID
+                    )
+                }
+            } else {
+                await self.runDistributionWrapperOperation(
+                    request, icon: icon, operationID: requestedID)
+            }
+        }
+        trackedOperations[requestedID]?.task = task
+        return handle
+    }
+
+    /// Runs a `distributionWrapper` operation to its terminal state.
+    private func runDistributionWrapperOperation(
+        _ request: DistributionWrapperRequest,
+        icon: FileHandle?,
+        operationID: WireOperationID
+    ) async {
+        defer {
+            wrapperCreationsInFlight.remove(request.packageID.rawValue)
+            finishLifecycleOperation()
+        }
+        do {
+            let result = try await performBuildDistributionWrapper(
+                request, icon: icon, operationID: operationID)
+            finishOperation(operationID, result: .succeeded(.distributionWrapper(result)))
+            logger?.notice(
+                "Distribution wrapper built for \(request.packageID.rawValue, .public)")
+        } catch {
+            if Task.isCancelled {
+                finishOperation(operationID, result: .cancelled)
+                return
+            }
+            let wireError = Self.operationWireError(for: error)
+            finishOperation(operationID, result: .failed(wireError))
+            logger?.error("Distribution wrapper build failed", errorCode: wireError.code)
+        }
+    }
+
+    /// Builds the signed, optionally notarized products for a
+    /// `distributionWrapper` operation (wrapper.md §11). On a deferred
+    /// write the staging directory keeps `<name>.app`, `<name>.zip`, and
+    /// `result.json` for the client to place.
+    private func performBuildDistributionWrapper(
+        _ request: DistributionWrapperRequest,
+        icon: FileHandle?,
+        operationID: WireOperationID
+    ) async throws(RuntimeWireError) -> DistributionWrapperResult {
+        guard let launcher = launcherBuild() else {
+            throw Self.wrapperWireError(for: .launcherTemplateInvalid("missing"))
+        }
+        let registry = await wrapperRegistryInstance()
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        try await attachPackageQueriesIfRuntimeIsReady(to: service)
+        let details: RuntimePackageDetails
+        do {
+            details = try await service.packageInfo(
+                RuntimePackageRequest(packageID: request.packageID))
+        } catch {
+            guard error.code == "store.packageNotFound" else { throw error }
+            throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+        }
+        guard details.summary.managed == true, details.summary.state == .installed else {
+            throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+        }
+        let iconSource: WrapperIconSource
+        switch request.icon {
+        case .custom:
+            let data = icon.flatMap { try? $0.readToEnd() }
+            guard let data, !data.isEmpty else {
+                throw Self.wrapperWireError(for: .customIconInvalid(.unreadable))
+            }
+            let customURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("apkrun-custom-icon-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: customURL) }
+            do {
+                try data.write(to: customURL)
+                iconSource = .rendered(try IconComposer.customIconData(at: customURL))
+            } catch let failure as WrapperFailure {
+                throw Self.wrapperWireError(for: failure)
+            } catch {
+                throw Self.wrapperWireError(for: .customIconInvalid(.unreadable))
+            }
+        case .android, .none:
+            if let rendered = await service.renderedIconLayers(for: request.packageID),
+                let composed = Self.composedIcon(
+                    kind: rendered.manifest.kind, layers: rendered.layers)
+            {
+                iconSource = .rendered(composed.icns)
+            } else {
+                iconSource = .placeholder
+            }
+        }
+        // Distribution wrappers are portable: the bootstrap set comes from
+        // the installed package (wrapper.md §11 step 1).
+        guard let packageID = PackageID(rawValue: request.packageID.rawValue) else {
+            throw .runtime("malformedRequest", message: "The package ID is not readable.")
+        }
+        let bootstrap: BootstrapSet
+        do {
+            let installed = try await service.store.bootstrapSet(for: packageID)
+            bootstrap = Self.bootstrapSet(from: installed.set, in: installed.directory)
+        } catch {
+            throw Self.wrapperWireError(for: .packageNotInstalled(request.packageID))
+        }
+        let configuration = WrapperConfiguration(
+            packageID: request.packageID,
+            displayName: request.displayName ?? details.summary.displayName
+                ?? request.packageID.rawValue,
+            icon: iconSource,
+            window: WindowDefaults(),
+            updates: WrapperUpdateDefaults(
+                authority: details.summary.updateAuthority == .apkrun ? .apkrun : .manual,
+                mode: .automatic,
+                provider: nil),
+            kind: .distribution,
+            bootstrap: bootstrap
+        )
+        let builder = DistributionWrapperBuilder()
+        do {
+            try builder.precheck(identity: request.identity)
+        } catch {
+            throw Self.wrapperWireError(for: error)
+        }
+        let stagingToken = UUID().uuidString
+        let stagingDirectory = paths.wrapperStagingDirectory
+            .appendingPathComponent(stagingToken, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(
+                at: stagingDirectory, withIntermediateDirectories: true)
+        } catch {
+            throw Self.wrapperWireError(for: .destinationNotWritable(request.outputDirectory))
+        }
+        let fileName = WrapperFileName.sanitize(
+            displayName: request.fileName ?? configuration.displayName,
+            packageID: configuration.packageID.rawValue)
+        guard !fileName.isEmpty else {
+            throw Self.wrapperWireError(for: .invalidName(configuration.displayName))
+        }
+        let bundleID = BundleIDMapper.map(configuration.packageID)
+        let generator = AppWrapperGenerator(
+            environment: AppWrapperGenerator.Environment(
+                launcher: launcher,
+                registry: registry,
+                installer: WrapperInstaller(sink: diagnostics?.logSink),
+                stagingRoot: paths.wrapperStagingDirectory
+            )
+        )
+        let generation = WrapperGenerationRequest(
+            configuration: configuration,
+            destination: .directory(stagingDirectory),
+            fileName: fileName,
+            replace: .sameWrapper
+        )
+        let stagedBundle: URL
+        do {
+            stagedBundle = try await generator.stageForDistribution(
+                generation, stagingDirectory: stagingDirectory, fileName: fileName)
+        } catch {
+            throw Self.wrapperWireError(for: error)
+        }
+        let signed: (cdhash: String, teamID: String?)
+        do {
+            signed = try builder.sign(
+                bundleURL: stagedBundle, bundleID: bundleID, identity: request.identity)
+        } catch let failure as WrapperFailure {
+            throw Self.wrapperWireError(for: failure)
+        } catch {
+            throw .runtime("internal", message: "APKRun couldn't sign the Mac app.")
+        }
+        var notarized = false
+        var submissionID: String?
+        var assessment: String?
+        var zipURL: URL
+        do {
+            if request.notarize {
+                let submission = try await builder.notarize(
+                    bundleURL: stagedBundle,
+                    name: fileName,
+                    keychainProfile: request.keychainProfile ?? "",
+                    workDirectory: stagingDirectory)
+                zipURL = submission.zipURL
+                submissionID = submission.submissionID
+                assessment = submission.assessment
+                notarized = true
+            } else {
+                zipURL = try builder.makeZip(
+                    bundleURL: stagedBundle, name: fileName, workDirectory: stagingDirectory)
+            }
+        } catch let failure as WrapperFailure {
+            throw Self.wrapperWireError(for: failure)
+        } catch {
+            throw .runtime("internal", message: "APKRun couldn't notarize the Mac app.")
+        }
+        let result = DistributionWrapperResult(
+            appURL: request.outputDirectory.appendingPathComponent("\(fileName).app"),
+            zipURL: request.outputDirectory.appendingPathComponent("\(fileName).zip"),
+            bundleID: bundleID,
+            cdhash: signed.cdhash,
+            teamID: signed.teamID,
+            notarized: notarized,
+            submissionID: submissionID,
+            assessment: assessment
+        )
+        // The staged result.json lets the client finish a deferred
+        // placement without a second wire call (wrapper.md §11 note).
+        let resultURL = stagingDirectory.appendingPathComponent("result.json")
+        try? JSONEncoder().encode(result).write(to: resultURL)
+        do {
+            try FileManager.default.createDirectory(
+                at: request.outputDirectory, withIntermediateDirectories: true)
+            try Self.moveDistributionProduct(stagedBundle, to: result.appURL)
+            try Self.moveDistributionProduct(zipURL, to: result.zipURL)
+            try? FileManager.default.removeItem(at: stagingDirectory)
+        } catch {
+            throw Self.wrapperWireError(
+                for: .destinationNotAccessible(
+                    request.outputDirectory, stagingToken: stagingToken))
+        }
+        return result
+    }
+
+    /// Moves a staged distribution product into the output directory,
+    /// crossing volumes when `moveItem` cannot.
+    private static func moveDistributionProduct(_ source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: destination.path) {
+            try fm.removeItem(at: destination)
+        }
+        do {
+            try fm.moveItem(at: source, to: destination)
+        } catch {
+            try fm.copyItem(at: source, to: destination)
+            try? fm.removeItem(at: source)
+        }
+    }
+
+    /// Starts a `wrapperRefresh` operation (wrapper.md §9.3).
+    func refreshWrapper(
+        packageID: RuntimePackageID,
+        change: WrapperRefreshWire,
+        icon: FileHandle?,
+        operationID requestedID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) throws(RuntimeWireError) -> OperationHandle {
+        let request = RuntimeRefreshWrapperControlRequest(
+            header: APIRequestHeader(
+                operationID: requestedID.rawValue, clientKind: clientKind),
+            packageID: packageID,
+            change: change
+        )
+        let requestPayload: Data
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            requestPayload = try encoder.encode(request)
+        } catch {
+            throw .runtime(
+                "malformedRequest",
+                message: "APKRun's background service couldn't read the request.")
+        }
+        if let existing = trackedOperations[requestedID] {
+            guard existing.handle.kind == .wrapperRefresh, existing.requestPayload == requestPayload
+            else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The operation ID is already being used for a different request.")
+            }
+            return existing.handle
+        }
+        guard wrapperCreationsInFlight.insert(packageID.rawValue).inserted else {
+            throw Self.packageOperationInProgressError
+        }
+        do {
+            try beginLifecycleOperation()
+        } catch {
+            wrapperCreationsInFlight.remove(packageID.rawValue)
+            throw Self.sessionWireError(for: error)
+        }
+        let handle = OperationHandle(operationID: requestedID, kind: .wrapperRefresh)
+        let snapshot = OperationSnapshot(
+            operationID: requestedID,
+            kind: .wrapperRefresh,
+            packageID: packageID,
+            requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(stage: "refreshing", message: "Updating the Mac app…")
+        )
+        trackedOperations[requestedID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: requestPayload,
+            snapshot: snapshot,
+            isCancellable: false,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: requestedID)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runRefreshWrapperOperation(
+                packageID: packageID, change: change, icon: icon, operationID: requestedID)
+        }
+        trackedOperations[requestedID]?.task = task
+        return handle
+    }
+
+    /// Runs a `wrapperRefresh` operation to its terminal state.
+    private func runRefreshWrapperOperation(
+        packageID: RuntimePackageID,
+        change: WrapperRefreshWire,
+        icon: FileHandle?,
+        operationID: WireOperationID
+    ) async {
+        defer {
+            wrapperCreationsInFlight.remove(packageID.rawValue)
+            finishLifecycleOperation()
+        }
+        do {
+            let info = try await performRefreshWrapper(
+                packageID: packageID, change: change, icon: icon, operationID: operationID)
+            finishOperation(operationID, result: .succeeded(.wrapper(info)))
+            logger?.notice("Wrapper refresh completed for \(packageID.rawValue, .public)")
+        } catch {
+            if Task.isCancelled {
+                finishOperation(operationID, result: .cancelled)
+                return
+            }
+            let wireError = Self.operationWireError(for: error)
+            finishOperation(operationID, result: .failed(wireError))
+            logger?.error("Wrapper refresh failed", errorCode: wireError.code)
+        }
+    }
+
+    /// Regenerates the wrapper of one package (wrapper.md §9.3 steps 1–8).
+    private func performRefreshWrapper(
+        packageID: RuntimePackageID,
+        change: WrapperRefreshWire,
+        icon: FileHandle?,
+        operationID: WireOperationID
+    ) async throws(RuntimeWireError) -> WrapperInfo {
+        guard let launcher = launcherBuild() else {
+            throw Self.wrapperWireError(for: .launcherTemplateInvalid("missing"))
+        }
+        let registry = await wrapperRegistryInstance()
+        guard let entry = await registry.entry(packageID: packageID) else {
+            throw Self.wrapperWireError(for: .wrapperNotFound(packageID))
+        }
+        // 1. the wrapper must not be running.
+        let runningApps =
+            NSRunningApplication
+            .runningApplications(withBundleIdentifier: entry.bundleId)
+            .filter { !$0.isTerminated }
+        if !runningApps.isEmpty {
+            guard change.closeRunningApp else {
+                throw Self.wrapperWireError(for: .wrapperRunning(entry.displayName))
+            }
+            for app in runningApps {
+                app.terminate()
+            }
+            let deadline = Date().addingTimeInterval(30)
+            while Date() < deadline {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                let stillRunning =
+                    NSRunningApplication
+                    .runningApplications(withBundleIdentifier: entry.bundleId)
+                    .contains { !$0.isTerminated }
+                if !stillRunning {
+                    break
+                }
+            }
+            if NSRunningApplication
+                .runningApplications(withBundleIdentifier: entry.bundleId)
+                .contains(where: { !$0.isTerminated })
+            {
+                throw Self.wrapperWireError(for: .wrapperRunning(entry.displayName))
+            }
+        }
+
+        // 2. the entry must be valid or have refresh reasons.
+        let (bundleURL, _) = await resolvedWrapperURL(entry: entry, registry: registry)
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        try await attachPackageQueriesIfRuntimeIsReady(to: service)
+        var knownPackages: Set<String>?
+        if let list = try? await service.listPackages(
+            RuntimeListPackagesRequest(filter: .all))
+        {
+            knownPackages = Set(list.packages.map(\.packageID.rawValue))
+        }
+        let validator = wrapperValidator(
+            registry: registry, service: service, knownPackages: knownPackages)
+        let verification: WrapperValidator.Verification
+        do {
+            verification = try await validator.verify(url: bundleURL, deep: false)
+        } catch {
+            throw Self.wrapperWireError(
+                for: .verificationFailed("the wrapper could not be read"))
+        }
+        switch verification.state {
+        case .valid:
+            break
+        case .missing, .inaccessible:
+            // Missing regenerates through createWrapper (wrapper.md §9.3 step 2).
+            throw Self.wrapperWireError(for: .wrapperNotFound(packageID))
+        default:
+            guard !verification.refreshReasons.isEmpty else {
+                throw Self.wrapperWireError(
+                    for: .verificationFailed("the wrapper is not updatable"))
+            }
+        }
+
+        let displayNameOverride: String?
+        if let displayName = change.displayName {
+            displayNameOverride = displayName.isEmpty ? nil : displayName
+        } else {
+            displayNameOverride = entry.customization.displayName
+        }
+        let details = try? await service.packageInfo(
+            RuntimePackageRequest(packageID: packageID))
+        let displayName =
+            displayNameOverride ?? details?.summary.displayName ?? entry.displayName
+
+        // Icons (wrapper.md §8.2): a new custom icon wins; otherwise the
+        // recorded custom icon file, the stored Android icon, or the
+        // placeholder — `launcherOnly` keeps whatever the entry records.
+        var iconDigest: String? = nil
+        var customIconPNG: Data? = nil
+        var iconSource: WrapperIconSource = .placeholder
+        if change.icon {
+            let data = icon.flatMap { try? $0.readToEnd() }
+            guard let data, !data.isEmpty else {
+                throw Self.wrapperWireError(for: .customIconInvalid(.unreadable))
+            }
+            let customURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("apkrun-custom-icon-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: customURL) }
+            do {
+                try data.write(to: customURL)
+                iconSource = .rendered(try IconComposer.customIconData(at: customURL))
+                customIconPNG = try? IconComposer.customIconPNG(at: customURL)
+            } catch let failure as WrapperFailure {
+                throw Self.wrapperWireError(for: failure)
+            } catch {
+                throw Self.wrapperWireError(for: .customIconInvalid(.unreadable))
+            }
+        } else if change.androidIcon {
+            if let rendered = await service.renderedIconLayers(for: packageID),
+                let composed = Self.composedIcon(
+                    kind: rendered.manifest.kind, layers: rendered.layers)
+            {
+                iconSource = .rendered(composed.icns)
+                iconDigest = composed.digest
+            }
+            try? await registry.setCustomIconFile(bundleID: entry.bundleId, fileName: nil)
+        } else if let iconFile = entry.customization.iconFile {
+            iconSource = .custom(
+                paths.wrapperIconsDirectory.appendingPathComponent(iconFile))
+        } else if let rendered = await service.renderedIconLayers(for: packageID),
+            let composed = Self.composedIcon(
+                kind: rendered.manifest.kind, layers: rendered.layers)
+        {
+            iconSource = .rendered(composed.icns)
+            iconDigest = composed.digest
+        }
+
+        // wrapper.json carries the previous defaults.
+        var window = WindowDefaults()
+        var updates = WrapperUpdateDefaults(
+            authority: .manual, mode: .automatic, provider: nil)
+        var integrations = IntegrationDefaults()
+        if let document = try? JSONDecoder().decode(
+            WrapperDocument.self,
+            from: (try? Data(
+                contentsOf: bundleURL.appendingPathComponent(
+                    "Contents/Resources/wrapper.json"))) ?? Data())
+        {
+            if let docWindow = document.window {
+                window.defaultWidth = docWindow.defaultWidth ?? window.defaultWidth
+                window.defaultHeight = docWindow.defaultHeight ?? window.defaultHeight
+                window.resizable = docWindow.resizable ?? window.resizable
+            }
+            if let docUpdates = document.updates {
+                updates = WrapperUpdateDefaults(
+                    authority: docUpdates.authority == .apkrun ? .apkrun : .manual,
+                    mode: docUpdates.mode ?? .automatic,
+                    provider: docUpdates.provider
+                )
+            }
+            // Integration defaults regenerate unchanged: wrapper.json holds
+            // the same fields the configuration produces.
+            integrations = IntegrationDefaults()
+        }
+
+        // 3. build and sign the new bundle inside the parent folder so the
+        //    swap stays on one volume.
+        let fileName =
+            displayNameOverride.map {
+                WrapperFileName.sanitize(displayName: $0, packageID: packageID.rawValue)
+            } ?? entry.fileName
+        let stagingDirectory = bundleURL.deletingLastPathComponent()
+            .appendingPathComponent(".apkrun-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(
+                at: stagingDirectory, withIntermediateDirectories: true)
+        } catch {
+            throw Self.wrapperWireError(for: .destinationNotWritable(bundleURL))
+        }
+        let generator = AppWrapperGenerator(
+            environment: AppWrapperGenerator.Environment(
+                launcher: launcher,
+                registry: registry,
+                installer: WrapperInstaller(sink: diagnostics?.logSink),
+                stagingRoot: paths.wrapperStagingDirectory
+            )
+        )
+        // `makeLocal` converts a portable wrapper to `local` and drops
+        // `bootstrap/` (host-ui.md §7.6); keeping `portable` rebuilds the
+        // payload from the installed package (wrapper-json.md §3.2).
+        let targetKind: WrapperKind = change.makeLocal ? .local : entry.kind
+        var bootstrap: BootstrapSet? = nil
+        if targetKind == .portable {
+            guard let storePackageID = PackageID(rawValue: entry.packageId) else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The package ID is not readable.")
+            }
+            do {
+                let installed = try await service.store.bootstrapSet(
+                    for: storePackageID)
+                bootstrap = Self.bootstrapSet(
+                    from: installed.set, in: installed.directory)
+            } catch {
+                throw Self.wrapperWireError(for: .packageNotInstalled(packageID))
+            }
+        }
+        let staged: (bundle: URL, cdhash: String)
+        do {
+            staged = try await generator.stageForRefresh(
+                WrapperGenerationRequest(
+                    configuration: WrapperConfiguration(
+                        packageID: packageID,
+                        displayName: displayName,
+                        icon: iconSource,
+                        window: window,
+                        updates: updates,
+                        integrations: integrations,
+                        kind: targetKind,
+                        bootstrap: bootstrap
+                    ),
+                    fileName: fileName
+                ),
+                stagingDirectory: stagingDirectory,
+                fileName: fileName
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: stagingDirectory)
+            throw Self.wrapperWireError(for: error)
+        }
+
+        // 4. registry: refreshing + pendingCdhash.
+        do {
+            try await registry.beginRefresh(
+                bundleID: entry.bundleId,
+                stagingPath: stagingDirectory.path,
+                pendingCdhash: staged.cdhash
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: stagingDirectory)
+            throw Self.wrapperWireError(for: .registryUnavailable)
+        }
+
+        // 5. the atomic Contents swap; an App Management denial stages the
+        //    new Contents for APKRun.app and reports refreshBlocked (R-20).
+        //
+        //    A new display name renames the bundle after the swap (§6.4).
+        //    The destination is checked before mutating the installed bundle
+        //    so a conflict cannot strand the registry with a stale cdhash.
+        let newContents = staged.bundle.appendingPathComponent("Contents")
+        let liveContents = bundleURL.appendingPathComponent("Contents")
+        let renamed = bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("\(fileName).app", isDirectory: true)
+        let wantsRename =
+            displayNameOverride != nil
+            && bundleURL.deletingPathExtension().lastPathComponent != fileName
+            && renamed != bundleURL
+        if wantsRename, FileManager.default.fileExists(atPath: renamed.path) {
+            try? FileManager.default.removeItem(at: stagingDirectory)
+            try? await abortRefresh(bundleID: entry.bundleId, registry: registry)
+            let kind =
+                WrapperInstaller(sink: diagnostics?.logSink)
+                .classifyConflict(at: renamed, packageID: packageID)
+                ?? .otherApp
+            throw Self.wrapperWireError(for: .nameConflict(renamed, existing: kind))
+        }
+        if renamex_np(newContents.path, liveContents.path, UInt32(RENAME_SWAP)) != 0 {
+            let token = UUID().uuidString
+            let fallback = paths.wrapperStagingDirectory
+                .appendingPathComponent(token, isDirectory: true)
+            try? FileManager.default.createDirectory(
+                at: fallback, withIntermediateDirectories: true)
+            try? FileManager.default.moveItem(
+                at: staged.bundle,
+                to: fallback.appendingPathComponent(
+                    "\(fileName).app", isDirectory: true))
+            try? FileManager.default.removeItem(at: stagingDirectory)
+            try? await abortRefresh(bundleID: entry.bundleId, registry: registry)
+            throw Self.wrapperWireError(
+                for: .refreshBlocked(bundleURL.path, stagingToken: token))
+        }
+
+        // 6. a new display name renames the bundle (conflict rules of §6.4).
+        //    A destination that appeared after step 5, or a failed rename,
+        //    puts the swapped contents back first so the registry cdhash
+        //    still matches the installed bundle.
+        var finalURL = bundleURL
+        if wantsRename {
+            if FileManager.default.fileExists(atPath: renamed.path) {
+                await undoContentsSwap(
+                    newContents: newContents, liveContents: liveContents,
+                    stagingDirectory: stagingDirectory, finalURL: bundleURL,
+                    bundleID: entry.bundleId, registry: registry)
+                let kind =
+                    WrapperInstaller(sink: diagnostics?.logSink)
+                    .classifyConflict(at: renamed, packageID: packageID)
+                    ?? .otherApp
+                throw Self.wrapperWireError(for: .nameConflict(renamed, existing: kind))
+            }
+            do {
+                try FileManager.default.moveItem(at: bundleURL, to: renamed)
+                finalURL = renamed
+            } catch {
+                await undoContentsSwap(
+                    newContents: newContents, liveContents: liveContents,
+                    stagingDirectory: stagingDirectory, finalURL: bundleURL,
+                    bundleID: entry.bundleId, registry: registry)
+                throw .runtime(
+                    "internalError",
+                    message: "APKRun couldn't rename the Mac app.")
+            }
+        }
+
+        // 7. registry: cdhash = pendingCdhash, active, refreshedAt, bookmark.
+        let bookmark = (try? finalURL.bookmarkData()) ?? Data()
+        do {
+            try await registry.finishRefresh(
+                bundleID: entry.bundleId, path: finalURL, bookmark: bookmark,
+                kind: targetKind)
+        } catch {
+            throw Self.wrapperWireError(for: .registryUnavailable)
+        }
+        if let iconDigest {
+            try? await registry.setIconDigest(bundleID: entry.bundleId, digest: iconDigest)
+        } else if entry.customization.iconFile == nil {
+            try? await registry.setIconDigest(bundleID: entry.bundleId, digest: nil)
+        }
+        if let customIconPNG {
+            let iconFile = "\(entry.bundleId).png"
+            let iconURL = paths.wrapperIconsDirectory.appendingPathComponent(iconFile)
+            do {
+                try FileManager.default.createDirectory(
+                    at: paths.wrapperIconsDirectory, withIntermediateDirectories: true)
+                try customIconPNG.write(to: iconURL)
+                try await registry.setCustomIconFile(
+                    bundleID: entry.bundleId, fileName: iconFile)
+            } catch {
+            }
+        }
+
+        // 8. delete the old Contents and the staging dir; register the bundle.
+        try? FileManager.default.removeItem(at: stagingDirectory)
+        _ = WrapperInstaller(sink: diagnostics?.logSink).registerPlaced(at: finalURL)
+        try? FileManager.default.setAttributes(
+            [.modificationDate: Date()], ofItemAtPath: finalURL.path)
+
+        guard let refreshed = await registry.entry(bundleID: entry.bundleId) else {
+            throw .runtime("internal", message: "APKRun couldn't register the Mac app.")
+        }
+        let summary = Self.wrapperSummary(for: refreshed, packageID: packageID)
+        eventHub.publishWrapperChange(.refreshed(summary), operationID: operationID)
+        return Self.wrapperInfo(for: refreshed, packageID: packageID)
+    }
+
+    /// Returns a `refreshing` entry to `active` after a failed refresh.
+    private func abortRefresh(bundleID: String, registry: WrapperRegistry) async {
+        try? await registry.abortRefresh(bundleID: bundleID)
+    }
+
+    /// Restores a bundle's pre-swap contents after a post-swap step failed
+    /// (wrapper.md §9.3). When the restore swap itself fails, the refresh is
+    /// finished against the already-installed new contents instead of being
+    /// aborted, so cdhash and bundle never disagree.
+    private func undoContentsSwap(
+        newContents: URL,
+        liveContents: URL,
+        stagingDirectory: URL,
+        finalURL: URL,
+        bundleID: String,
+        registry: WrapperRegistry
+    ) async {
+        if renamex_np(newContents.path, liveContents.path, UInt32(RENAME_SWAP)) == 0 {
+            try? FileManager.default.removeItem(at: stagingDirectory)
+            await abortRefresh(bundleID: bundleID, registry: registry)
+        } else {
+            let bookmark = (try? finalURL.bookmarkData()) ?? Data()
+            try? await registry.finishRefresh(
+                bundleID: bundleID, path: finalURL, bookmark: bookmark)
+        }
+    }
+
+    /// Starts a `wrapperRefreshAll` operation (wrapper.md §9.4).
+    func refreshAllWrappers(
+        scope: RefreshAllScope,
+        launcherOnly: Bool,
+        operationID requestedID: WireOperationID,
+        clientKind: RuntimeClientKind
+    ) throws(RuntimeWireError) -> OperationHandle {
+        let request = RuntimeRefreshAllWrappersControlRequest(
+            header: APIRequestHeader(
+                operationID: requestedID.rawValue, clientKind: clientKind),
+            scope: scope,
+            launcherOnly: launcherOnly
+        )
+        let requestPayload: Data
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            requestPayload = try encoder.encode(request)
+        } catch {
+            throw .runtime(
+                "malformedRequest",
+                message: "APKRun's background service couldn't read the request.")
+        }
+        if let existing = trackedOperations[requestedID] {
+            guard existing.handle.kind == .wrapperRefreshAll,
+                existing.requestPayload == requestPayload
+            else {
+                throw .runtime(
+                    "malformedRequest",
+                    message: "The operation ID is already being used for a different request.")
+            }
+            return existing.handle
+        }
+        do {
+            try beginLifecycleOperation()
+        } catch {
+            throw Self.sessionWireError(for: error)
+        }
+        let handle = OperationHandle(operationID: requestedID, kind: .wrapperRefreshAll)
+        let snapshot = OperationSnapshot(
+            operationID: requestedID,
+            kind: .wrapperRefreshAll,
+            requestFingerprint: RuntimeOperationRequestFingerprint.make(from: requestPayload),
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(stage: "refreshing", message: "Updating Mac apps…")
+        )
+        trackedOperations[requestedID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: requestPayload,
+            snapshot: snapshot,
+            isCancellable: false,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: requestedID)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runRefreshAllWrappersOperation(
+                scope: scope, launcherOnly: launcherOnly, operationID: requestedID)
+        }
+        trackedOperations[requestedID]?.task = task
+        return handle
+    }
+
+    /// Runs a `wrapperRefreshAll` operation to its terminal state.
+    private func runRefreshAllWrappersOperation(
+        scope: RefreshAllScope,
+        launcherOnly: Bool,
+        operationID: WireOperationID
+    ) async {
+        defer { finishLifecycleOperation() }
+        do {
+            let result = try await performRefreshAllWrappers(
+                scope: scope, launcherOnly: launcherOnly, operationID: operationID)
+            finishOperation(operationID, result: .succeeded(.wrapperBatch(result)))
+            logger?.notice("Wrapper batch refresh completed")
+        } catch {
+            if Task.isCancelled {
+                finishOperation(operationID, result: .cancelled)
+                return
+            }
+            let wireError = Self.operationWireError(for: error)
+            finishOperation(operationID, result: .failed(wireError))
+            logger?.error("Wrapper batch refresh failed", errorCode: wireError.code)
+        }
+    }
+
+    /// Refreshes every selected wrapper (wrapper.md §9.4); a running
+    /// wrapper is skipped and listed, a failing one lands in `failed`.
+    private func performRefreshAllWrappers(
+        scope: RefreshAllScope,
+        launcherOnly: Bool,
+        operationID: WireOperationID
+    ) async throws(RuntimeWireError) -> WrapperBatchResult {
+        guard launcherBuild() != nil else {
+            throw Self.wrapperWireError(for: .launcherTemplateInvalid("missing"))
+        }
+        let registry = await wrapperRegistryInstance()
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        try await attachPackageQueriesIfRuntimeIsReady(to: service)
+        var knownPackages: Set<String>?
+        if let list = try? await service.listPackages(
+            RuntimeListPackagesRequest(filter: .all))
+        {
+            knownPackages = Set(list.packages.map(\.packageID.rawValue))
+        }
+        let validator = wrapperValidator(
+            registry: registry, service: service, knownPackages: knownPackages)
+        var refreshed: [RuntimePackageID] = []
+        var skippedRunning: [RuntimePackageID] = []
+        var failed: [WrapperBatchFailure] = []
+        for entry in await registry.entries() {
+            guard let packageID = RuntimePackageID(rawValue: entry.packageId) else {
+                continue
+            }
+            if scope == .needingRefresh {
+                let (url, _) = await resolvedWrapperURL(entry: entry, registry: registry)
+                let needs =
+                    (try? await validator.verify(url: url, deep: false))
+                    .map { !$0.refreshReasons.isEmpty } ?? false
+                if !needs {
+                    continue
+                }
+            }
+            if NSRunningApplication
+                .runningApplications(withBundleIdentifier: entry.bundleId)
+                .contains(where: { !$0.isTerminated })
+            {
+                skippedRunning.append(packageID)
+                continue
+            }
+            guard wrapperCreationsInFlight.insert(packageID.rawValue).inserted else {
+                skippedRunning.append(packageID)
+                continue
+            }
+            do {
+                _ = try await performRefreshWrapper(
+                    packageID: packageID,
+                    change: WrapperRefreshWire(launcherOnly: launcherOnly),
+                    icon: nil,
+                    operationID: operationID
+                )
+                refreshed.append(packageID)
+            } catch {
+                failed.append(
+                    WrapperBatchFailure(
+                        packageID: packageID,
+                        error: error as? RuntimeWireError
+                            ?? .runtime(
+                                "internalError",
+                                message: "APKRun's background service failed.")))
+            }
+            wrapperCreationsInFlight.remove(packageID.rawValue)
+        }
+        wrapperListCache = nil
+        return WrapperBatchResult(
+            refreshed: refreshed, skippedRunning: skippedRunning, failed: failed)
+    }
+
+    /// The latest statuses for the `wrappers.status` health check.
+    private func wrapperStatusesSnapshot() -> [String: WrapperStatus] {
+        latestWrapperStatuses
+    }
+
+    /// Completes a deferred placement (wrapper.md §6.3): the client, which
+    /// the user already allowed to reach the protected folder, moved the
+    /// staged bundle to `finalURL`. This runs §6.2 steps 12–13.
+    public func placeStagedWrapper(
+        stagingToken: String,
+        finalURL: URL,
+        bookmark: String?
+    ) async throws(RuntimeWireError) -> WrapperInfo {
+        let registry = await wrapperRegistryInstance()
+        guard let pending = await registry.pendingEntry(stagingToken: stagingToken) else {
+            throw Self.wrapperWireError(for: .stagingExpired)
+        }
+        // Tokens die with the staging cleanup and with age (errors.json
+        // `wrapper.stagingExpired` documents 60 minutes). The client moved
+        // the bundle out of `staging/<token>/`, so the age check reads the
+        // token directory, which the daemon still owns.
+        guard let stagingPath = pending.stagingPath else {
+            throw Self.wrapperWireError(for: .stagingExpired)
+        }
+        let tokenDirectory = URL(fileURLWithPath: stagingPath)
+            .deletingLastPathComponent()
+        guard tokenDirectory.lastPathComponent == stagingToken,
+            let created = try? FileManager.default.attributesOfItem(
+                atPath: tokenDirectory.path)[.creationDate] as? Date,
+            Date().timeIntervalSince(created) <= 60 * 60
+        else {
+            throw Self.wrapperWireError(for: .stagingExpired)
+        }
+        // The destination is the folder the daemon could not reach; the
+        // client's security-scoped bookmark grants access for the checks
+        // below (runtime-api.md §10.3).
+        var accessURL = finalURL
+        var securityScope: URL?
+        var staleBookmark = false
+        if let bookmarkData = bookmark.flatMap({ Data(base64Encoded: $0) }),
+            !bookmarkData.isEmpty,
+            let resolved = try? URL(
+                resolvingBookmarkData: bookmarkData,
+                options: [.withSecurityScope, .withoutUI],
+                relativeTo: nil,
+                bookmarkDataIsStale: &staleBookmark
+            ),
+            resolved.startAccessingSecurityScopedResource()
+        {
+            securityScope = resolved
+            accessURL = resolved
+        }
+        defer { securityScope?.stopAccessingSecurityScopedResource() }
+        // The client moved the bundle; it must be where it says it is and
+        // still the wrapper the daemon signed (same package ID).
+        guard
+            FileManager.default.fileExists(atPath: accessURL.path),
+            InfoPlistWriter.identity(of: accessURL)?.packageID == pending.packageId,
+            WrapperCodeSign.cdhash(of: accessURL) == pending.cdhash
+        else {
+            throw Self.wrapperWireError(
+                for: .bundleInvalid(finalURL, reason: .signatureInvalid))
+        }
+        guard let packageID = RuntimePackageID(rawValue: pending.packageId) else {
+            throw .runtime("internal", message: "APKRun couldn't register the Mac app.")
+        }
+        let bookmarkData = bookmark.flatMap { Data(base64Encoded: $0) } ?? Data()
+        do {
+            try await registry.activate(
+                bundleID: pending.bundleId, path: finalURL, bookmark: bookmarkData)
+        } catch {
+            throw Self.wrapperWireError(for: .registryUnavailable)
+        }
+        wrapperListCache = nil
+        let installer = WrapperInstaller(sink: diagnostics?.logSink)
+        let warning = installer.registerPlaced(at: finalURL)
+        try? FileManager.default.removeItem(at: tokenDirectory)
+        guard let entry = await registry.entry(bundleID: pending.bundleId) else {
+            throw .runtime("internal", message: "APKRun couldn't register the Mac app.")
+        }
+        var warnings: [RuntimeWireError] = []
+        if let warning {
+            warnings.append(Self.wrapperWireError(for: warning))
+        }
+        return Self.wrapperInfo(for: entry, packageID: packageID, warnings: warnings)
+    }
+
+    /// Composes the wrapper icon from store-rendered layers: the `.icns`
+    /// bytes plus the SHA-256 hex digest of the 1024 px master
+    /// (wrapper.md §8.2–§8.5). The monochrome layer is stored but unused.
+    /// The 1024px icon master for a rendered layer set (wrapper.md §8.2).
+    static func composedIconMaster(
+        kind: StoreIconKind, layers: [StoreIconLayer]
+    ) -> CGImage? {
+        func image(_ role: StoreIconRole) -> CGImage? {
+            guard let png = layers.first(where: { $0.role == role })?.png,
+                let source = CGImageSourceCreateWithData(png as CFData, nil)
+            else { return nil }
+            return CGImageSourceCreateImageAtIndex(source, 0, nil)
+        }
+        switch kind {
+        case .adaptive:
+            guard let background = image(.background), let foreground = image(.foreground)
+            else { return nil }
+            return try? IconComposer.composeAdaptive(
+                background: background, foreground: foreground)
+        case .legacy:
+            return image(.legacy).flatMap { try? IconComposer.composeLegacy($0) }
+        }
+    }
+
+    static func composedIcon(
+        kind: StoreIconKind, layers: [StoreIconLayer]
+    ) -> (icns: Data, digest: String)? {
+        guard let master = composedIconMaster(kind: kind, layers: layers),
+            let masterPNG = try? IconComposer.pngData(master),
+            let icns = try? IconsetWriter.icnsData(from: master)
+        else { return nil }
+        let digest = SHA256.hash(data: masterPNG).map { String(format: "%02x", $0) }.joined()
+        return (icns, digest)
+    }
+
+    /// Returns the registry row of one package's wrapper (runtime-api.md §10.2).
+    public func wrapperInfo(
+        _ request: RuntimePackageRequest
+    ) async throws(RuntimeWireError) -> WrapperInfo {
+        let registry = await wrapperRegistryInstance()
+        guard let entry = await registry.entry(packageID: request.packageID) else {
+            throw Self.wrapperWireError(for: .wrapperNotFound(request.packageID))
+        }
+        return Self.wrapperInfo(for: entry, packageID: request.packageID)
+    }
+
+    /// The `listWrappers` result cache (wrapper.md §9.1: 60 s).
+    private var wrapperListCache: (at: Date, entries: [WrapperListEntryWire])?
+
+    /// Lists every registered wrapper with the status the validator
+    /// computes (runtime-api.md §10.5, wrapper.md §9.1). Results are
+    /// cached for 60 seconds; a bundle found at a new location updates
+    /// its registry path and is reported `moved` once.
+    public func listWrappers() async throws(RuntimeWireError) -> [WrapperListEntryWire] {
+        if let cache = wrapperListCache,
+            Date().timeIntervalSince(cache.at) < 60
+        {
+            return cache.entries
+        }
+        let registry = await wrapperRegistryInstance()
+        let service = packageQueryServiceInstance()
+        var knownPackages: Set<String>?
+        do {
+            try await service.open()
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            let list = try await service.listPackages(RuntimeListPackagesRequest(filter: .all))
+            knownPackages = Set(list.packages.map(\.packageID.rawValue))
+        } catch {
+            knownPackages = nil
+        }
+        let validator = wrapperValidator(registry: registry, service: service, knownPackages: knownPackages)
+        var entries: [WrapperListEntryWire] = []
+        for entry in await registry.entries() {
+            let result = await verifyWrapperEntry(
+                entry: entry, registry: registry, validator: validator)
+            guard let runtimeID = RuntimePackageID(rawValue: entry.packageId) else {
+                continue
+            }
+            var summary = Self.wrapperSummary(for: entry, packageID: runtimeID)
+            summary.bundleURL = result.url
+            summary.status = WrapperStatus(
+                state: result.state ?? .unknownPackage,
+                refreshReasons: Set(result.reasons))
+            entries.append(
+                WrapperListEntryWire(
+                    summary: summary, state: result.state, refreshReasons: result.reasons))
+        }
+        recordWrapperStatuses(
+            entries.map {
+                (packageID: $0.summary.packageID, status: $0.summary.status)
+            })
+        wrapperListCache = (Date(), entries)
+        return entries
+    }
+
+    /// Verifies one registry entry (wrapper.md §9.1 checks 1–6): the path or
+    /// a relocated bundle, with a foreign-bundle guard and an `.inaccessible`
+    /// fallback for unreadable bundles.
+    private func verifyWrapperEntry(
+        entry: WrapperRegistryEntry,
+        registry: WrapperRegistry,
+        validator: WrapperValidator
+    ) async -> (url: URL, state: WrapperState?, reasons: [WrapperRefreshReason]) {
+        var (url, moved) = await resolvedWrapperURL(entry: entry, registry: registry)
+        var state: WrapperState? = nil
+        var reasons: [WrapperRefreshReason] = []
+        do {
+            var verification = try await validator.verify(url: url, deep: false)
+            // A bundle that is not this entry's (e.g. another package's
+            // wrapper now occupies the path) does not prove this entry's
+            // state; relocate once by bundle ID + cdhash, then recheck.
+            if (verification.bundleID != nil && verification.bundleID != entry.bundleId)
+                || (verification.packageID != nil && verification.packageID != entry.packageId)
+            {
+                let relocated = await relocatedWrapperURL(
+                    entry: entry, registry: registry, excluding: url)
+                if let relocated {
+                    url = relocated
+                    moved = true
+                    verification = try await validator.verify(url: url, deep: false)
+                }
+                if (verification.bundleID != nil && verification.bundleID != entry.bundleId)
+                    || (verification.packageID != nil
+                        && verification.packageID != entry.packageId)
+                {
+                    verification = WrapperValidator.Verification(bundleURL: url)
+                    verification.state = .missing
+                }
+            }
+            state = moved ? .moved(url) : verification.state
+            reasons = verification.refreshReasons.sorted {
+                String(describing: $0) < String(describing: $1)
+            }
+        } catch {
+            // The bundle exists but could not be read or parsed — that
+            // is a broken bundle, not an unknown package.
+            state = .inaccessible
+        }
+        return (url, state, reasons)
+    }
+
+    /// Stores the latest wrapper statuses and posts `statusChanged` for the
+    /// entries whose status changed (wrapper.md §12.1, coalesced per package).
+    private func recordWrapperStatuses(
+        _ statuses: [(packageID: RuntimePackageID, status: WrapperStatus)]
+    ) {
+        for item in statuses {
+            let previous = latestWrapperStatuses[item.packageID.rawValue]
+            latestWrapperStatuses[item.packageID.rawValue] = item.status
+            if previous != item.status {
+                eventHub.publishWrapperChange(
+                    .statusChanged(item.packageID, item.status))
+            }
+        }
+    }
+
+    /// The apkrund-start + 60 s sweep (wrapper.md §9.1): a quick verification
+    /// of every entry, refreshing `latestWrapperStatuses` and posting
+    /// `statusChanged` for entries that changed. Low priority and quiet:
+    /// failures only drop the sweep until the next list pass.
+    func runWrapperSweep() async {
+        let registry = await wrapperRegistryInstance()
+        let service = packageQueryServiceInstance()
+        var knownPackages: Set<String>?
+        do {
+            try await service.open()
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            let list = try await service.listPackages(
+                RuntimeListPackagesRequest(filter: .all))
+            knownPackages = Set(list.packages.map(\.packageID.rawValue))
+        } catch {
+            knownPackages = nil
+        }
+        let validator = wrapperValidator(
+            registry: registry, service: service, knownPackages: knownPackages)
+        var statuses: [(packageID: RuntimePackageID, status: WrapperStatus)] = []
+        for entry in await registry.entries() {
+            guard let runtimeID = RuntimePackageID(rawValue: entry.packageId) else {
+                continue
+            }
+            let result = await verifyWrapperEntry(
+                entry: entry, registry: registry, validator: validator)
+            statuses.append(
+                (
+                    packageID: runtimeID,
+                    status: WrapperStatus(
+                        state: result.state ?? .unknownPackage,
+                        refreshReasons: Set(result.reasons))
+                ))
+        }
+        recordWrapperStatuses(statuses)
+        wrapperListCache = nil
+    }
+
+    /// Removes a wrapper's registry entry, and with `trash` moves the
+    /// bundle to the Trash first (wrapper.md §9.5). Wrappers are never
+    /// deleted.
+    public func removeWrapper(
+        packageID: RuntimePackageID,
+        trash: Bool
+    ) async throws(RuntimeWireError) -> Bool {
+        let registry = await wrapperRegistryInstance()
+        guard let entry = await registry.entry(packageID: packageID) else {
+            throw Self.wrapperWireError(for: .wrapperNotFound(packageID))
+        }
+        if trash {
+            let (url, _) = await resolvedWrapperURL(entry: entry, registry: registry)
+            // Only the registered wrapper itself goes to the Trash; anything
+            // else placed at the recorded path stays untouched (§9.5).
+            let isWrapper = WrapperInstaller(sink: diagnostics?.logSink)
+                .isWrapperOf(packageID, at: url)
+            if isWrapper, FileManager.default.fileExists(atPath: url.path) {
+                var trashed: NSURL?
+                do {
+                    try FileManager.default.trashItem(at: url, resultingItemURL: &trashed)
+                } catch {
+                    throw .runtime(
+                        "internalError",
+                        message: "APKRun couldn't move the Mac app to the Trash.")
+                }
+            }
+        }
+        do {
+            try await registry.remove(bundleID: entry.bundleId)
+        } catch {
+            throw .runtime(
+                "internalError",
+                message: "APKRun couldn't update the wrapper registry.")
+        }
+        wrapperListCache = nil
+        eventHub.publishWrapperChange(.removed(packageID))
+        return true
+    }
+
+    /// Scans `~/Applications` and `/Applications` for APKRun wrapper
+    /// bundles (wrapper.md §7.2); with `register` the valid ones get a
+    /// registry entry, which is how **Re-register Mac Apps** recovers a
+    /// lost `registry.json`.
+    public func rescanWrappers(
+        register: Bool
+    ) async throws(RuntimeWireError) -> RescanWrappersResult {
+        let registry = await wrapperRegistryInstance()
+        let directories = [
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Applications", isDirectory: true),
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+        ]
+        var found: [String] = []
+        var registered: [String] = []
+        let service = packageQueryServiceInstance()
+        var knownPackages: Set<String>?
+        do {
+            try await service.open()
+            try await attachPackageQueriesIfRuntimeIsReady(to: service)
+            let list = try await service.listPackages(RuntimeListPackagesRequest(filter: .all))
+            knownPackages = Set(list.packages.map(\.packageID.rawValue))
+        } catch {
+            knownPackages = nil
+        }
+        let validator = wrapperValidator(registry: registry, service: service, knownPackages: knownPackages)
+        for directory in directories {
+            let bundles =
+                (try? FileManager.default.contentsOfDirectory(
+                    at: directory, includingPropertiesForKeys: nil
+                ))?.filter { $0.pathExtension == "app" } ?? []
+            for bundle in bundles {
+                guard let plist = InfoPlistWriter.infoDictionary(of: bundle),
+                    let packageID = plist["APKRunPackageID"] as? String,
+                    let bundleID = plist["CFBundleIdentifier"] as? String
+                else { continue }
+                guard
+                    let verification = try? await validator.verify(url: bundle, deep: false),
+                    verification.state == .valid || verification.state == .unknownPackage,
+                    verification.bundleID == nil || verification.bundleID == bundleID,
+                    verification.packageID == nil || verification.packageID == packageID
+                else { continue }
+                found.append(bundle.path)
+                // Registration marks the bundle trusted, so it needs the
+                // strict deep signature check (wrapper.md §9.1 check 6).
+                guard register,
+                    await registry.entry(bundleID: bundleID) == nil,
+                    let package = RuntimePackageID(rawValue: packageID),
+                    (try? await validator.verify(url: bundle, deep: true))?.state == .valid,
+                    let cdhash = verification.cdhash
+                else { continue }
+                var entry = WrapperRegistryEntry(
+                    bundleId: bundleID,
+                    packageId: packageID,
+                    kind: verification.kind ?? .local,
+                    state: .active,
+                    path: bundle.path,
+                    cdhash: cdhash,
+                    launcherVersion: verification.launcherVersion ?? "0",
+                    launcherAPI: verification.launcherAPI ?? "1.0",
+                    fileName: bundle.deletingPathExtension().lastPathComponent,
+                    displayName: (plist["CFBundleDisplayName"] as? String)
+                        ?? bundle.deletingPathExtension().lastPathComponent,
+                    createdAt: Date()
+                )
+                entry.approval = .user
+                do {
+                    try await registry.markPending(entry)
+                    try await registry.activate(bundleID: bundleID, path: bundle, bookmark: Data())
+                    registered.append(bundle.path)
+                } catch {
+                    logger?.error(
+                        "wrapper rescan registration failed: \(bundle.path, .public)")
+                }
+            }
+        }
+        wrapperListCache = nil
+        return RescanWrappersResult(found: found, registered: registered)
+    }
+
+    /// The validator verifyWrapper and listWrappers share; `knownPackages`
+    /// nil (store unreachable) means the package check is skipped.
+    private func wrapperValidator(
+        registry: WrapperRegistry,
+        service: EmbeddedPackageService,
+        knownPackages: Set<String>?
+    ) -> WrapperValidator {
+        WrapperValidator(
+            registry: registry,
+            currentLauncher: launcherBuild(),
+            packageExists: { knownPackages?.contains($0) ?? true },
+            iconDigest: { packageID in
+                guard let runtimeID = RuntimePackageID(rawValue: packageID) else {
+                    return nil
+                }
+                guard
+                    let rendered = await service.renderedIconLayers(for: runtimeID),
+                    let composed = RuntimeHost.composedIcon(
+                        kind: rendered.manifest.kind, layers: rendered.layers)
+                else { return nil }
+                return composed.digest
+            },
+            sink: diagnostics?.logSink
+        )
+    }
+
+    /// The bundle URL of a registry entry: its recorded path, or a
+    /// LaunchServices lookup by bundle ID when the path went missing
+    /// (wrapper.md §9.1 check 1). `moved` is true when the registry path
+    /// was updated to a new location — callers report `state.moved` once.
+    private func resolvedWrapperURL(
+        entry: WrapperRegistryEntry,
+        registry: WrapperRegistry
+    ) async -> (url: URL, moved: Bool) {
+        let path = URL(fileURLWithPath: entry.path)
+        if FileManager.default.fileExists(atPath: path.path),
+            !path.path.contains("/.Trash/")
+        {
+            return (path, false)
+        }
+        if let relocated = await relocatedWrapperURL(
+            entry: entry, registry: registry, excluding: nil)
+        {
+            return (relocated, true)
+        }
+        return (path, false)
+    }
+
+    /// The wrapper's real location when its recorded path does not hold
+    /// its bundle: LaunchServices knows apps by bundle ID, and the
+    /// cdhash keeps a same-ID impostor from being adopted.
+    private func relocatedWrapperURL(
+        entry: WrapperRegistryEntry,
+        registry: WrapperRegistry,
+        excluding: URL?
+    ) async -> URL? {
+        for candidate in NSWorkspace.shared.urlsForApplications(
+            withBundleIdentifier: entry.bundleId)
+        {
+            guard candidate != excluding else { continue }
+            guard WrapperCodeSign.cdhash(of: candidate) == entry.cdhash else { continue }
+            let bookmark = try? candidate.bookmarkData()
+            try? await registry.updateLocation(
+                bundleID: entry.bundleId, path: candidate, bookmark: bookmark ?? Data())
+            return candidate
+        }
+        return nil
+    }
+
+    /// Builds the wire record from a registry entry; `warnings` carries
+    /// non-fatal outcomes such as a registration failure.
+    private static func wrapperInfo(
+        for entry: WrapperRegistryEntry,
+        packageID: RuntimePackageID,
+        warnings: [RuntimeWireError] = []
+    ) -> WrapperInfo {
+        WrapperInfo(
+            summary: wrapperSummary(for: entry, packageID: packageID),
             fileName: entry.fileName,
             customization: WrapperCustomizationWire(
                 displayName: entry.customization.displayName,
                 customIcon: entry.customization.iconFile != nil
             ),
             signer: .adHoc,
-            cdhash: generated.cdhash,
-            launcherAPI: Self.launcherAPIVersion(entry.launcherAPI) ?? APIVersion(major: 1, minor: 0),
+            cdhash: entry.cdhash,
+            launcherAPI: launcherAPIVersion(entry.launcherAPI) ?? APIVersion(major: 1, minor: 0),
             formatVersion: entry.formatVersion,
             iconDigest: entry.iconDigest.flatMap { RuntimeSHA256Digest(rawValue: "sha256:\($0)") },
             lastValidatedAt: entry.lastValidatedAt,
-            warnings: []
+            warnings: warnings
         )
     }
 
@@ -1655,9 +4625,33 @@ public actor RuntimeHost {
         )
     }
 
+    /// The `.wrapper` endpoint credentials for a claimed bundle ID
+    /// (runtime-api.md §10.1): the code requirement built from the registry
+    /// and the package the wrapper may operate on. During a refresh the new
+    /// bundle's `pendingCdhash` is also accepted so the refreshed wrapper can
+    /// reconnect before validation finishes.
+    func wrapperEndpointCredentials(bundleID: String) async
+        -> (requirement: String, packageID: RuntimePackageID)?
+    {
+        let registry = await wrapperRegistryInstance()
+        guard
+            let entry = await registry.entry(bundleID: bundleID),
+            entry.state != .pending,
+            let packageID = RuntimePackageID(rawValue: entry.packageId)
+        else {
+            return nil
+        }
+        var cdhashes = "cdhash H\"\(entry.cdhash)\""
+        if let pending = entry.pendingCdhash {
+            cdhashes = "(\(cdhashes) or cdhash H\"\(pending)\")"
+        }
+        let requirement = "identifier \"\(bundleID)\" and \(cdhashes)"
+        return (requirement, packageID)
+    }
+
     /// The daemon's wrapper registry, created on first use with startup
     /// `recover()` applied (wrapper-json.md §4.4).
-    private func wrapperRegistryInstance() async -> WrapperRegistry {
+    func wrapperRegistryInstance() async -> WrapperRegistry {
         if let wrapperRegistry {
             return wrapperRegistry
         }
@@ -1683,10 +4677,18 @@ public actor RuntimeHost {
         wrapperHealthChecksRegistered = true
         Task {
             try? await checks.register(WrapperHealthChecks.registry(registry))
+            try? await checks.register(WrapperHealthChecks.registration(registry))
             if let build = launcherBuild() {
                 try? await checks.register(
                     WrapperHealthChecks.template(executableURL: build.executableURL))
             }
+            try? await checks.register(
+                WrapperStatusCheck { [weak self] in
+                    await self?.wrapperStatusesSnapshot() ?? [:]
+                })
+            let launcherAPI = self.launcherBuild()?.launcherAPI
+            try? await checks.register(
+                WrapperLauncherCheck(registry: registry) { launcherAPI })
         }
     }
 
@@ -1710,6 +4712,7 @@ public actor RuntimeHost {
         return LauncherBuild(
             launcherAPI: plist["APKRunLauncherAPI"] as? String ?? "1.0",
             launcherVersion: plist["CFBundleShortVersionString"] as? String ?? "0.1.0",
+            buildIdentity: plist["APKRunBuildIdentity"] as? String ?? "dev",
             executableURL: executable
         )
     }
@@ -1907,8 +4910,196 @@ public actor RuntimeHost {
         message: "Too many approval requests. Try again in a minute."
     )
 
+    /// Starts a `bootstrapImport` operation for a portable wrapper's own
+    /// launcher (wrapper-json.md §3.4). B1 runs here — the registry entry for
+    /// the claimed bundle ID must be an approved portable wrapper — and B2–B8
+    /// run inside the operation.
+    public func beginImportBootstrap(
+        _ request: RuntimeImportBootstrapControlRequest,
+        clientKind: RuntimeClientKind,
+        files: [FileHandle]
+    ) async throws(RuntimeWireError) -> OperationHandle {
+        let registry = try await wrapperRegistryInstance()
+        guard let entry = await registry.entry(bundleID: request.bundleID),
+            entry.state == .active, entry.kind == .portable
+        else {
+            throw Self.wrapperWireError(for: .bootstrapNotAllowed(.notApproved))
+        }
+        // The wrapper.json of the registered bundle supplies the first-record
+        // settings and the initial update defaults (wrapper-json.md §3.3).
+        guard
+            let wrapperDocument = try? WrapperDocumentCodec.load(
+                from: URL(fileURLWithPath: entry.path))
+        else {
+            throw Self.wrapperWireError(for: .bootstrapInvalid(.malformed))
+        }
+        let operationID = WireOperationID()
+        let handle = OperationHandle(operationID: operationID, kind: .bootstrapImport)
+        let snapshot = OperationSnapshot(
+            operationID: operationID,
+            kind: .bootstrapImport,
+            packageID: RuntimePackageID(rawValue: entry.packageId),
+            requestFingerprint: nil,
+            clientKind: clientKind,
+            startedAt: Date(),
+            progress: OperationProgress(
+                stage: "importing",
+                message: "Installing the app from this Mac app…"
+            )
+        )
+        trackedOperations[operationID] = RuntimeTrackedOperation(
+            handle: handle,
+            requestPayload: Data(),
+            snapshot: snapshot,
+            isCancellable: false,
+            task: nil
+        )
+        eventHub.publishOperationEvent(.started(snapshot), operationID: operationID)
+        do {
+            try beginLifecycleOperation()
+        } catch {
+            trackedOperations.removeValue(forKey: operationID)
+            throw Self.sessionWireError(for: error)
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runImportBootstrapOperation(
+                entry: entry,
+                wrapperDocument: wrapperDocument,
+                bootstrapJSON: request.bootstrapJSON,
+                files: files,
+                operationID: operationID
+            )
+        }
+        trackedOperations[operationID]?.task = task
+        return handle
+    }
+
+    /// Runs a `bootstrapImport` operation to its terminal state.
+    private func runImportBootstrapOperation(
+        entry: WrapperRegistryEntry,
+        wrapperDocument: WrapperDocument,
+        bootstrapJSON: Data,
+        files: [FileHandle],
+        operationID: WireOperationID
+    ) async {
+        defer { finishLifecycleOperation() }
+        do {
+            let service = packageQueryServiceInstance()
+            let summary = try await service.importBootstrap(
+                entry: entry,
+                wrapperDocument: wrapperDocument,
+                bootstrapJSON: bootstrapJSON,
+                files: files
+            )
+            finishOperation(operationID, result: .succeeded(.package(summary)))
+            logger?.notice("Bootstrap import completed for \(entry.packageId, .public)")
+        } catch {
+            if Task.isCancelled {
+                finishOperation(operationID, result: .cancelled)
+            } else {
+                finishOperation(
+                    operationID,
+                    result: .failed(
+                        error as? RuntimeWireError
+                            ?? .runtime(
+                                "internalError",
+                                message: "APKRun's background service failed.")))
+            }
+        }
+    }
+
     /// Maps a wrapper failure to the wire error type of the control endpoint.
-    private static func wrapperWireError(for failure: WrapperFailure) -> RuntimeWireError {
+    ///
+    /// Builds the `bootstrap/` payload (wrapper-json.md §3.2) from a stored
+    /// or incoming artifact set. `ArtifactSet.files` is already `base.apk`
+    /// first then splits ordered by split name, and its stored names are the
+    /// bootstrap file names.
+    private static func bootstrapSet(
+        from set: ArtifactSet, in directory: URL
+    ) -> BootstrapSet {
+        let document = BootstrapDocument(
+            packageId: set.packageID.rawValue,
+            versionCode: set.versionCode,
+            versionName: set.versionName,
+            setDigest: "sha256:" + set.setDigest.hexValue,
+            signers: set.signerDigests.map { "sha256:" + $0.hexValue }.sorted(),
+            files: set.files.map {
+                BootstrapFileEntry(
+                    name: $0.name,
+                    sha256: "sha256:" + $0.sha256.hexValue,
+                    size: $0.size)
+            })
+        let files = set.files.map {
+            BootstrapSet.SourceFile(
+                name: $0.name,
+                sourceURL: directory.appendingPathComponent($0.name),
+                sha256: "sha256:" + $0.sha256.hexValue,
+                size: $0.size)
+        }
+        return BootstrapSet(document: document, files: files)
+    }
+
+    /// Maps the wire `updateDefaults` (runtime-api.md §10.3) to the
+    /// wrapper.json update defaults. A `local` provider is never written —
+    /// it resolves to manual authority (wrapper-json.md §2.5) — and `apkrun`
+    /// authority without a provider is refused like an install is.
+    private static func wrapperUpdateDefaults(
+        from wire: WrapperUpdateDefaultsWire?
+    ) throws(RuntimeWireError) -> WrapperUpdateDefaults {
+        guard let wire else { return WrapperUpdateDefaults() }
+        var provider: WrapperUpdateProvider?
+        if let spec = wire.provider {
+            let ref: UpdateProviderRef
+            do {
+                ref = try UpdatePolicyRules.providerRef(for: ProviderSpec(spec: spec))
+            } catch {
+                throw EmbeddedPackageService.wireError(for: error)
+            }
+            switch ref.configuration {
+            case .local:
+                provider = nil
+            case .direct(let url):
+                provider = WrapperUpdateProvider(
+                    type: "direct", configuration: .direct(url: url))
+            case .fdroid(let repository, let fingerprint):
+                provider = WrapperUpdateProvider(
+                    type: "fdroid",
+                    configuration: .fdroid(
+                        repository: repository, fingerprint: fingerprint))
+            case .github(let repository, let assetPattern, let channel):
+                provider = WrapperUpdateProvider(
+                    type: "github",
+                    configuration: .github(
+                        repository: repository, assetPattern: assetPattern,
+                        channel: channel.rawValue))
+            }
+        }
+        var authority: WrapperUpdateAuthority =
+            wire.authority == .apkrun ? .apkrun : .manual
+        let mode: WrapperUpdateMode
+        switch wire.choice {
+        case nil, "automatic":
+            mode = .automatic
+        case "notify", "notifyOnly":
+            mode = .notifyOnly
+        case "manual":
+            authority = .manual
+            mode = .automatic
+        default:
+            throw .runtime(
+                "malformedRequest",
+                message: "Unknown update mode \"\(wire.choice ?? "")\".")
+        }
+        if authority == .apkrun && provider == nil {
+            throw EmbeddedPackageService.wireError(
+                for: UpdateFailure.providerNotConfigured)
+        }
+        return WrapperUpdateDefaults(
+            authority: authority, mode: mode, provider: provider)
+    }
+
+    static func wrapperWireError(for failure: WrapperFailure) -> RuntimeWireError {
         let entry = ErrorCatalog.entry(for: failure.qualifiedCode)
         let message =
             entry?.message?["en"].map {
@@ -1921,11 +5112,32 @@ public actor RuntimeHost {
             domain: "wrapper",
             code: failure.qualifiedCode,
             message: message,
-            remediation: remediation
+            remediation: remediation,
+            parameters: Self.wireParameters(for: failure)
         )
     }
 
-    private static func interpolate(
+    /// The error's catalog parameters as plain strings for the wire — the
+    /// `stagingToken` of `destinationNotAccessible` is how the client names
+    /// the staged bundle it must move (wrapper.md §6.3).
+    static func wireParameters(
+        for failure: WrapperFailure
+    ) -> [String: String] {
+        failure.parameters.reduce(into: [:]) { result, entry in
+            switch entry.value {
+            case .text(let text), .fileName(let text):
+                result[entry.key] = text
+            case .count(let count):
+                result[entry.key] = String(count)
+            case .bytes(let bytes):
+                result[entry.key] = String(bytes)
+            case .duration:
+                break
+            }
+        }
+    }
+
+    static func interpolate(
         _ template: String,
         parameters: [String: ErrorParameter]
     ) -> String {
@@ -1972,6 +5184,7 @@ public actor RuntimeHost {
         if let guestAgentStatus {
             switch guestAgentStatus.state {
             case .stopped: guestAgentStateName = .notStarted
+            case .paused: guestAgentStateName = .unavailable
             case .connecting: guestAgentStateName = .connecting
             case .ready: guestAgentStateName = .connected
             case .reconnecting: guestAgentStateName = .reconnecting
@@ -2000,13 +5213,50 @@ public actor RuntimeHost {
 
     /// Whether the daemon can exit after its idle grace period without cancelling an operation.
     public func canExitWhenIdle() async -> Bool {
+        if restartExitRequested {
+            // `restartPending` only needs sessions gone: pending installs and
+            // scheduled update work do not hold the daemon (§3.7).
+            guard let service = sessionServiceForIntegrations() else { return true }
+            return await service.sessionSnapshots().isEmpty
+        }
         guard hasStarted, !isShuttingDown, activeLifecycleOperations == 0 else {
             return false
         }
         let runtimeState = await supervisor?.state
+        // runtime-daemon.md §2.4: do not exit while update work is due
+        // inside the idle grace window — a check that would start before
+        // the grace ends keeps the daemon alive.
+        let updateDueSoon: Bool
+        if let scheduler = updateScheduler,
+            let next = await scheduler.earliestWakeAt()
+        {
+            updateDueSoon = next < Date().addingTimeInterval(120)
+        } else {
+            updateDueSoon = false
+        }
         return !isShuttingDown
             && activeLifecycleOperations == 0
             && (runtimeState == nil || runtimeState == .stopped)
+            && !updateDueSoon
+    }
+
+    /// Drops the supervisor and its event subscription — the events task holds
+    /// the old supervisor's stream alive otherwise (image update replaces it).
+    func dropSupervisor() {
+        supervisorEventsTask?.cancel()
+        supervisorEventsTask = nil
+        supervisor = nil
+    }
+
+    /// Detaches services holding the old supervisor's Guest Agent and display
+    /// pool so the next launch recreates them on the new supervisor.
+    func dropRuntimeAttachedServices() async {
+        headlessSessionService = nil
+        // The retained keepRunning tasks die with the guest connection.
+        releaseAllBackgroundTaskActivity()
+        if let packageQueryService {
+            await packageQueryService.detachRuntime()
+        }
     }
 
     private func observeSupervisorEvents(from supervisor: RuntimeSupervisor) {
@@ -2042,8 +5292,15 @@ public actor RuntimeHost {
         }
         if case .ready = snapshot.state {
             startClipboardRelay()
+            startNotificationRelay()
+            startLinkRelay()
+            startMicrophoneRelay()
+            startFileServices()
         } else if case .stopped = snapshot.state {
             stopClipboardRelay()
+            stopNotificationRelay()
+            stopLinkRelay()
+            stopFileServices()
         }
     }
 
@@ -2079,6 +5336,8 @@ public actor RuntimeHost {
             .booting(wireBootPhase(phase))
         case .ready:
             .ready
+        case .suspended:
+            .suspended
         case .stopping(let reason):
             .stopping(wireStopReason(reason))
         case .failed(let failure):
@@ -2188,59 +5447,7 @@ public actor RuntimeHost {
         Perf.mark(.daemonReady, at: time, timeline: diagnostics.perfTimeline)
         logger?.notice("Daemon control endpoint is ready")
     }
-
-    /// Gracefully stops Android, records a clean daemon exit, and releases the instance lock.
-    public func shutdown() async {
-        guard !shutdownCompleted else { return }
-        if isShuttingDown {
-            await waitForShutdownCompletion()
-            return
-        }
-        isShuttingDown = true
-        runtimeSessionGeneration &+= 1
-        hostState = "shuttingDown"
-        // Unanswered approval prompts must not hold the request drain:
-        // their launchers get `timedOut` instead of the ten-minute wait.
-        await approvalService?.cancelAll()
-        guard hasStarted else {
-            hostState = "stopped"
-            completeShutdown()
-            return
-        }
-        await waitForPackageMutations()
-        if let service = headlessSessionService as? DaemonHeadlessSessionService {
-            await service.shutdown()
-        }
-        headlessSessionService = nil
-        // Mark an in-flight VM start for cancellation before waiting for any storage work to finish.
-        await supervisor?.stop(reason: .hostShutdown)
-        await waitForLifecycleOperations()
-        // A start that was already inside RuntimeSupervisor may have finished its cancellation path
-        // while this actor was waiting. Stop once more before recording a clean process exit.
-        await supervisor?.stop(reason: .hostShutdown)
-        await supervisor?.finishEventStream()
-        if let supervisorEventsTask {
-            await supervisorEventsTask.value
-            self.supervisorEventsTask = nil
-        }
-        if let stateStore {
-            do {
-                try stateStore.markCleanExit()
-            } catch {
-                logger?.error(
-                    "Could not record a clean daemon exit",
-                    errorCode: String(describing: error)
-                )
-            }
-        }
-        instanceLock?.close()
-        instanceLock = nil
-        hostState = "stopped"
-        hasStarted = false
-        completeShutdown()
-    }
-
-    private func beginLifecycleOperation(
+    func beginLifecycleOperation(
         allowingReservedPackageMutation: Bool = false
     ) throws(RuntimeHostError) {
         guard hasStarted else {
@@ -2252,7 +5459,7 @@ public actor RuntimeHost {
         activeLifecycleOperations += 1
     }
 
-    private func finishLifecycleOperation() {
+    func finishLifecycleOperation() {
         activeLifecycleOperations -= 1
         guard activeLifecycleOperations == 0 else { return }
         let waiters = lifecycleWaiters
@@ -2262,16 +5469,30 @@ public actor RuntimeHost {
         }
     }
 
-    func beginPackageMutation() throws(RuntimeHostError) {
-        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
+    func beginPackageMutation(
+        activity: RuntimeCore.ActivityKind? = .storeOperation
+    ) async throws(RuntimeHostError) -> UUID {
+        await waitForIdleSuspendTransition()
+        guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting, !imageMigrating else {
             throw .invalidTransition
         }
         try beginLifecycleOperation()
         activePackageMutations += 1
+        let assertion: RuntimeActivityAssertion?
+        if let activity, let idleController {
+            assertion = await idleController.assertActivity(activity)
+        } else {
+            assertion = nil
+        }
+        let token = UUID()
+        packageMutationActivities[token] = PackageMutationActivity(assertion: assertion)
+        return token
     }
 
-    func finishPackageMutation() {
+    func finishPackageMutation(_ token: UUID) {
+        let activity = packageMutationActivities.removeValue(forKey: token)
         activePackageMutations -= 1
+        activity?.assertion?.release()
         if activePackageMutations == 0 {
             let waiters = packageMutationWaiters
             packageMutationWaiters.removeAll()
@@ -2282,7 +5503,7 @@ public actor RuntimeHost {
         finishLifecycleOperation()
     }
 
-    private func waitForPackageMutations() async {
+    func waitForPackageMutations() async {
         guard activePackageMutations > 0 else { return }
         await withCheckedContinuation { continuation in
             packageMutationWaiters.append(continuation)
@@ -2296,7 +5517,7 @@ public actor RuntimeHost {
         }
     }
 
-    private func waitForStartupCompletion(
+    func waitForStartupCompletion(
         allowingReservedPackageMutation: Bool = false
     ) async throws(RuntimeHostError) {
         guard hasStarted else {
@@ -2447,7 +5668,7 @@ public actor RuntimeHost {
         #endif
     }
 
-    private func makeHeadlessSessionService() async throws(RuntimeWireError) -> any RuntimeSessionService {
+    func makeHeadlessSessionService() async throws(RuntimeWireError) -> any RuntimeSessionService {
         if let headlessSessionService {
             return headlessSessionService
         }
@@ -2480,9 +5701,23 @@ public actor RuntimeHost {
         let service = DaemonHeadlessSessionService(
             guestAgent: guestAgent,
             displayPool: displayPool,
-            logSink: diagnostics?.logSink
+            logSink: diagnostics?.logSink,
+            onSessionEnded: { [weak self] packageID in
+                await self?.releaseSessionActivity(packageID)
+            }
         )
         await attachPerfObservers(to: service)
+        await service.setSessionChangeObserver { [weak self] snapshot in
+            guard let change = Self.sessionChange(for: snapshot) else { return }
+            self?.eventHub.publishSessionChange(change)
+        }
+        // §7.6: a retained keepRunning task releases its `.backgroundTask`
+        // hold when the task ends (vanished, terminate, uninstall, relaunch).
+        await service.observeSessionActivity { [weak self] packageID, activity in
+            if activity == .taskEnded {
+                Task { await self?.releaseBackgroundTaskActivity(packageID.rawValue) }
+            }
+        }
         headlessSessionService = service
         await wireUpdateGateSessionHooks()
         return service
@@ -2518,7 +5753,7 @@ public actor RuntimeHost {
         let launchState: String
         switch supervisorState {
         case .ready, .stopping: launchState = "warm"
-        case .booting, .stopped, .failed, nil: launchState = "cold"
+        case .booting, .stopped, .suspended, .failed, nil: launchState = "cold"
         }
         return PendingLaunchRecord(
             base: base,
@@ -2602,6 +5837,8 @@ public actor RuntimeHost {
     private func noteSessionEnded(_ sessionID: UUID, reason: String) {
         firstFramesBeforeRecord.remove(sessionID)
         Task { await clipboardCoordinator?.noteSessionEnded(sessionID: sessionID) }
+        // Pending "Save to Mac" offers die with their session (§6.5).
+        Task { await fileTransferServiceLazy?.discardOffers(of: sessionID) }
         guard let pending = pendingLaunchRecords.removeValue(forKey: sessionID) else {
             return
         }
@@ -2729,7 +5966,7 @@ public actor RuntimeHost {
 
     /// Session graphics rows from the headless session service, or `[]` before
     /// Android has ever run (the read itself never starts it).
-    private func sessionGraphicsStatistics(sessionID: UUID?) async -> [SessionGraphicsStatistics] {
+    func sessionGraphicsStatistics(sessionID: UUID?) async -> [SessionGraphicsStatistics] {
         guard let service = headlessSessionService as? DaemonHeadlessSessionService else {
             return []
         }
@@ -2807,7 +6044,7 @@ public actor RuntimeHost {
     // MARK: - First-run provisioning and Reset Android (#67)
 
     /// The `state.json` provisioning record under the data root.
-    private var provisioningStore: RuntimeStateStore {
+    var provisioningStore: RuntimeStateStore {
         RuntimeStateStore(fileURL: paths.stateFile)
     }
 
@@ -2815,6 +6052,64 @@ public actor RuntimeHost {
     private func setProvisioningState(_ state: WireProvisioningState) {
         provisioningState = state
         eventHub.publishRuntimeChange(.provisioningChanged(state))
+    }
+
+    /// Gracefully stops Android, records a clean daemon exit, and releases the instance lock.
+    public func shutdown() async {
+        guard !shutdownCompleted else { return }
+        if isShuttingDown {
+            await waitForShutdownCompletion()
+            return
+        }
+        isShuttingDown = true
+        stopPowerObserver()
+        stopMemoryPressureObserver()
+        prebootTask?.cancel()
+        prebootTask = nil
+        await idleController?.stop()
+        await stopLocaleTimeObservers()
+        runtimeSessionGeneration &+= 1
+        hostState = "shuttingDown"
+        await updateScheduler?.stop()
+        // Unanswered approval prompts must not hold the request drain:
+        // their launchers get `timedOut` instead of the ten-minute wait.
+        await approvalService?.cancelAll()
+        guard hasStarted else {
+            hostState = "stopped"
+            completeShutdown()
+            return
+        }
+        await waitForPackageMutations()
+        if let service = headlessSessionService as? DaemonHeadlessSessionService {
+            await service.shutdown()
+        }
+        headlessSessionService = nil
+        // Mark an in-flight VM start for cancellation before waiting for any storage work to finish.
+        await supervisor?.stop(reason: .hostShutdown)
+        await waitForLifecycleOperations()
+        // A start that was already inside RuntimeSupervisor may have finished its cancellation path
+        // while this actor was waiting. Stop once more before recording a clean process exit.
+        await supervisor?.stop(reason: .hostShutdown)
+        await supervisor?.finishEventStream()
+        if let supervisorEventsTask {
+            await supervisorEventsTask.value
+            self.supervisorEventsTask = nil
+        }
+        if let stateStore {
+            do {
+                try stateStore.markCleanExit()
+            } catch {
+                logger?.error(
+                    "Could not record a clean daemon exit",
+                    errorCode: String(describing: error)
+                )
+            }
+        }
+        instanceLock?.close()
+        instanceLock = nil
+        hostState = "stopped"
+        hasStarted = false
+        completeShutdown()
     }
 
     /// The provisioning step matching the part of `performSetup` currently running.
@@ -3158,15 +6453,64 @@ public actor RuntimeHost {
                     throw fail(.installingImage, error)
                 }
                 setProvisioningState(.installingImage(fraction: 1))
-            case .feed, .archive, .unknown:
-                // The release feed and .aar archives arrive with #59; setup needs a local image
-                // bundle until then (apkrun setup --image <dir>).
+            case .archive(let fileIndex):
+                // `apkrun setup --image <file.aar>` installs the archive
+                // (runtime-maintenance.md §4.7); `.feed` arrives with the
+                // distribution task (#88). The `.aar` travels as a FileHandle;
+                // stage a copy so the extractor sees a filesystem path. The
+                // user's file is only read, never moved or deleted.
+                guard fileIndex >= 0, fileIndex < files.count else {
+                    throw ProvisioningStepFailure(
+                        step: .installingImage,
+                        wireError: .runtime(
+                            "malformedRequest",
+                            message: "The image archive couldn't be read."
+                        )
+                    )
+                }
+                let staging = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("apkrun-image-\(UUID().uuidString).aar")
+                FileManager.default.createFile(atPath: staging.path, contents: nil)
+                defer { try? FileManager.default.removeItem(at: staging) }
+                do {
+                    let source = files[fileIndex]
+                    let out = try FileHandle(forWritingTo: staging)
+                    try source.seek(toOffset: 0)
+                    while let chunk = try source.read(upToCount: 1 << 20), !chunk.isEmpty {
+                        try out.write(contentsOf: chunk)
+                    }
+                    try out.synchronize()
+                    try out.close()
+                } catch {
+                    throw fail(.installingImage, error)
+                }
+                let images =
+                    imageStore
+                    ?? ImageStore(
+                        paths: paths,
+                        trust: .standard(),
+                        diagnostics: diagnostics ?? .live(paths: paths)
+                    )
+                imageStore = images
+                do {
+                    let installed = try await images.install(from: .archive(staging))
+                    image = installed
+                    if instanceStore == nil, let diagnostics {
+                        instanceStore = InstanceStore(paths: paths, diagnostics: diagnostics)
+                    }
+                } catch {
+                    throw fail(.installingImage, error)
+                }
+                setProvisioningState(.installingImage(fraction: 1))
+            case .feed, .unknown:
+                // The release feed arrives with #88; setup needs a local image
+                // bundle or .aar until then (apkrun setup --image <path>).
                 throw ProvisioningStepFailure(
                     step: .installingImage,
                     wireError: .runtime(
                         "serviceUnavailable",
                         message: "Image downloads are not available yet.",
-                        remediation: "Install a local image bundle with `apkrun setup --image <folder>`."
+                        remediation: "Install a local image with `apkrun setup --image <folder-or-aar>`."
                     )
                 )
             }
@@ -3261,6 +6605,9 @@ public actor RuntimeHost {
         }
         // Reject new starts and package mutations for the whole reset, then let in-flight work
         // finish before the disks are erased.
+        guard !imageMigrating else {
+            throw RuntimeHostError.invalidTransition
+        }
         isRuntimeResetting = true
         defer { isRuntimeResetting = false }
         if let runtimeStartTask {
@@ -3275,6 +6622,8 @@ public actor RuntimeHost {
         await supervisor?.stop(reason: .reset)
         await packageQueryService?.detachRuntime()
         headlessSessionService = nil
+        // The reset kills every retained keepRunning task with the guest.
+        releaseAllBackgroundTaskActivity()
         if request.keepBackup {
             _ = try await instanceStore.createRecoveryPoint(image: image)
         }
@@ -3348,18 +6697,22 @@ public actor RuntimeHost {
         }
     }
 
-    /// Reinstalls one managed package from `Packages/<id>/current/` after a userdata reset.
+    /// Reinstalls a managed package from its retained `current/` artifacts
+    /// (package-store.md §9.2). Returns the install result so callers that
+    /// run a user-visible repair can publish the change; the silent §9.2
+    /// reconcile ignores it.
+    @discardableResult
     private func reinstallManagedPackage(
         packageID: RuntimePackageID,
         service: EmbeddedPackageService
-    ) async throws {
+    ) async throws -> RuntimePackageInstallResult? {
         let current = try await service.artifactCurrentDirectory(for: packageID)
         guard
             let names = try? FileManager.default.contentsOfDirectory(atPath: current.path)
                 .filter({ $0.hasSuffix(".apk") }).sorted(),
             !names.isEmpty
         else {
-            return
+            return nil
         }
         var handles: [FileHandle] = []
         var sourceFiles: [RuntimeImportSourceFile] = []
@@ -3372,7 +6725,7 @@ public actor RuntimeHost {
                 for handle in handles {
                     try? handle.close()
                 }
-                return
+                return nil
             }
             handles.append(handle)
             sourceFiles.append(RuntimeImportSourceFile(fileIndex: index, name: name))
@@ -3390,7 +6743,7 @@ public actor RuntimeHost {
         // `uninstall --forget` or uninstall committed between the reconcile's
         // snapshot and the install removes the mark or the record, and without
         // the guard the retained APKs would resurrect the app.
-        _ = try await service.installImportedWithChange(
+        return try await service.installImportedWithChange(
             RuntimeInstallImportedRequest(ticket: preview.ticket),
             requiresReinstallMark: true
         )
@@ -3461,7 +6814,7 @@ public actor RuntimeHost {
 
     /// The runtime supervisor, creating it when provisioning installed the first image after
     /// the daemon started without one.
-    private func supervisorInstance() throws -> RuntimeSupervisor {
+    func supervisorInstance() throws -> RuntimeSupervisor {
         if let supervisor {
             return supervisor
         }
@@ -3480,22 +6833,122 @@ public actor RuntimeHost {
             options: BootOptions(
                 gpuProfile: .drmVirgl,
                 developerMode: buildInfo.configuration == .debug,
-                captureLogcat: false
+                captureLogcat: false,
+                adbHostPort: adbHostPort
             ),
             diagnostics: diagnostics,
             guestAgentBundle: bundle,
-            guestAgentTimeout: .seconds(30)
+            guestAgentTimeout: .seconds(30),
+            soundOutputProvider: Self.soundOutputProvider(settingsFile: paths.settingsFile),
+            microphoneProvider: Self.microphoneProvider(
+                settingsFile: paths.settingsFile,
+                packagesDirectory: paths.packagesDirectory,
+                cache: integrationSettings),
+            adbClientConnectionCountChanged: { [weak self] generation, revision, connectionCount in
+                Task {
+                    await self?.updateADBClientActivity(
+                        generation: generation,
+                        revision: revision,
+                        connectionCount: connectionCount
+                    )
+                }
+            }
         )
+        finishSupervisorSetup(runtimeSupervisor)
+        return runtimeSupervisor
+    }
+
+    /// Stores the supervisor and attaches the event, power, and ADB bridges
+    /// every supervisor creation path needs.
+    private func finishSupervisorSetup(_ runtimeSupervisor: RuntimeSupervisor) {
         supervisor = runtimeSupervisor
         observeSupervisorEvents(from: runtimeSupervisor)
-        return runtimeSupervisor
+        let powerLogger = APKLogger(category: RuntimeLogCategory.power, sink: diagnostics?.logSink)
+        let powerService = EmbeddedDeveloperService(supervisor: runtimeSupervisor) { message in
+            powerLogger.warning("\(message, .public)")
+        }
+        powerEventHandler = { event in
+            await powerService.receivePowerObserverEvent(event)
+        }
+    }
+
+    /// Reads `audio.output` before each Android boot; a change never
+    /// touches the running VM (configuration.md §2.4, vm.md §11).
+    static func soundOutputProvider(settingsFile: URL) -> @Sendable () -> Bool {
+        {
+            GlobalSettings.load(from: settingsFile)
+                .extraValue("audio.output") != "false"
+        }
+    }
+
+    /// The packages whose `integrations.microphone` is on under the current
+    /// `settings.json` and package settings (desktop-integration.md §8.2). Reads
+    /// the files directly so the supervisor can consult it synchronously at
+    /// boot; the store's async view agrees because both read the same files.
+    static func microphoneEnabledSet(
+        settingsFile: URL,
+        packagesDirectory: URL
+    ) -> Set<String> {
+        let globals = GlobalSettings.load(from: settingsFile)
+        let globalEnabled =
+            globals.extraValue("integrations.enabled.microphone") != "false"
+        var packageValues: [String: String?] = [:]
+        let fileManager = FileManager()
+        for directory
+            in (try? fileManager.contentsOfDirectory(
+                at: packagesDirectory, includingPropertiesForKeys: nil)) ?? []
+        {
+            let name = directory.lastPathComponent
+            guard !name.hasPrefix(".") else {
+                continue
+            }
+            let settingsURL = directory.appendingPathComponent("settings.json")
+            guard let data = try? Data(contentsOf: settingsURL),
+                let settings = try? JSONDecoder().decode(PackageSettings.self, from: data)
+            else {
+                continue
+            }
+            packageValues[name] = settings.value("integrations.microphone")
+        }
+        return AudioPolicy.enabledPackages(
+            packageValues: packageValues, globalEnabled: globalEnabled)
+    }
+
+    /// Whether the microphone input stream belongs on the next Android boot
+    /// (desktop-integration.md §8.2): any package may record. `cache` records
+    /// the booted set so `integrationStatus` can report a pending restart.
+    static func microphoneProvider(
+        settingsFile: URL,
+        packagesDirectory: URL,
+        cache: IntegrationSettingsCache
+    ) -> @Sendable () -> Bool {
+        {
+            let set = Self.microphoneEnabledSet(
+                settingsFile: settingsFile, packagesDirectory: packagesDirectory)
+            cache.microphoneBootedSet = set
+            return !set.isEmpty
+        }
     }
 
     func packageQueryServiceInstance() -> EmbeddedPackageService {
         if let packageQueryService {
             return packageQueryService
         }
-        let service = EmbeddedPackageService(paths: paths)
+        // apkrund lives in Contents/Helpers, so the bundled
+        // compatibility database resolves to
+        // Contents/Resources/compatibility.json (diagnostics.md §10.1).
+        let service = EmbeddedPackageService(
+            paths: paths,
+            compatibilityDatabase: CompatibilityDatabase.load(
+                from: CompatibilityDatabase.bundleURL(
+                    executableURL: Bundle.main.executableURL
+                        ?? URL(fileURLWithPath: CommandLine.arguments[0]))))
+        Task { [weak self] in
+            await service.setIconChangeHandler { [weak self] packageID in
+                guard let wireID = RuntimePackageID(rawValue: packageID.rawValue) else { return }
+                self?.eventHub.publishPackageChange(.iconChanged(wireID))
+            }
+        }
         packageQueryService = service
         return service
     }
@@ -3561,6 +7014,8 @@ public actor RuntimeHost {
         switch error {
         case .notStarted, .alreadyStarted, .crashLoopActive, .stateStore:
             code = "runtime.hostStartupFailed"
+        case .hostUpdating:
+            code = "runtime.hostUpdating"
         case .startupFailed(_, let startupCode):
             code = startupCode.contains(".") ? startupCode : "runtime.hostStartupFailed"
         case .runtimeFailure(let failure):
@@ -3607,6 +7062,7 @@ public actor RuntimeHost {
         case .stopped: "stopped"
         case .booting(let phase): "booting(\(phase.description))"
         case .ready: "ready"
+        case .suspended: "suspended"
         case .stopping(_): "stopping"
         case .failed: "failed"
         }

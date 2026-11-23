@@ -151,6 +151,7 @@ private enum RequestSize {
 
 extension VirtioGPUProtocol {
     /// Decodes one request, checking its length and the §5.4 limits before any field is used.
+    /// SECURITY: untrusted guest input; fuzzed by `virtio-gpu-request` (#92).
     ///
     /// Fixed-length commands must match their length exactly. Unknown command
     /// codes decode to `unsupported` so the device can answer them.

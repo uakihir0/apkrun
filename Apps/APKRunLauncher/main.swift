@@ -46,7 +46,7 @@ private final class FrameStatisticsController {
             backing: .buffered,
             defer: false
         )
-        panel.title = "Frame Statistics"
+        panel.title = LauncherStrings.text("Frame Statistics")
         panel.isFloatingPanel = true
         panel.level = .floating
         guard let contentView = panel.contentView else { return }
@@ -81,7 +81,7 @@ private final class FrameStatisticsController {
             let client = try RuntimeControlClient(clientKind: .launcher)
             let sessions = try await client.frameStatistics()
             guard !sessions.isEmpty else {
-                field.stringValue = "no app session"
+                field.stringValue = LauncherStrings.text("no app session")
                 return
             }
             field.stringValue = sessions.map { session in
@@ -92,7 +92,7 @@ private final class FrameStatisticsController {
                     session.droppedFrames, session.hostReadbacks)
             }.joined(separator: "   ")
         } catch {
-            field.stringValue = "frameStatistics: \(error.localizedDescription)"
+            field.stringValue = LauncherStrings.text("frameStatistics: \(error.localizedDescription)")
         }
     }
 }
@@ -100,6 +100,8 @@ private final class FrameStatisticsController {
 @MainActor
 private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
+    private var bootstrapInstall: BootstrapInstallController?
+    private var notificationPoster: NotificationPoster?
     private let frameStatistics = FrameStatisticsController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -124,6 +126,18 @@ private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
             )
             .target = self
         }
+        // Help > Report a Problem… opens the app's diagnostics report sheet
+        // (diagnostics.md §8.5); the URL only opens the sheet.
+        let helpItem = NSMenuItem()
+        mainMenu.addItem(helpItem)
+        let helpMenu = NSMenu(title: "Help")
+        helpItem.submenu = helpMenu
+        helpMenu.addItem(
+            withTitle: "Report a Problem…",
+            action: #selector(openProblemReport(_:)),
+            keyEquivalent: ""
+        )
+        .target = self
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 480, height: 320),
@@ -131,7 +145,7 @@ private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "APKRun Launcher"
+        window.title = LauncherStrings.text("APKRun Launcher")
         window.center()
         window.contentView = NSView()
         window.makeKeyAndOrderFront(nil)
@@ -139,6 +153,35 @@ private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
         // TODO(#45): install a ClipboardController once the launcher owns a
         // session window (WrapperIdentity + openSession); the session window is
         // built by #45.
+        let bootstrapInstall = BootstrapInstallController()
+        self.bootstrapInstall = bootstrapInstall
+        // Foreground launchers relay notifications on a regular (not
+        // background) slot; the app keeps running when the stream ends.
+        if let client = try? RuntimeControlClient(
+            clientKind: .wrapper, claimedIdentity: nil)
+        {
+            let poster = NotificationPoster(client: client, background: false)
+            notificationPoster = poster
+            Task { await poster.run() }
+        }
+        Task {
+            // Screen N: `openSession` on an uninstalled portable package
+            // returns `packageNotInstalled`; the launcher offers the bundled
+            // install and then repeats `openSession` (retried by #45).
+            _ = await bootstrapInstall.offerInstall()
+        }
+    }
+
+    @objc private func openProblemReport(_ sender: NSMenuItem) {
+        var components = URLComponents(string: "apkrun://report")
+        if let packageID = bootstrapInstall?.bundledPackageID {
+            components?.queryItems = [
+                URLQueryItem(name: "package", value: packageID)
+            ]
+        }
+        if let url = components?.url {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     @objc private func toggleFrameStatistics(_ sender: NSMenuItem) {
@@ -149,9 +192,53 @@ private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+/// `--apkrun-background notifications` (wrapper.md §5.8): apkrund starts the
+/// wrapper only to relay Android notifications. `.accessory` is set before a
+/// Dock tile appears, no window or menu is created, and the app quits 30 s
+/// after the last delivered notification.
+@MainActor
+private final class BackgroundNotificationDelegate: NSObject, NSApplicationDelegate {
+    private var poster: NotificationPoster?
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // The wrapper claims its own bundle ID; the generic launcher claims
+        // the mapped ID of `--package <id>` (wrapper.md §5.2 step 1).
+        var claimedIdentity: String? = nil
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "--package"),
+            arguments.indices.contains(index + 1)
+        {
+            claimedIdentity = LauncherBundleIDMapper.map(arguments[index + 1])
+        }
+        let client: RuntimeControlClient
+        do {
+            client = try RuntimeControlClient(
+                clientKind: .wrapper, claimedIdentity: claimedIdentity)
+        } catch {
+            NSApp.terminate(nil)
+            return
+        }
+        let poster = NotificationPoster(client: client)
+        self.poster = poster
+        Task { await poster.run() }
+    }
+}
+
 let application = NSApplication.shared
-private let delegate: LauncherAppDelegate = MainActor.assumeIsolated {
+private let launchArguments = ProcessInfo.processInfo.arguments
+private let backgroundNotifications =
+    launchArguments.firstIndex(of: "--apkrun-background").map {
+        launchArguments.indices.contains($0 + 1) ? launchArguments[$0 + 1] : ""
+    } == "notifications"
+private let launcherDelegate: LauncherAppDelegate = MainActor.assumeIsolated {
     LauncherAppDelegate()
 }
-application.delegate = delegate
+private let backgroundDelegate: BackgroundNotificationDelegate = MainActor.assumeIsolated {
+    BackgroundNotificationDelegate()
+}
+application.delegate = backgroundNotifications ? backgroundDelegate : launcherDelegate
 application.run()

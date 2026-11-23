@@ -22,6 +22,7 @@ enum class GuestCapability(val wireName: String) {
     FILES_SHARED("files.shared.v1"),
     LOCALE("locale.v1"),
     AUDIO("audio.v1"),
+    MICROPHONE("microphone.v1"),
     DIAGNOSTICS("diagnostics.v1"),
     BULK("bulk.v1"),
     STORE_INSTALL("store.install.v1"),

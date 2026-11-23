@@ -77,9 +77,38 @@ public enum WrapperFailure: APKRunError, Equatable {
     /// `decideApproval` named an unknown, answered, or expired prompt.
     case approvalNotFound
 
+    /// The wrapper's app is running, so its bundle cannot be replaced
+    /// (wrapper.md §9.3 step 1). Payload: the display name.
+    case wrapperRunning(String)
+
+    /// macOS App Management denied the `Contents` swap of a refresh
+    /// (wrapper.md §9.3, R-20). Payload: the bundle path and, when the new
+    /// Contents is staged for APKRun.app, its staging token.
+    case refreshBlocked(String, stagingToken: String?)
+
     /// More than 5 approval requests arrived within one minute
     /// (wrapper.md §7.3 step 3); reported as `runtime.busy`.
     case approvalBusy
+
+    /// A `bootstrap.json` or one of its files failed a §3.4 check
+    /// (B3–B7: malformed, package mismatch, hash mismatch).
+    case bootstrapInvalid(BootstrapProblem)
+
+    /// `importBootstrap` was refused before the payload was read
+    /// (B1–B2: not approved, already installed).
+    case bootstrapNotAllowed(BootstrapRefusal)
+
+    /// `notarytool` or `stapler` is missing, so a distribution wrapper
+    /// cannot be notarized (wrapper.md §11). Payload: the tool name.
+    case distributionToolMissing(String)
+
+    /// `security find-identity -v -p codesigning` does not list the named
+    /// signing identity (wrapper.md §11). Payload: the identity.
+    case identityNotFound(String)
+
+    /// The notary service rejected or timed out a submission
+    /// (wrapper.md §11). Payload: the submission ID and the log summary.
+    case notarizationFailed(submissionID: String, summary: String)
 
     /// The stable error catalog namespace for wrappers.
     public static let domain: ErrorDomain = .wrapper
@@ -107,7 +136,15 @@ public enum WrapperFailure: APKRunError, Equatable {
         case .approvalTimedOut: "approvalTimedOut"
         case .approvalNotFound: "approvalNotFound"
         case .approvalBusy: "busy"
+        case .bootstrapInvalid: "bootstrapInvalid"
+        case .bootstrapNotAllowed: "bootstrapNotAllowed"
+        case .distributionToolMissing: "distributionToolMissing"
+        case .identityNotFound: "identityNotFound"
+        case .notarizationFailed: "notarizationFailed"
+        case .wrapperRunning: "wrapperRunning"
+        case .refreshBlocked: "refreshBlocked"
         }
+
     }
 
     /// Safe values used by the catalog's messages.
@@ -125,8 +162,11 @@ public enum WrapperFailure: APKRunError, Equatable {
             ["reason": .text(reason)]
         case .destinationNotWritable(let url):
             ["file": .fileName(url.lastPathComponent)]
-        case .destinationNotAccessible(let url, _):
-            ["file": .fileName(url.lastPathComponent)]
+        case .destinationNotAccessible(let url, let stagingToken):
+            [
+                "file": .fileName(url.lastPathComponent),
+                "stagingToken": .text(stagingToken),
+            ]
         case .nameConflict(let url, _):
             ["file": .fileName(url.lastPathComponent)]
         case .wrapperExists(let packageID, let url):
@@ -146,6 +186,25 @@ public enum WrapperFailure: APKRunError, Equatable {
             ["reason": .text(reason)]
         case .registrationFailed(let status):
             ["status": .count(Int(status))]
+        case .wrapperRunning(let displayName):
+            ["app": .text(displayName)]
+        case .refreshBlocked(let path, let stagingToken):
+            stagingToken.map { token in
+                ["file": .fileName(path), "stagingToken": .text(token)]
+            } ?? ["file": .fileName(path)]
+        case .bootstrapInvalid(let problem):
+            ["reason": .text(problem.rawValue)]
+        case .bootstrapNotAllowed(let refusal):
+            ["reason": .text(refusal.rawValue)]
+        case .distributionToolMissing(let tool):
+            ["tool": .text(tool)]
+        case .identityNotFound(let identity):
+            ["identity": .text(identity)]
+        case .notarizationFailed(let submissionID, let summary):
+            [
+                "submissionID": .text(submissionID),
+                "summary": .text(summary),
+            ]
         case .registryUnavailable, .stagingExpired, .approvalDenied, .approvalTimedOut,
             .approvalNotFound, .approvalBusy:
             [:]

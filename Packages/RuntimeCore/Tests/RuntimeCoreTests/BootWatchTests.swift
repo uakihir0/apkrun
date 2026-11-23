@@ -8,7 +8,7 @@ import VirtualMachineCore
 /// The readiness timeouts and stall limit of runtime-daemon.md §3.2, with a test clock.
 @Test
 func bootWatchCompletesAtBootCompletedAndIgnoresLaterInput() {
-    let origin = ContinuousClock.now
+    let origin = Duration.zero
     var watch = BootWatch(started: origin, whole: .seconds(180), stall: .seconds(90))
     #expect(watch.receive(.entered(.kernel), at: origin + .seconds(1)) == .keepWaiting)
     #expect(watch.receive(.entered(.`init`), at: origin + .seconds(2)) == .keepWaiting)
@@ -19,7 +19,7 @@ func bootWatchCompletesAtBootCompletedAndIgnoresLaterInput() {
 
 @Test
 func bootWatchTimesOutTheWholeBootWithTheCurrentPhase() {
-    let origin = ContinuousClock.now
+    let origin = Duration.zero
     var watch = BootWatch(started: origin, whole: .seconds(180), stall: .seconds(90))
     // Progress every 60 s keeps the stall limit away, so only the whole-boot limit fires.
     #expect(watch.receive(.entered(.`init`), at: origin + .seconds(60)) == .keepWaiting)
@@ -30,7 +30,7 @@ func bootWatchTimesOutTheWholeBootWithTheCurrentPhase() {
 
 @Test
 func bootWatchStallsWhenNoPhaseArrivesWithinTheLimit() {
-    let origin = ContinuousClock.now
+    let origin = Duration.zero
     var watch = BootWatch(started: origin, whole: .seconds(180), stall: .seconds(90))
     #expect(watch.receive(.entered(.`init`), at: origin + .seconds(10)) == .keepWaiting)
     // Exactly at the limit is not a stall; one tick later it is.
@@ -40,7 +40,7 @@ func bootWatchStallsWhenNoPhaseArrivesWithinTheLimit() {
 
 @Test
 func bootWatchReportsTheTimeoutBeforeTheStallWhenBothHaveElapsed() {
-    let origin = ContinuousClock.now
+    let origin = Duration.zero
     var watch = BootWatch(started: origin, whole: .seconds(180), stall: .seconds(90))
     // No progress at all: at 200 s both limits have passed, and the whole-boot limit is reported.
     #expect(watch.receive(.tick, at: origin + .seconds(200)) == .fail(.bootTimedOut(phase: .kernel)))
@@ -48,7 +48,7 @@ func bootWatchReportsTheTimeoutBeforeTheStallWhenBothHaveElapsed() {
 
 @Test
 func bootWatchUsesTheFirstBootLimitsWhenTheCallerPassesThem() {
-    let origin = ContinuousClock.now
+    let origin = Duration.zero
     var watch = BootWatch(started: origin, whole: .seconds(900), stall: .seconds(600))
     #expect(watch.receive(.entered(.kernel), at: origin + .seconds(300)) == .keepWaiting)
     #expect(watch.receive(.tick, at: origin + .seconds(601)) == .keepWaiting)
@@ -57,7 +57,7 @@ func bootWatchUsesTheFirstBootLimitsWhenTheCallerPassesThem() {
 
 @Test
 func bootWatchFailsAtOnceOnDetectorAndVMFailures() {
-    let origin = ContinuousClock.now
+    let origin = Duration.zero
     var panic = BootWatch(started: origin, whole: .seconds(180), stall: .seconds(90))
     #expect(panic.receive(.detectorFailed(.kernelPanic), at: origin) == .fail(.kernelPanic))
 
@@ -67,7 +67,7 @@ func bootWatchFailsAtOnceOnDetectorAndVMFailures() {
 
 @Test
 func bootWatchReportsAGuestStopOnlyAfterTheFirstMillisecond() {
-    let origin = ContinuousClock.now
+    let origin = Duration.zero
     var immediate = BootWatch(started: origin, whole: .seconds(180), stall: .seconds(90))
     #expect(immediate.receive(.guestStopped, at: origin) == .keepWaiting)
 
@@ -80,10 +80,38 @@ func bootWatchReportsAGuestStopOnlyAfterTheFirstMillisecond() {
 
 @Test
 func bootWatchStopsWhenStopIsRequested() {
-    let origin = ContinuousClock.now
+    let origin = Duration.zero
     var watch = BootWatch(started: origin, whole: .seconds(180), stall: .seconds(90))
     #expect(
         watch.receive(.stopRequested, at: origin + .seconds(1))
             == .fail(.androidBootFailed(detail: "the runtime was stopped during boot"))
     )
+}
+
+@Test
+func bootWatchDoesNotCountHostSleepTowardItsDeadlines() {
+    var clock = ManualBootClock()
+    var watch = BootWatch(started: clock.now, whole: .seconds(180), stall: .seconds(90))
+
+    clock.simulateHostSleep(by: .seconds(8 * 60 * 60))
+    #expect(clock.hostSleepDuration == .seconds(8 * 60 * 60))
+    #expect(watch.receive(.tick, at: clock.now) == .keepWaiting)
+
+    clock.advanceAwakeTime(by: .seconds(90))
+    #expect(watch.receive(.tick, at: clock.now) == .keepWaiting)
+    clock.advanceAwakeTime(by: .seconds(1))
+    #expect(watch.receive(.tick, at: clock.now) == .fail(.bootStalled(phase: .kernel)))
+}
+
+private struct ManualBootClock {
+    private(set) var now = Duration.zero
+    private(set) var hostSleepDuration = Duration.zero
+
+    mutating func advanceAwakeTime(by duration: Duration) {
+        now += duration
+    }
+
+    mutating func simulateHostSleep(by duration: Duration) {
+        hostSleepDuration += duration
+    }
 }

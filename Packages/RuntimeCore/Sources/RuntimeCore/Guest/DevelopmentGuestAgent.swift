@@ -46,6 +46,22 @@ public enum DevelopmentGuestTaskEvent: Equatable, Sendable {
     case vanished(packageID: String, taskID: Int32)
 }
 
+/// The result of applying a host time-zone identifier to Android.
+public enum GuestAgentTimeZoneUpdate: Equatable, Sendable {
+    /// The Guest Agent applied the requested identifier.
+    case applied
+    /// The Android image does not know the requested identifier.
+    case notFound
+}
+
+/// A notification lifecycle event relayed from the Guest Agent (desktop-integration.md §5.3).
+public enum DevelopmentNotificationEvent: Equatable, Sendable {
+    /// The Guest Agent reported a forwarded notification.
+    case posted(GPNotification)
+    /// The Guest Agent reported a notification that has gone.
+    case removed(GPNotificationRemoved)
+}
+
 /// The development Guest Agent of one boot (guest-components.md §3, §6.1): it installs and starts the agent, keeps
 /// the control connection, restarts a dead agent within the restart budget, and removes its forwards when it stops.
 public actor DevelopmentGuestAgent {
@@ -60,6 +76,16 @@ public actor DevelopmentGuestAgent {
     public nonisolated let displayEvents: AsyncStream<GuestDisplayEvent>
     /// `clipboard_changed` events from the guest (desktop-integration.md §4.3).
     public nonisolated let clipboardEvents: AsyncStream<GPClipData>
+    /// `notification_posted`/`notification_removed` events (desktop-integration.md §5.3).
+    public nonisolated let notificationEvents: AsyncStream<DevelopmentNotificationEvent>
+    /// `open_url_on_host` events (desktop-integration.md §7.2).
+    public nonisolated let urlEvents: AsyncStream<GPOpenUrlOnHost>
+    /// `recording_changed` events: the packages that just started or stopped
+    /// recording (desktop-integration.md §8.2).
+    public nonisolated let recordingEvents: AsyncStream<GPRecordingChanged>
+    /// The guest's Save-to-Mac offers (integration.proto event 44,
+    /// desktop-integration.md §6.3).
+    public nonisolated let exportOfferedEvents: AsyncStream<GPExportFileOffered>
     /// Android reboot notifications inferred from consecutive supervisor snapshots.
     public nonisolated var androidRestartEvents: AsyncStream<GuestAndroidRestart> {
         supervisor.androidRestartEvents
@@ -86,6 +112,10 @@ public actor DevelopmentGuestAgent {
     private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
     private let displayEventContinuation: AsyncStream<GuestDisplayEvent>.Continuation
     private let clipboardEventContinuation: AsyncStream<GPClipData>.Continuation
+    private let notificationEventContinuation: AsyncStream<DevelopmentNotificationEvent>.Continuation
+    private let urlEventContinuation: AsyncStream<GPOpenUrlOnHost>.Continuation
+    private let recordingEventContinuation: AsyncStream<GPRecordingChanged>.Continuation
+    private let exportOfferedContinuation: AsyncStream<GPExportFileOffered>.Continuation
     private var taskEventRelay: Task<Void, Never>?
 
     /// Creates the coordinator for `bundle`, reached through `adb`.
@@ -129,6 +159,26 @@ public actor DevelopmentGuestAgent {
         )
         self.clipboardEvents = clipboardEvents
         self.clipboardEventContinuation = clipboardEventContinuation
+        let (notificationEvents, notificationEventContinuation) = AsyncStream.makeStream(
+            of: DevelopmentNotificationEvent.self,
+            bufferingPolicy: .bufferingNewest(512)
+        )
+        self.notificationEvents = notificationEvents
+        self.notificationEventContinuation = notificationEventContinuation
+        let (exportOfferedEvents, exportOfferedContinuation) = AsyncStream.makeStream(
+            of: GPExportFileOffered.self)
+        self.exportOfferedEvents = exportOfferedEvents
+        self.exportOfferedContinuation = exportOfferedContinuation
+        let (recordingEvents, recordingEventContinuation) = AsyncStream.makeStream(
+            of: GPRecordingChanged.self)
+        self.recordingEvents = recordingEvents
+        self.recordingEventContinuation = recordingEventContinuation
+        let (urlEvents, urlEventContinuation) = AsyncStream.makeStream(
+            of: GPOpenUrlOnHost.self,
+            bufferingPolicy: .bufferingNewest(128)
+        )
+        self.urlEvents = urlEvents
+        self.urlEventContinuation = urlEventContinuation
         relay.set { [weak self] loss in
             guard let self else {
                 return false
@@ -145,6 +195,32 @@ public actor DevelopmentGuestAgent {
         async throws(GuestAgentFailure)
     {
         try await start(until: ContinuousClock.now + connectTimeout)
+    }
+
+    /// Reconnects after VM resume, restarting an unresponsive agent within the normal restart budget.
+    ///
+    /// The initial connection check and ping are each bounded to two seconds by the caller. A failed check uses the
+    /// same process restart path as a lost Guest Agent instead of leaving the runtime ready without its required agent.
+    public func resume(connectTimeout: Duration = .seconds(2)) async throws(GuestAgentFailure) -> Duration {
+        do {
+            try await supervisor.start(connectTimeout: connectTimeout)
+            return try await pingForResume()
+        } catch {
+            await supervisor.pause()
+            guard await handleLoss(.unresponsive) else {
+                throw .requiredAgentUnavailable
+            }
+            try await supervisor.start(connectTimeout: connectTimeout)
+            return try await pingForResume()
+        }
+    }
+
+    private func pingForResume() async throws(GuestAgentFailure) -> Duration {
+        do {
+            return try await supervisor.ping(timeout: .seconds(2))
+        } catch {
+            throw .operationFailed(reason: String(describing: error))
+        }
     }
 
     /// Starts the development agent against an absolute deadline supplied by the boot sequence.
@@ -255,6 +331,9 @@ public actor DevelopmentGuestAgent {
         taskEventContinuation.finish()
         displayEventContinuation.finish()
         clipboardEventContinuation.finish()
+        urlEventContinuation.finish()
+        recordingEventContinuation.finish()
+        exportOfferedContinuation.finish()
         // The input and IME connections belong to the control session, so they end with it.
         await inputConnection?.close()
         inputConnection = nil
@@ -392,6 +471,10 @@ public actor DevelopmentGuestAgent {
         let continuation = taskEventContinuation
         let displayContinuation = displayEventContinuation
         let clipboardContinuation = clipboardEventContinuation
+        let notificationContinuation = notificationEventContinuation
+        let urlContinuation = urlEventContinuation
+        let recordingContinuation = recordingEventContinuation
+        let exportOfferedContinuation = exportOfferedContinuation
         taskEventRelay = Task {
             for await event in updates {
                 guard let kind = event.kind else {
@@ -412,6 +495,16 @@ public actor DevelopmentGuestAgent {
                     displayContinuation.yield(.tasksCleared(displayID: tasks.displayID))
                 case .clipboardChanged(let clip):
                     clipboardContinuation.yield(clip)
+                case .notificationPosted(let notification):
+                    notificationContinuation.yield(.posted(notification))
+                case .notificationRemoved(let removal):
+                    notificationContinuation.yield(.removed(removal))
+                case .openURLOnHost(let event):
+                    urlContinuation.yield(event)
+                case .recordingChanged(let event):
+                    recordingContinuation.yield(event)
+                case .exportFileOffered(let offer):
+                    exportOfferedContinuation.yield(offer)
                 default:
                     break
                 }
@@ -450,6 +543,60 @@ public actor DevelopmentGuestAgent {
         try requireAvailable()
         do {
             _ = try await supervisor.send(GuestFocusDisplay(displayID: displayID))
+        } catch {
+            throw .operation(error)
+        }
+    }
+
+    /// Applies the host's ordered language preferences to Android.
+    public func applyLocale(_ languageTags: [String]) async throws(GuestAgentFailure) {
+        try requireAvailable()
+        do {
+            _ = try await supervisor.send(GuestSetLocale(languageTags: languageTags))
+        } catch {
+            throw .operation(error)
+        }
+    }
+
+    /// Applies an Android-known IANA identifier, returning `notFound` for an unknown zone.
+    public func applyTimeZone(_ identifier: String) async throws(GuestAgentFailure) -> GuestAgentTimeZoneUpdate {
+        try requireAvailable()
+        do throws(GuestProtocolFailure) {
+            _ = try await supervisor.send(GuestSetTimeZone(identifier: identifier))
+            return .applied
+        } catch {
+            if case .remote(code: .notFound, message: _, operation: _) = error {
+                return .notFound
+            }
+            throw .operation(error)
+        }
+    }
+
+    /// Applies Android's 12/24-hour clock preference.
+    public func applyClockFormat(isTwentyFourHour: Bool) async throws(GuestAgentFailure) {
+        try requireAvailable()
+        do {
+            _ = try await supervisor.send(
+                GuestSetClockFormat(format: isTwentyFourHour ? .twentyFour : .twelve)
+            )
+        } catch {
+            throw .operation(error)
+        }
+    }
+
+    /// Applies the Mac wall clock with the last measured successful ping round-trip time.
+    public func synchronizeWallClock(
+        unixTimeMilliseconds: Int64,
+        roundTripMilliseconds: UInt32
+    ) async throws(GuestAgentFailure) {
+        try requireAvailable()
+        do {
+            _ = try await supervisor.send(
+                GuestSyncTime(
+                    unixTimeMilliseconds: unixTimeMilliseconds,
+                    roundTripMilliseconds: roundTripMilliseconds
+                )
+            )
         } catch {
             throw .operation(error)
         }
@@ -720,11 +867,18 @@ extension DevelopmentGuestAgent: DisplayControlChannel {
 
     /// Finishes the tasks on one display before the host disables its scanout.
     public func clearDisplay(_ displayID: Int32) async throws(DisplayControlFailure) {
+        try await clearDisplay(displayID, policy: .finishTasks)
+    }
+
+    /// Applies a clear policy to one display (display-and-windowing.md §7.6):
+    /// `.finishTasks` finishes its tasks; `.moveToDefaultDisplay` moves the
+    /// display's tasks to display 0 behind the launcher instead.
+    public func clearDisplay(_ displayID: Int32, policy: GPClearPolicy) async throws(DisplayControlFailure) {
         guard await supervisor.state == .ready else {
             throw .unavailable
         }
         do throws(GuestProtocolFailure) {
-            _ = try await supervisor.send(GuestClearDisplay(displayID: displayID, policy: .finishTasks))
+            _ = try await supervisor.send(GuestClearDisplay(displayID: displayID, policy: policy))
         } catch {
             throw .operationFailed
         }

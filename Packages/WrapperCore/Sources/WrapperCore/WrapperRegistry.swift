@@ -387,12 +387,107 @@ public actor WrapperRegistry {
         try save()
     }
 
+    /// The pending entry waiting in `staging/<token>/`, for a
+    /// `placeStagedWrapper` call (wrapper.md §6.3).
+    public func pendingEntry(stagingToken: String) -> WrapperRegistryEntry? {
+        document.wrappers.first {
+            $0.state == .pending
+                && $0.stagingPath.map {
+                    URL(fileURLWithPath: $0).deletingLastPathComponent()
+                        .lastPathComponent == stagingToken
+                } ?? false
+        }
+    }
+
+    /// Marks the entry `refreshing` for a regeneration (wrapper.md §9.3
+    /// step 4): `pendingCdhash` lets the launch path accept both cdhashes
+    /// until `finishRefresh` runs.
+    public func beginRefresh(
+        bundleID: String,
+        stagingPath: String,
+        pendingCdhash: String
+    ) throws {
+        guard var entry = entry(bundleID: bundleID) else {
+            throw WrapperFailure.verificationFailed("no registry entry for \(bundleID)")
+        }
+        entry.state = .refreshing
+        entry.stagingPath = stagingPath
+        entry.pendingCdhash = pendingCdhash
+        upsert(entry)
+        try save()
+    }
+
+    /// Returns a `refreshing` entry to `active` after a refresh that
+    /// never reached the swap (wrapper.md §9.3 crash safety).
+    public func abortRefresh(bundleID: String) throws {
+        guard var entry = entry(bundleID: bundleID) else { return }
+        entry.state = .active
+        entry.stagingPath = nil
+        entry.pendingCdhash = nil
+        upsert(entry)
+        try save()
+    }
+
+    /// Ends a refresh (wrapper.md §9.3 step 7): the new cdhash becomes the
+    /// entry's, and the path/bookmark track a possible rename.
+    public func finishRefresh(
+        bundleID: String,
+        path: URL,
+        bookmark: Data,
+        kind: WrapperKind? = nil
+    ) throws {
+        guard var entry = entry(bundleID: bundleID) else {
+            throw WrapperFailure.verificationFailed("no registry entry for \(bundleID)")
+        }
+        entry.state = .active
+        if let kind { entry.kind = kind }
+        if let pendingCdhash = entry.pendingCdhash {
+            entry.cdhash = pendingCdhash
+        }
+        entry.pendingCdhash = nil
+        entry.stagingPath = nil
+        entry.path = path.path
+        entry.fileName = path.deletingPathExtension().lastPathComponent
+        entry.bookmark = bookmark.isEmpty ? entry.bookmark : bookmark.base64EncodedString()
+        entry.refreshedAt = Date()
+        upsert(entry)
+        try save()
+    }
+
     /// Records the moved or renamed location of an entry (wrapper-json.md §4.3).
     public func updateLocation(bundleID: String, path: URL, bookmark: Data) throws {
         guard var entry = entry(bundleID: bundleID) else { return }
         entry.path = path.path
         entry.fileName = path.deletingPathExtension().lastPathComponent
         entry.bookmark = bookmark.base64EncodedString()
+        upsert(entry)
+        try save()
+    }
+
+    /// Updates the recorded `CFBundleDisplayName` after the package's label
+    /// changes (e.g. a locale sync), so the next validation flags the wrapper
+    /// for refresh (wrapper.md §8.4).
+    public func setDisplayName(bundleID: String, displayName: String) throws {
+        guard var entry = entry(bundleID: bundleID) else { return }
+        entry.displayName = displayName
+        upsert(entry)
+        try save()
+    }
+
+    /// Records the SHA-256 hex digest of the 1024 px icon master written at
+    /// generation; `nil` clears it (custom icons carry no digest — §8.5).
+    public func setIconDigest(bundleID: String, digest: String?) throws {
+        guard var entry = entry(bundleID: bundleID) else { return }
+        entry.iconDigest = digest
+        upsert(entry)
+        try save()
+    }
+
+    /// Records the custom icon file name kept in `Wrappers/icons/`
+    /// (wrapper.md §4.2); `nil` restores the Android icon choice.
+    public func setCustomIconFile(bundleID: String, fileName: String?) throws {
+        guard var entry = entry(bundleID: bundleID) else { return }
+        entry.customization.iconFile = fileName
         upsert(entry)
         try save()
     }

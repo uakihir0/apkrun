@@ -589,9 +589,9 @@ The guest agents are designed in [guest-components.md](guest-components.md). Thi
 
 ### 11.1 Product definition
 
-The source is `Guest/product/`, mapped into the AOSP tree as `device/apkrun/apkrun_arm64/`. It contains `AndroidProducts.mk` (lunch targets `apkrun_arm64-trunk_staging-userdebug` and `-user`), `apkrun_arm64.mk` (inherits `device/google/cuttlefish/vsoc_arm64_only/phone/aosp_cf.mk`; `PRODUCT_PACKAGES += apkrun_vsockd ApkRunGuest ApkRunStore`), `Android.bp` (agent APKs with the platform certificate, privileged, in `/system_ext/priv-app`), `prebuilt/` (git-ignored agent APKs copied by `scripts/build-guest.sh`), `init/apkrun.rc`, `sepolicy/`, `permissions/`, `overlay/`, `settings/`, and `manifest/pinned.xml` (the `repo manifest -r` snapshot for release builds).
+The source is `Guest/product/`, mapped into the AOSP tree as `device/apkrun/apkrun_arm64/`. It contains `AndroidProducts.mk` (lunch targets `apkrun_arm64-trunk_staging-userdebug` and `-user`), `apkrun_arm64.mk` (inherits `device/google/cuttlefish/vsoc_arm64_only/phone/aosp_cf.mk`; `PRODUCT_PACKAGES += apkrun_vsockd ApkRunGuest ApkRunStore`), `Android.bp` (agent APKs with the platform certificate, privileged, in `/system_ext/priv-app`), `prebuilt/` (git-ignored agent APKs copied by `scripts/aosp/build-product.sh`), `init/apkrun.rc`, `sepolicy/`, `permissions/`, `overlay/`, `settings/`, and `manifest/pinned.xml` (the `repo manifest -r` snapshot for release builds).
 
-- The policy starts in `BOARD_SEPOLICY_DIRS`. If Treble `neverallow` checks reject `/system_ext` types, #36 moves those rules to `SYSTEM_EXT_PRIVATE_SEPOLICY_DIRS` and records the split here.
+- The policy starts in `BOARD_SEPOLICY_DIRS`. If Treble `neverallow` checks reject `/system_ext` types, #36 moves those rules to `SYSTEM_EXT_PRIVATE_SEPOLICY_DIRS` and records the split here. The userdebug-only permissive rules live in `sepolicy/userdebug/`, which only the userdebug variant adds to `BOARD_SEPOLICY_DIRS`; `scripts/check-sepolicy.sh` rejects a permissive domain in `user` inputs (ADR-0020, R-13).
 - `PRODUCT_IGNORE_ALL_ANDROIDMK := true`: all modules use `Android.bp`. The base product uses a 16 KiB page size, which the Rust and Kotlin components do not assume.
 - `ro.apkrun.product=1`, plus the default profile's GPU properties. `bundle --image-version` sets the image version, and ImageCore passes `androidboot.apkrun.image` at every boot.
 - `Guest/product/mesa/` (#99) holds the pinned EGL, GLES, and Gallium prebuilts, staged by `scripts/guest/stage-mesa-product.sh`. It supplies neither the product nor a SELinux policy.
@@ -621,9 +621,9 @@ The source is `Guest/product/`, mapped into the AOSP tree as `device/apkrun/apkr
 | Build | Variant | AVB state |
 |---|---|---|
 | Development | `apkrun_arm64-trunk_staging-userdebug` (M5 onward, CI) | `orange`, unlocked |
-| Release | `apkrun_arm64-trunk_staging-user`, release keys | open (OQ-36) |
+| Release | `apkrun_arm64-trunk_staging-user`, release keys | `orange`, unlocked; dm-verity on (OQ-36, ADR-0020) |
 
-Proposed for release: pass `orange` and unlocked, but keep dm-verity on through the vbmeta hashtree descriptors. The guest has no bootloader, so it cannot establish a hardware root of trust. The integrity chain is host-side: signed manifest, file hashes, then `os.img` read-only. Claiming `green` would misstate the device state.
+Decided for release (ADR-0020): pass `orange` and unlocked, but keep dm-verity on through the vbmeta hashtree descriptors. The guest has no bootloader, so it cannot establish a hardware root of trust. The integrity chain is host-side: signed manifest, file hashes, then `os.img` read-only. Claiming `green` would misstate the device state.
 
 ### 11.5 Build
 
@@ -759,7 +759,7 @@ Subsystem `io.apkrun.image`, categories `store`, `install`, `verify`, `instance`
 
 ## 16. Open items
 
-- Release variant: signing and the AVB state (§11.4). OQ-36.
+- Release variant: signing key management on the builder (§11.4, ADR-0020). The AVB state is settled (OQ-36).
 - Hosting of the image feed and archives (§10.4). OQ-01.
 - Archive extraction writes zero runs before holes are punched (§10.4). R-25.
 - Licensing of redistributed images (§2.3). R-10, #94.

@@ -249,8 +249,8 @@ xcodebuild test -scheme IntegrationTests \
 - To keep the renderer operations for the replay test, add `TEST_RUNNER_APKRUN_TEST_VIRGL_RECORDING=/tmp/<name>.json` to the `xcodebuild test` line. Then `APKRUN_TEST_KMSCUBE_RECORDING=/tmp/<name>.json swift test --traits TestReadback --filter theKmscubeSessionReplaysOnTheDeviceWithoutHostReadbacks` replays it. The path must be under `/tmp`.
 - VM tests need `com.apple.security.virtualization`, so they run in the signed `APKRunTestHost` ([build-system.md](build-system.md) §12.4).
 - For the Android suites, pass `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"` and an `APKRUN_ANDROID_HOME` outside `~/Documents` that holds `platform-tools`: `mkdir -p "${TMPDIR:-/tmp}/apkrun-test-sdk" && cp -R "$ANDROID_HOME/platform-tools" "${TMPDIR:-/tmp}/apkrun-test-sdk/"`. The copy is the same `adb` binary.
-- The Guest Agent, package, and input suites read `APKRUN_GUEST_DIR` (`scripts/build-guest.sh --out /tmp/apkrun-test-guest`) and `APKRUN_FIXTURE_APK` (HelloText). The AndroidPackage suite uses RuntimeAPI for import, install, list, details, and uninstall; its headless activity and force-stop checks still use ADB.
-- `AndroidInputTests` also reads `APKRUN_FIXTURE_COMPOSE_APK` (`scripts/build-fixtures.sh --app HelloCompose`, copied to `/tmp`). It needs the debug HelloText, whose `TEXT` and `DETAILS` broadcasts exist only in the debug manifest: `Tests/Fixtures/AndroidApps/gradlew -p Tests/Fixtures/AndroidApps :HelloText:assembleDebug`, then copy `HelloText/build/outputs/apk/debug/HelloText-debug.apk` to `APKRUN_FIXTURE_APK`. The input configuration also reads the staged `virgl-runtime/`, because a host built outside the checkout cannot find the VirGL libraries from its executable.
+- The Guest Agent, package, idle-suspend, and input suites read `APKRUN_GUEST_DIR` (`scripts/build-guest.sh --out /tmp/apkrun-test-guest`) and `APKRUN_FIXTURE_APK` (HelloText). The AndroidPackage suite uses RuntimeAPI for import, install, list, details, and uninstall; its headless activity and force-stop checks still use ADB.
+- `AndroidInputTests` also reads `APKRUN_FIXTURE_COMPOSE_APK` (`scripts/build-fixtures.sh --app HelloCompose`, copied to `/tmp`). It needs the debug HelloText, whose `TEXT` and `DETAILS` broadcasts exist only in the debug manifest: `Tests/Fixtures/AndroidApps/gradlew -p Tests/Fixtures/AndroidApps :HelloText:assembleDebug`, then copy `Tests/Fixtures/AndroidApps/HelloText/build/outputs/apk/debug/HelloText-debug.apk` to `/tmp/apkrun-test-fixtures/HelloText.apk` (`APKRUN_FIXTURE_APK`). The input configuration also reads the staged `virgl-runtime/`, because a host built outside the checkout cannot find the VirGL libraries from its executable.
 
 ---
 
@@ -371,7 +371,16 @@ The `apkrun-perf` input scenario posts events with `CGEvent.postToPid`, which ne
 
 The harness checks `AXIsProcessTrusted()` at start and fails with a message that names this section when the permission is missing.
 
-### 6.4 Secrets and credentials
+### 6.4 Virtual audio devices
+
+The T2/T3 audio checks of #84 and #85 need virtual audio devices that only lab Macs carry ([test-strategy.md](../04-plan/test-strategy.md) §8.7, checklist C10-4/C10-5):
+
+- **Loopback output (#84).** A virtual output device whose stream is capturable, e.g. BlackHole 2ch. Install the pinned version through Homebrew (`brew install blackhole-2ch`), then select it as the macOS default output for the measurement run. The latency measure captures the click track on that device; the error bound of the capture path is stated in the run report. Restore the real output afterwards.
+- **Virtual input (#85).** A virtual input device the test signal plays into. The same BlackHole install serves it: route the signal file through the device and select it as the default input.
+
+These are runner prerequisites. A T2/T3 job on a runner without them skips with a message that names this section; on a GitHub-hosted runner they are never installed.
+
+### 6.5 Secrets and credentials
 
 | Secret | Where | Used by |
 |---|---|---|

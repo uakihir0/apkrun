@@ -172,3 +172,17 @@ extension DevelopmentGuestAgent {
         return ordered
     }
 }
+
+extension DevelopmentGuestAgent {
+    /// The agent's health counters via guest protocol operation 21
+    /// (guest-protocol.md §7.4): uptime, mode, display and input counters, and
+    /// the IME, notification-listener, and ADB flags the `agent.*` checks read.
+    public func health() async throws(GuestAgentFailure) -> GPHealth {
+        try requireAvailable()
+        do {
+            return try await supervisor.send(GuestGetHealth())
+        } catch {
+            throw .operation(error)
+        }
+    }
+}

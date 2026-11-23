@@ -56,4 +56,5 @@ protobuf {
 dependencies {
     implementation(libs.protobuf.javalite)
     testImplementation(libs.junit)
+    testImplementation(libs.jazzer.junit)
 }

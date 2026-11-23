@@ -1,25 +1,46 @@
 package io.apkrun.guest.daemon
 
+import android.os.Process
 import android.os.SystemClock
 import android.provider.Settings
+import io.apkrun.guest.files.FilesBridge
 import io.apkrun.guest.protocol.GuestFailure
+import io.apkrun.guest.protocol.v1.ActivateNotification
+import io.apkrun.guest.protocol.v1.AgentMode
 import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.ClipData
 import io.apkrun.guest.protocol.v1.CollectDiagnostics
 import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
+import io.apkrun.guest.protocol.v1.DismissNotification
+import io.apkrun.guest.protocol.v1.ExportStart
 import io.apkrun.guest.protocol.v1.GuestErrorCode
+import io.apkrun.guest.protocol.v1.Health
+import io.apkrun.guest.protocol.v1.ImportFiles
+import io.apkrun.guest.protocol.v1.ImportResult
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
 import io.apkrun.guest.protocol.v1.ListPackages
+import io.apkrun.guest.protocol.v1.MemoryInfo
 import io.apkrun.guest.protocol.v1.PackageInfo
 import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
+import io.apkrun.guest.protocol.v1.ResolveExport
+import io.apkrun.guest.protocol.v1.ResolveUrl
+import io.apkrun.guest.protocol.v1.SetClockFormat
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
+import io.apkrun.guest.protocol.v1.SetLocale
+import io.apkrun.guest.protocol.v1.SetMicrophoneAccess
+import io.apkrun.guest.protocol.v1.SetNotificationForwarding
+import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
+import io.apkrun.guest.protocol.v1.SetTimeZone
+import io.apkrun.guest.protocol.v1.SetUrlRedirect
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
+import io.apkrun.guest.protocol.v1.SyncTime
 import io.apkrun.guest.protocol.v1.SystemState
 import io.apkrun.guest.runtime.HiddenApi
 import io.apkrun.guest.runtime.SystemContext
+import io.apkrun.guest.url.UrlRedirect
 
 /**
  * The operations of the agent on the device, over the services (guest-components.md §6.1). The
@@ -32,6 +53,12 @@ internal class DeviceOperations(
     private val packages: PackageService,
     private val diagnostics: DiagnosticsService,
     private val clipboard: ClipboardBridge,
+    private val notifications: NotificationBridge,
+    private val urlRedirect: UrlRedirect,
+    private val microphone: MicrophoneGate,
+    private val files: FilesBridge,
+    private val input: InputService,
+    private val localeTime: LocaleTimeService = LocaleTimeService(),
 ) : AgentOperations {
     override fun snapshot(): Snapshot =
         Snapshot.newBuilder()
@@ -40,9 +67,45 @@ internal class DeviceOperations(
             .addAllTasks(tasks.list())
             .setFocusedDisplayId(tasks.focusedDisplayId())
             .setImeSelected(imeSelected())
-            .setNotificationListenerEnabled(false)
+            .setNotificationListenerEnabled(notifications.listenerEnabled())
             .setClipboardSeq(clipboard.currentSequence())
             .build()
+
+    override fun health(): Health {
+        val activityManager =
+            SystemContext.get().getSystemService(android.app.ActivityManager::class.java)
+        val memoryInfo = android.app.ActivityManager.MemoryInfo()
+        activityManager?.getMemoryInfo(memoryInfo)
+        return Health.newBuilder()
+            .setAgentUptimeMs(SystemClock.elapsedRealtime())
+            .setMode(
+                if (Process.myUid() == Process.SHELL_UID) {
+                    AgentMode.AGENT_MODE_DEVELOPMENT_SHELL
+                } else {
+                    AgentMode.AGENT_MODE_PRIVILEGED_APP
+                }
+            )
+            .setDisplaysCount(displays.readDisplays().size)
+            .setImeSelected(imeSelected())
+            .setNotificationListenerEnabled(notifications.listenerEnabled())
+            .setAdbEnabled(adbEnabled())
+            .setMemory(
+                MemoryInfo.newBuilder()
+                    .setTotalKb(memoryInfo.totalMem / 1024)
+                    .setAvailableKb(memoryInfo.availMem / 1024)
+                    .setLowMemory(memoryInfo.lowMemory)
+            )
+            .setInput(input.counters())
+            .build()
+    }
+
+    /** Whether ADB is enabled on the device (Health.adb_enabled). */
+    private fun adbEnabled(): Boolean =
+        Settings.Global.getInt(
+            SystemContext.get().contentResolver,
+            Settings.Global.ADB_ENABLED,
+            0,
+        ) == 1
 
     override fun setDisplayPolicy(request: SetDisplayPolicy) = displays.applyPolicy(request)
 
@@ -68,10 +131,44 @@ internal class DeviceOperations(
 
     override fun listPackages(request: ListPackages): PackageList = packages.list(request)
 
+    override fun setLocale(request: SetLocale) = localeTime.setLocale(request)
+
+    override fun setTimeZone(request: SetTimeZone) = localeTime.setTimeZone(request)
+
+    override fun setClockFormat(request: SetClockFormat) = localeTime.setClockFormat(request)
+
+    override fun syncTime(request: SyncTime) = localeTime.syncTime(request)
+
     override fun setClipboard(request: ClipData) = clipboard.setClipboard(request)
+
+    override fun activateNotification(request: ActivateNotification) =
+        notifications.activate(
+            request.key,
+            if (request.hasActionIndex()) request.actionIndex else null,
+            request.displayId,
+        )
+
+    override fun dismissNotification(request: DismissNotification) =
+        notifications.dismiss(request.key)
+
+    override fun setNotificationForwarding(request: SetNotificationForwarding) =
+        notifications.setForwarding(request)
+
+    override fun setUrlRedirect(request: SetUrlRedirect) = urlRedirect.setRedirect(request)
+
+    override fun setMicrophoneAccess(request: SetMicrophoneAccess) = microphone.setAccess(request)
+
+    override fun resolveUrl(request: ResolveUrl) = urlRedirect.resolve(request)
 
     override fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult =
         diagnostics.collect(request)
+
+    override fun importFiles(request: ImportFiles): ImportResult = files.import(request)
+
+    override fun resolveExport(request: ResolveExport): ExportStart = files.resolveExport(request)
+
+    override fun setSharedFolderAccess(request: SetSharedFolderAccess) =
+        files.applySharedAccess(request)
 
     /** Whether the development IME is the selected input method (input.md §5.6). */
     private fun imeSelected(): Boolean =

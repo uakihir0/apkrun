@@ -13,6 +13,9 @@ configs:
 packages:
   APKRun:
     path: .
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.10.1
 
 aggregateTargets:
   BuildStamp:
@@ -33,14 +36,23 @@ settings:
     ALWAYS_SEARCH_USER_PATHS: NO
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
+    APKRUN_CHANNEL: "dev"
+    APKRUN_SU_FEED_URL: "https://apkrun.io/apkrun/appcast.xml"
     ENABLE_HARDENED_RUNTIME: YES
     SWIFT_TREAT_WARNINGS_AS_ERRORS: "$(APKRUN_CI)"
     GCC_TREAT_WARNINGS_AS_ERRORS: "$(APKRUN_CI)"
   configs:
     Debug:
       APKRUN_BUILD_IDENTITY: dev
+      # The committed test key is development-only (Tests/keys). A Release
+      # build ships an empty key unless the release pipeline exports
+      # `APKRUN_RELEASE_PUBLIC_ED_KEY` — a forged feed then verifies nothing.
+      APKRUN_SU_PUBLIC_ED_KEY: "SWpdhgyuYC9qtfgHtlSL8IwmHxmK0XqB21A6bc8GlKs="
+      GCC_PREPROCESSOR_DEFINITIONS: "APKRUN_SELF_UPDATE=0"
     Release:
       APKRUN_BUILD_IDENTITY: release
+      APKRUN_SU_PUBLIC_ED_KEY: "$(APKRUN_RELEASE_PUBLIC_ED_KEY)"
+      GCC_PREPROCESSOR_DEFINITIONS: "APKRUN_SELF_UPDATE=1"
 
 targets:
   APKRun:
@@ -48,6 +60,8 @@ targets:
     platform: macOS
     sources:
       - path: Apps/APKRun
+        excludes:
+          - Tests
     settings:
       base:
         PRODUCT_NAME: APKRun
@@ -71,6 +85,8 @@ targets:
         product: RuntimeAPI
       - package: APKRun
         product: DiagnosticsCore
+      - package: Sparkle
+        product: Sparkle
       - target: apkrund
         embed: false
         link: false
@@ -149,8 +165,86 @@ targets:
           /usr/bin/ditto "$BUILT_PRODUCTS_DIR/APKRunMenuBar.app" "$login_items_directory/APKRunMenuBar.app"
         outputFiles:
           - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LoginItems/APKRunMenuBar.app"
+      - name: Write Components
+        basedOnDependencyAnalysis: false
+        script: "$SRCROOT/scripts/build/write-components.py"
+        inputFiles:
+          - "$(SRCROOT)/scripts/build/write-components.py"
+          - "$(SRCROOT)/ThirdParty/ThirdParty.lock.json"
+          - "$(SRCROOT)/Packages/RuntimeAPI/Sources/RuntimeAPI/RuntimeAPI.swift"
+          - "$(SRCROOT)/Packages/GuestProtocol/Sources/GuestProtocol/ProtocolVersion.swift"
+          - "$(SRCROOT)/Packages/DiagnosticsCore/Sources/DiagnosticsCore/Build/ComponentManifest.swift"
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/components.json"
+      - name: Embed Compatibility Database
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          /usr/bin/ditto \
+            "$SRCROOT/Tests/Compatibility/database/compatibility.json" \
+            "$TARGET_BUILD_DIR/$WRAPPER_NAME/Contents/Resources/compatibility.json"
+        inputFiles:
+          - "$(SRCROOT)/Tests/Compatibility/database/compatibility.json"
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/compatibility.json"
     scheme:
-      testTargets: []
+      testTargets:
+        - APKRunTests
+        - APKRunSettingsTests
+
+  APKRunSettingsTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Apps/APKRun/Settings/LocaleTimeSettingsStore.swift
+      - path: Apps/APKRun/Tests/LocaleTimeSettingsStoreTests.swift
+    dependencies:
+      - target: BuildStamp
+        embed: false
+        link: false
+      - package: APKRun
+        product: RuntimeClient
+      - package: APKRun
+        product: RuntimeAPI
+    settings:
+      base:
+        PRODUCT_NAME: APKRunSettingsTests
+        PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.settings-tests
+        ENABLE_HARDENED_RUNTIME: NO
+        GENERATE_INFOPLIST_FILE: YES
+    scheme: {}
+
+  APKRunTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Apps/APKRun/Tests
+      - path: Apps/APKRun/Models/RuntimeService.swift
+      - path: Apps/APKRun/Models/TopicPollingModel.swift
+      - path: Apps/APKRun/Models/HomeModels.swift
+      - path: Apps/APKRun/Models/AppRouter.swift
+      - path: Apps/APKRun/Models/RuntimeStatusModel.swift
+      - path: Apps/APKRun/Features/Home/HomeRowStatus.swift
+      - path: Apps/APKRun/Features/AddFlow/AddFlowModel.swift
+      - path: Apps/APKRun/Features/AppPage/PackageDetailModel.swift
+      - path: Apps/APKRun/Features/Diagnostics/DiagnosticsReportSheet.swift
+      - path: Apps/APKRun/Features/Settings/SettingsModel.swift
+      - path: Apps/APKRun/Settings/LocaleTimeSettingsStore.swift
+      - path: Apps/APKRun/Maintenance/SelfUpdateModel.swift
+      - path: Apps/APKRun/Maintenance/UpdateInstallCoordinator.swift
+    settings:
+      base:
+        PRODUCT_NAME: APKRunTests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: BuildStamp
+        embed: false
+        link: false
+      - package: APKRun
+        product: RuntimeClient
+      - package: APKRun
+        product: RuntimeAPI
+    scheme: {}
 
   APKRunMenuBar:
     type: application
@@ -175,6 +269,31 @@ targets:
         product: RuntimeClient
       - package: APKRun
         product: RuntimeAPI
+      - package: APKRun
+        product: DiagnosticsCore
+    scheme:
+      testTargets:
+        - APKRunMenuBarTests
+
+  APKRunMenuBarTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Apps/APKRunMenuBar/MenuBarPresentation.swift
+      - path: Apps/APKRunMenuBar/MenuBarModel.swift
+      - path: Apps/APKRun/MenuBarItemSettings.swift
+      - path: Tests/MenuBarTests
+    settings:
+      base:
+        PRODUCT_NAME: APKRunMenuBarTests
+        PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.menu-bar-tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+    dependencies:
+      - package: APKRun
+        product: RuntimeAPI
+      - package: APKRun
+        product: RuntimeClient
       - package: APKRun
         product: DiagnosticsCore
 
@@ -252,6 +371,19 @@ targets:
         INFOPLIST_EXPAND_BUILD_SETTINGS: YES
         CODE_SIGN_ENTITLEMENTS: Tests/IntegrationTests/Host/APKRunTestHost.entitlements
 
+  HostUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: Tests/IntegrationTests/HostUITests
+    settings:
+      base:
+        PRODUCT_NAME: HostUITests
+        PRODUCT_BUNDLE_IDENTIFIER: io.apkrun.host-ui-tests
+        TEST_TARGET_NAME: APKRun
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: APKRun
   IntegrationTests:
     type: bundle.unit-test
     platform: macOS
@@ -265,7 +397,10 @@ targets:
       - path: Tests/IntegrationTests/AndroidGraphicsTests
       - path: Tests/IntegrationTests/G3GraphicsTests
       - path: Tests/IntegrationTests/GuestAgentTests
+      - path: Tests/IntegrationTests/SecurityTests
       - path: Tests/IntegrationTests/AndroidInputTests
+      - path: Tests/IntegrationTests/WrapperDesktopTests
+      - path: Tests/IntegrationTests/DaemonTests
       - path: Tests/IntegrationTests/Support
       - path: Tests/IntegrationTests/RunResources
         excludes:
@@ -344,6 +479,8 @@ targets:
         product: RuntimeCore
       - package: APKRun
         product: RuntimeHost
+      - package: APKRun
+        product: WrapperCore
     scheme:
       testTargets:
         - AcceptanceTests

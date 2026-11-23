@@ -142,8 +142,20 @@ public actor AppWrapperGenerator {
         _ request: WrapperGenerationRequest
     ) async throws(WrapperFailure) -> GeneratedWrapper {
         let configuration = request.configuration
-        guard configuration.kind == .local else {
-            throw .verificationFailed("\(configuration.kind.rawValue) wrappers are #89/#90")
+        switch configuration.kind {
+        case .local:
+            guard configuration.bootstrap == nil else {
+                throw .verificationFailed("local wrapper carries a bootstrap set")
+            }
+        case .portable:
+            guard let payload = configuration.bootstrap,
+                payload.files.map(\.name) == payload.document.files.map(\.name)
+            else {
+                throw .verificationFailed("portable wrapper needs a matching bootstrap set")
+            }
+            try BootstrapDocumentCodec.validate(payload.document)
+        case .distribution:
+            throw .verificationFailed("distribution wrappers build through stageForDistribution, not perform")
         }
 
         // 1. validate the package ID syntax, the name, the icon, the template.
@@ -175,9 +187,19 @@ public actor AppWrapperGenerator {
         let bundleID = BundleIDMapper.map(configuration.packageID)
 
         // 3. resolve the destination and check conflicts (wrapper.md §6.4).
+        //    A TCC-protected destination defers placement (§6.3): the bundle
+        //    is still built and signed in staging, the client moves it, and
+        //    `placeStagedWrapper` finishes registration.
         let stagingID = newStagingToken()
-        let destination = try environment.installer.resolveDestination(
-            request.destination, stagingToken: stagingID)
+        var deferredDestination: URL?
+        let destination: URL
+        do {
+            destination = try environment.installer.resolveDestination(
+                request.destination, stagingToken: stagingID)
+        } catch WrapperFailure.destinationNotAccessible(let directory, _) {
+            deferredDestination = directory
+            destination = directory
+        }
         let finalURL = destination.appendingPathComponent("\(fileName).app", isDirectory: true)
         let existing = await environment.registry.entry(bundleID: bundleID)
         // The security bookmark tracks the bundle across a move in Finder,
@@ -212,7 +234,9 @@ public actor AppWrapperGenerator {
                 throw .wrapperExists(configuration.packageID, existingURL)
             }
         }
-        if fileManager.fileExists(atPath: finalURL.path) {
+        // A protected folder cannot be listed; the client's move handles
+        // whatever already sits at the name it picks.
+        if deferredDestination == nil, fileManager.fileExists(atPath: finalURL.path) {
             if environment.installer.isWrapperOf(configuration.packageID, at: finalURL) {
                 guard request.replace == .sameWrapper else {
                     throw .wrapperExists(configuration.packageID, finalURL)
@@ -272,7 +296,13 @@ public actor AppWrapperGenerator {
             throw .registryUnavailable
         }
 
-        // 11. place.
+        // 11. place. A deferred destination leaves the bundle staged: the
+        // pending entry's stagingPath carries the token `placeStagedWrapper`
+        // matches, and staging cleanup expires it (wrapper.md §6.3).
+        if let deferredDestination {
+            throw .destinationNotAccessible(
+                deferredDestination, stagingToken: stagingID)
+        }
         _ = try environment.installer.place(staged: stagedBundle, to: finalURL)
 
         // 12. bookmark + active.
@@ -297,6 +327,92 @@ public actor AppWrapperGenerator {
             cdhash: cdhash,
             launcherVersion: environment.launcher.launcherVersion
         )
+    }
+
+    /// Builds and signs the refreshed bundle inside `stagingDirectory`
+    /// (wrapper.md §9.3 step 3). The caller swaps `Contents` into the live
+    /// bundle and finishes the registry update; nothing is placed or
+    /// registered here. Returns the staged bundle URL and its cdhash.
+    public func stageForRefresh(
+        _ request: WrapperGenerationRequest,
+        stagingDirectory: URL,
+        fileName: String
+    ) throws(WrapperFailure) -> (bundle: URL, cdhash: String) {
+        let configuration = request.configuration
+        switch configuration.kind {
+        case .local:
+            guard configuration.bootstrap == nil else {
+                throw .verificationFailed("local wrapper carries a bootstrap set")
+            }
+        case .portable:
+            guard let payload = configuration.bootstrap,
+                payload.files.map(\.name) == payload.document.files.map(\.name)
+            else {
+                throw .verificationFailed("portable wrapper needs a matching bootstrap set")
+            }
+            try BootstrapDocumentCodec.validate(payload.document)
+        case .distribution:
+            throw .verificationFailed("distribution wrappers build through stageForDistribution, not perform")
+        }
+        let template = environment.launcher.executableURL
+        guard fileManager.fileExists(atPath: template.path),
+            WrapperCodeSign.isARM64(template),
+            WrapperCodeSign.signatureIsValid(bundleURL: template),
+            WrapperCodeSign.cdhash(of: template) != nil
+        else {
+            throw .launcherTemplateInvalid("missing, unsigned, or not arm64")
+        }
+        let bundleID = BundleIDMapper.map(configuration.packageID)
+        let stagedBundle = stagingDirectory.appendingPathComponent(
+            "\(fileName).app", isDirectory: true)
+        try writeBundle(
+            at: stagedBundle,
+            fileName: fileName,
+            bundleID: bundleID,
+            configuration: configuration
+        )
+        let cdhash = try WrapperSigner.sign(bundleURL: stagedBundle, bundleID: bundleID)
+        return (stagedBundle, cdhash)
+    }
+
+    /// Builds the unsigned distribution bundle inside `stagingDirectory`
+    /// (wrapper.md §11 step 1): a portable bundle whose
+    /// `APKRunWrapperKind` is `distribution`. It is never signed ad-hoc —
+    /// `DistributionWrapperBuilder` signs it with the caller's Developer ID
+    /// — and never placed or registered. Returns the staged bundle URL.
+    public func stageForDistribution(
+        _ request: WrapperGenerationRequest,
+        stagingDirectory: URL,
+        fileName: String
+    ) throws(WrapperFailure) -> URL {
+        let configuration = request.configuration
+        guard configuration.kind == .distribution else {
+            throw .verificationFailed("stageForDistribution needs kind distribution")
+        }
+        guard let payload = configuration.bootstrap,
+            payload.files.map(\.name) == payload.document.files.map(\.name)
+        else {
+            throw .verificationFailed("distribution wrapper needs a matching bootstrap set")
+        }
+        try BootstrapDocumentCodec.validate(payload.document)
+        let template = environment.launcher.executableURL
+        guard fileManager.fileExists(atPath: template.path),
+            WrapperCodeSign.isARM64(template),
+            WrapperCodeSign.signatureIsValid(bundleURL: template),
+            WrapperCodeSign.cdhash(of: template) != nil
+        else {
+            throw .launcherTemplateInvalid("missing, unsigned, or not arm64")
+        }
+        let bundleID = BundleIDMapper.map(configuration.packageID)
+        let stagedBundle = stagingDirectory.appendingPathComponent(
+            "\(fileName).app", isDirectory: true)
+        try writeBundle(
+            at: stagedBundle,
+            fileName: fileName,
+            bundleID: bundleID,
+            configuration: configuration
+        )
+        return stagedBundle
     }
 
     /// Writes the file tree of wrapper.md §2 for a non-portable wrapper.
@@ -354,6 +470,11 @@ public actor AppWrapperGenerator {
                 to: resources.appendingPathComponent("AppIcon.icns"), options: .atomic)
 
             // The launcher executable by clonefile(2), keeping its signature.
+            // Contents/Resources/bootstrap/ for a portable wrapper (§10.1).
+            if let payload = configuration.bootstrap {
+                try Self.writeBootstrap(payload, into: resources)
+            }
+
             let executable = macos.appendingPathComponent("APKRunLauncher")
             if clonefile(environment.launcher.executableURL.path, executable.path, 0) != 0 {
                 // FAT filesystems lack clonefile; fall back to a byte copy.
@@ -367,10 +488,40 @@ public actor AppWrapperGenerator {
 
         // File modes: 0644 for data, 0755 for the executable.
         setMode(0o644, at: contents.appendingPathComponent("Info.plist"))
+        if configuration.bootstrap != nil {
+            let bootstrap = resources.appendingPathComponent("bootstrap")
+            setMode(0o644, at: bootstrap.appendingPathComponent("bootstrap.json"))
+            for file in configuration.bootstrap?.files ?? [] {
+                setMode(0o644, at: bootstrap.appendingPathComponent(file.name))
+            }
+        }
         setMode(0o644, at: contents.appendingPathComponent("PkgInfo"))
         setMode(0o644, at: resources.appendingPathComponent("wrapper.json"))
         setMode(0o644, at: resources.appendingPathComponent("AppIcon.icns"))
         setMode(0o755, at: macos.appendingPathComponent("APKRunLauncher"))
+    }
+
+    /// Writes `bootstrap.json` (sorted keys) and clones the payload files
+    /// into `bootstrap/` (wrapper.md §10.1).
+    private static func writeBootstrap(
+        _ payload: BootstrapSet, into resources: URL
+    ) throws(WrapperFailure) {
+        let bootstrap = resources.appendingPathComponent("bootstrap")
+        do {
+            try FileManager.default.createDirectory(at: bootstrap, withIntermediateDirectories: true)
+            try BootstrapDocumentCodec.encode(payload.document).write(
+                to: bootstrap.appendingPathComponent("bootstrap.json"), options: .atomic)
+            for file in payload.files {
+                let destination = bootstrap.appendingPathComponent(file.name)
+                if clonefile(file.sourceURL.path, destination.path, 0) != 0 {
+                    try FileManager.default.copyItem(at: file.sourceURL, to: destination)
+                }
+            }
+        } catch let error as WrapperFailure {
+            throw error
+        } catch {
+            throw .verificationFailed("bootstrap write failed: \(error.localizedDescription)")
+        }
     }
 
     /// Wraps an already-finished PNG in an `icns` container.

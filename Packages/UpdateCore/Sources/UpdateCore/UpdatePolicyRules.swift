@@ -102,6 +102,10 @@ public enum UpdatePolicyRules {
     /// (runtime-api.md §9.2). #38 ships `local`; the other schemes land with
     /// their providers (#51, #52, #53).
     public static func providerRef(for spec: ProviderSpec) throws -> UpdateProviderRef {
+        // A bare `fdroid` spec names the main repository (§4.5).
+        if spec.spec == "fdroid" {
+            return try FDroidProvider.providerRef(for: "")
+        }
         guard let colon = spec.spec.firstIndex(of: ":") else {
             throw UpdateFailure.providerMetadataInvalid(detail: "provider spec has no scheme")
         }
@@ -118,9 +122,15 @@ public enum UpdatePolicyRules {
                 configuration: .local(
                     path: String(rest),
                     bookmark: bookmark.base64EncodedString()))
-        case "direct", "fdroid", "github":
-            // Direct (#51), F-Droid (#52), GitHub (#53).
-            throw UpdateFailure.providerNotConfigured
+        case "direct":
+            return UpdateProviderRef(
+                type: .direct,
+                configuration: .direct(
+                    url: try ProviderRegistry.directURL(String(rest))))
+        case "fdroid":
+            return try FDroidProvider.providerRef(for: String(rest))
+        case "github":
+            return try GitHubProvider.providerRef(for: String(rest))
         default:
             throw UpdateFailure.providerMetadataInvalid(
                 detail: "unknown provider scheme \"\(scheme)\"")

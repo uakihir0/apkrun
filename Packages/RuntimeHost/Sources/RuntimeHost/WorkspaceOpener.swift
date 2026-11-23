@@ -10,13 +10,21 @@ enum WorkspaceOpener {
     /// Opens an application with `NSWorkspace.openApplication(at:configuration:)`.
     /// Returns whether the workspace accepted the request.
     @discardableResult
-    static func openApplication(at url: URL, arguments: [String] = [], activates: Bool = true)
+    static func openApplication(
+        at url: URL,
+        arguments: [String] = [],
+        activates: Bool = true,
+        hides: Bool = false,
+        addsToRecentItems: Bool = true
+    )
         async -> Bool
     {
         #if canImport(AppKit)
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.arguments = arguments
             configuration.activates = activates
+            configuration.hides = hides
+            configuration.addsToRecentItems = addsToRecentItems
             do {
                 _ = try await NSWorkspace.shared.openApplication(
                     at: url, configuration: configuration)
@@ -24,6 +32,17 @@ enum WorkspaceOpener {
             } catch {
                 return false
             }
+        #else
+            return false
+        #endif
+    }
+
+    /// Opens a URL in the default handler (desktop-integration.md §7.2):
+    /// the browser for http(s), the mail app for mailto.
+    @discardableResult
+    static func open(_ url: URL) -> Bool {
+        #if canImport(AppKit)
+            return NSWorkspace.shared.open(url)
         #else
             return false
         #endif

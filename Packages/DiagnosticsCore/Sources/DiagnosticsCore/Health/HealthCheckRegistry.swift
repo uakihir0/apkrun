@@ -164,6 +164,11 @@ public actor HealthCheckRegistry {
         checks.map(\.id)
     }
 
+    /// The repair attached to a registered check, if any.
+    public func fix(for id: HealthCheckID) -> (any HealthFix)? {
+        checks.first { $0.id == id }?.fix
+    }
+
     /// Runs checks and returns results ordered by group, then registration order.
     public func run(
         deep: Bool = false,

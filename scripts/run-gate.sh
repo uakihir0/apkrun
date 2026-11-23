@@ -2,12 +2,12 @@
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-    printf 'usage: scripts/run-gate.sh G1|G2|G3|G7|G8\n' >&2
+    printf 'usage: scripts/run-gate.sh G1|G2|G3|G7|G8|G9\n' >&2
     exit 64
 fi
 
 gate="$1"
-if [[ "$gate" != G1 && "$gate" != G2 && "$gate" != G3 && "$gate" != G7 && "$gate" != G8 ]]; then
+if [[ "$gate" != G1 && "$gate" != G2 && "$gate" != G3 && "$gate" != G7 && "$gate" != G8 && "$gate" != G9 ]]; then
     printf 'run-gate: unsupported gate: %s\n' "$gate" >&2
     exit 64
 fi
@@ -26,6 +26,7 @@ signing_arguments=(
 g3_build_settings=()
 g7_build_settings=()
 g8_build_settings=()
+g9_build_settings=()
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
@@ -120,6 +121,32 @@ if [[ "$gate" == G8 ]]; then
     g8_virgl="$repo_root/ThirdParty/out/virgl-runtime/current"
     if [[ ! -f "$g8_virgl/libvirglrenderer.1.dylib" ]]; then
         printf 'run-gate: G8 needs the virgl runtime at %s (ThirdParty, #21)\n' "$g8_virgl" >&2
+        exit 78
+    fi
+    rm -rf "$gate_dir/artifacts" "$gate_dir/products" "$gate_dir/screen-recording.mov" "$gate_dir/screen-recording.mp4"
+fi
+
+if [[ "$gate" == G9 ]]; then
+    # G9 updates HelloUpdate V1 to V2 behind its wrapper on the custom image,
+    # so it needs the same inputs as G7: the Android bundle, adb, and the
+    # virgl runtime.
+    g9_bundle="${APKRUN_G9_ANDROID_BUNDLE:-}"
+    if [[ "$g9_bundle" != /* || ! -f "$g9_bundle/manifest.json" || ! -f "$g9_bundle/SHA256SUMS" ]]; then
+        printf 'run-gate: G9 needs APKRUN_G9_ANDROID_BUNDLE, the absolute path of the Android bundle\n' >&2
+        exit 78
+    fi
+    if ! (cd "$g9_bundle" && shasum -a 256 -c SHA256SUMS > /dev/null); then
+        printf 'run-gate: the checksums of %s do not match SHA256SUMS\n' "$g9_bundle" >&2
+        exit 1
+    fi
+    g9_android_home="${ANDROID_HOME:-$repo_root/build/android-sdk}"
+    if [[ ! -x "$g9_android_home/platform-tools/adb" ]]; then
+        printf 'run-gate: G9 needs adb at %s/platform-tools/adb (environment-setup.md §2.5)\n' "$g9_android_home" >&2
+        exit 78
+    fi
+    g9_virgl="$repo_root/ThirdParty/out/virgl-runtime/current"
+    if [[ ! -f "$g9_virgl/libvirglrenderer.1.dylib" ]]; then
+        printf 'run-gate: G9 needs the virgl runtime at %s (ThirdParty, #21)\n' "$g9_virgl" >&2
         exit 78
     fi
     rm -rf "$gate_dir/artifacts" "$gate_dir/products" "$gate_dir/screen-recording.mov" "$gate_dir/screen-recording.mp4"
@@ -302,6 +329,52 @@ if [[ "$gate" == G8 ]]; then
         printf 'app: %s\n' "$staging/APKRun.app"
         printf 'hellotext_apk_sha256: %s\n' "$(shasum -a 256 "$staging/HelloText.apk" | awk '{ print $1 }')"
         printf 'android_sdk: %s\n' "$g8_android_home"
+    } >> "$report"
+fi
+
+if [[ "$gate" == G9 ]]; then
+    # Like G7: the Guest Agent bundle, the HelloUpdate V1/V2 fixtures with
+    # their local update repo, and the Debug app with its embedded helpers.
+    export ANDROID_HOME="$g9_android_home"
+    scripts/build-guest.sh
+    scripts/build-fixtures.sh --app HelloUpdate
+    SRCROOT="$repo_root" scripts/build/stamp-commit.sh
+    xcodebuild build \
+        -project APKRun.xcodeproj \
+        -scheme APKRun \
+        -configuration Debug \
+        -jobs 1 \
+        -derivedDataPath "$gate_dir/DerivedData" \
+        "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
+        "APKRUN_CI=1" \
+        "${signing_arguments[@]}"
+    g9_app="$gate_dir/DerivedData/Build/Products/Debug/APKRun.app"
+    staging="$APKRUN_TEST_LINUX_DIR/g9-staging"
+    rm -rf "$staging"
+    mkdir -p "$staging"
+    cp -R "$g9_app" "$staging/APKRun.app"
+    cp -R Tests/Fixtures/update-repos/local "$staging/update-repo"
+    artifacts="$APKRUN_TEST_LINUX_DIR/g9-artifacts"
+    g9_build_settings=(
+        "APKRUN_G9_APP=$staging/APKRun.app"
+        "APKRUN_G9_CLI=$staging/APKRun.app/Contents/Resources/bin/apkrun"
+        "APKRUN_G9_V1_APK=$staging/update-repo/io.apkrun.fixture.helloupdate/1/app.apk"
+        "APKRUN_G9_V2_APK=$staging/update-repo/io.apkrun.fixture.helloupdate/2/app.apk"
+        "APKRUN_G9_UPDATE_REPO=$staging/update-repo"
+        "APKRUN_G9_ARTIFACTS=$artifacts"
+        "APKRUN_G9_ADB=$g9_android_home/platform-tools/adb"
+    )
+    # The same names go to the test process as exported environment variables: a command-line build
+    # setting is not guaranteed to reach the test runner's environment on every Xcode release.
+    for entry in "${g9_build_settings[@]}"; do export "$entry"; done
+    {
+        printf 'bundle: %s\n' "$g9_bundle"
+        printf 'app: %s\n' "$staging/APKRun.app"
+        printf 'helloupdate_v1_apk_sha256: %s\n' \
+            "$(shasum -a 256 "$staging/update-repo/io.apkrun.fixture.helloupdate/1/app.apk" | awk '{ print $1 }')"
+        printf 'helloupdate_v2_apk_sha256: %s\n' \
+            "$(shasum -a 256 "$staging/update-repo/io.apkrun.fixture.helloupdate/2/app.apk" | awk '{ print $1 }')"
+        printf 'android_sdk: %s\n' "$g9_android_home"
     } >> "$report"
 fi
 scripts/tools/verify-gate-artifacts.sh "$APKRUN_TEST_LINUX_DIR" "$gate"
@@ -491,6 +564,56 @@ if [[ "$gate" == G8 ]]; then
         printf 'test_exit: %s\n' "$g8_status"
     } >> "$report"
     gate_status=$g8_status
+    if [[ $gate_status -eq 0 ]]; then gate_status=$recorder_status; fi
+    exit "$gate_status"
+fi
+if [[ "$gate" == G9 ]]; then
+    # The G9 check runs like G7: serialised with other VM runs by lockf, with
+    # a screen recording kept as evidence (test-strategy §5).
+    artifacts="$APKRUN_TEST_LINUX_DIR/g9-artifacts"
+    rm -rf "$artifacts"
+    recording="$gate_dir/screen-recording.mov"
+    screencapture -v -V 1800 "$recording" &
+    recording_pid=$!
+    g9_status=0
+    lockf -k /tmp/apkrun-vm.lock xcodebuild test \
+        -project APKRun.xcodeproj \
+        -scheme AcceptanceTests \
+        -testPlan AcceptanceTests \
+        -configuration Debug \
+        -only-test-configuration G9 \
+        -only-testing:AcceptanceTests/G9WrapperIntegrityTests \
+        -test-timeouts-enabled NO \
+        -jobs 1 \
+        -derivedDataPath "$gate_dir/DerivedData" \
+        -resultBundlePath "$gate_dir/$gate.xcresult" \
+        "APKRUN_TEST_LINUX_DIR=$APKRUN_TEST_LINUX_DIR" \
+        "APKRUN_CI=1" \
+        "${signing_arguments[@]}" \
+        ${g9_build_settings[@]+"${g9_build_settings[@]}"} || g9_status=$?
+    recorder_status=0
+    wait "$recording_pid" || recorder_status=$?
+    if [[ -d "$artifacts" ]]; then
+        rm -rf "$gate_dir/artifacts"
+        cp -R "$artifacts" "$gate_dir/artifacts"
+    fi
+    if [[ -f "$recording" ]]; then
+        if avconvert --preset PresetMediumQuality --source "$recording" --output "$gate_dir/screen-recording.mp4"; then
+            rm -f "$recording"
+        else
+            recorder_status=1
+        fi
+    fi
+    if [[ ! -s "$gate_dir/screen-recording.mp4" ]]; then
+        recorder_status=1
+    fi
+    {
+        printf 'artifacts: %s\n' "$gate_dir/artifacts"
+        printf 'screen_recording: %s\n' "$gate_dir/screen-recording.mp4"
+        printf 'recorder_exit: %s\n' "$recorder_status"
+        printf 'test_exit: %s\n' "$g9_status"
+    } >> "$report"
+    gate_status=$g9_status
     if [[ $gate_status -eq 0 ]]; then gate_status=$recorder_status; fi
     exit "$gate_status"
 fi

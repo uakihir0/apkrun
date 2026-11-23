@@ -41,6 +41,10 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
     public var skippedVersions: [VersionCode]
     /// The last update-available notification's cursor, so it posts once.
     public var notifiedCursor: ProviderCursor?
+    /// Why the last check found no candidate though the provider has
+    /// versions (`NoCompatibleArtifactReason` raw value, §4.5); nil when the
+    /// last check was clean or found a candidate.
+    public var incompatibleReason: String?
 
     /// A compact candidate description persisted in state.json.
     public struct CandidateSummary: Codable, Sendable, Equatable {
@@ -59,6 +63,10 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
         /// install reopens it (persists so a gate-resumed install
         /// reopens too).
         public var reopenAfterInstall: Bool
+        /// The user asked for this install (`trigger` `userInitiated` or
+        /// `manual`). A `notifyOnly` package never stages automatically,
+        /// so only a row with this set may auto-resume after a restart.
+        public var userRequested: Bool
 
         /// Creates a summary.
         public init(
@@ -67,7 +75,8 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
             provider: ProviderType,
             signerDigests: [SHA256Digest]? = nil,
             cursor: ProviderCursor? = nil,
-            reopenAfterInstall: Bool = false
+            reopenAfterInstall: Bool = false,
+            userRequested: Bool = false
         ) {
             self.versionCode = versionCode
             self.versionName = versionName
@@ -75,6 +84,7 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
             self.signerDigests = signerDigests
             self.cursor = cursor
             self.reopenAfterInstall = reopenAfterInstall
+            self.userRequested = userRequested
         }
 
         /// Decodes a summary, tolerating rows written before
@@ -89,6 +99,8 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
             cursor = try container.decodeIfPresent(ProviderCursor.self, forKey: .cursor)
             reopenAfterInstall =
                 try container.decodeIfPresent(Bool.self, forKey: .reopenAfterInstall) ?? false
+            userRequested =
+                try container.decodeIfPresent(Bool.self, forKey: .userRequested) ?? false
         }
     }
 
@@ -103,7 +115,8 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
         stagedAt: Date? = nil,
         waitingNotifiedAt: Date? = nil,
         skippedVersions: [VersionCode] = [],
-        notifiedCursor: ProviderCursor? = nil
+        notifiedCursor: ProviderCursor? = nil,
+        incompatibleReason: String? = nil
     ) {
         self.lastCheckAt = lastCheckAt
         self.nextCheckAt = nextCheckAt
@@ -115,6 +128,7 @@ public struct PackageUpdateState: Codable, Sendable, Equatable {
         self.waitingNotifiedAt = waitingNotifiedAt
         self.skippedVersions = skippedVersions
         self.notifiedCursor = notifiedCursor
+        self.incompatibleReason = incompatibleReason
     }
 }
 
@@ -140,6 +154,9 @@ public struct UpdateHistoryEntry: Codable, Sendable, Equatable {
     public var failure: String?
     /// Milliseconds spent per phase.
     public var phaseDurationsMs: [String: Int]
+    /// A free-form note (e.g. "No checksum published" for a GitHub
+    /// candidate whose asset has no digest, update-system.md §4.6).
+    public var note: String?
 
     /// Creates a history entry.
     public init(
@@ -151,7 +168,8 @@ public struct UpdateHistoryEntry: Codable, Sendable, Equatable {
         trigger: UpdateTrigger,
         outcome: String,
         failure: String? = nil,
-        phaseDurationsMs: [String: Int] = [:]
+        phaseDurationsMs: [String: Int] = [:],
+        note: String? = nil
     ) {
         self.v = 1
         self.time = time
@@ -163,6 +181,7 @@ public struct UpdateHistoryEntry: Codable, Sendable, Equatable {
         self.outcome = outcome
         self.failure = failure
         self.phaseDurationsMs = phaseDurationsMs
+        self.note = note
     }
 }
 
@@ -235,6 +254,26 @@ public actor UpdateStateStore {
     public func replaceAll(_ newState: State) {
         state = newState
         scheduleWrite()
+    }
+
+    /// §8.4: adds a version to the package's skip list; V6 refuses it until
+    /// `unskipVersion` removes it.
+    public func skipVersion(_ packageID: PackageID, versionCode: VersionCode) async {
+        await update(packageID) { state in
+            if !state.skippedVersions.contains(versionCode) {
+                state.skippedVersions.append(versionCode)
+            }
+        }
+        await flush()
+    }
+
+    /// §8.4: removes a version from the package's skip list ("Try Again" in
+    /// the history; `apkrun update unskip`).
+    public func unskipVersion(_ packageID: PackageID, versionCode: VersionCode) async {
+        await update(packageID) { state in
+            state.skippedVersions.removeAll { $0 == versionCode }
+        }
+        await flush()
     }
 
     /// Writes pending changes now (at most every `writeInterval` normally).

@@ -1,5 +1,6 @@
 import DiagnosticsCore
 import Foundation
+import GuestProtocol
 import RuntimeAPI
 import RuntimeCore
 
@@ -361,7 +362,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
 
     /// §7.3 Update Now: close the live session with the updating reason;
     /// the Android process may keep running — only the session ends.
-    func endSessionForUpdate(packageID: RuntimePackageID) async {
+    func endSessionForUpdate(packageID: RuntimePackageID, reason: SessionEndReason = .updating) async {
         guard let sessionID,
             let current = await registry.session(packageID: packageID.rawValue),
             current.id == sessionID
@@ -369,7 +370,7 @@ public actor EmbeddedRuntimeService: RuntimeSessionService, PackageMutationSessi
         if !current.state.isEnded, current.state != .closing {
             _ = try? await transition(to: .closing)
         }
-        _ = try? await transition(to: .ended(.updating))
+        _ = try? await transition(to: .ended(reason))
     }
 
     /// §7.3 Update Now: relaunch the package after the install.
@@ -1004,6 +1005,7 @@ protocol EmbeddedSessionGuestAgent: Sendable {
     func launch(package: String, displayID: Int32) async throws(GuestAgentFailure) -> GuestLaunchReport
     func stopApplication(package: String) async throws(GuestAgentFailure) -> Bool
     func forceStopApplication(package: String) async throws(GuestAgentFailure) -> Bool
+    func applyClearPolicy(_ displayID: Int32, policy: GPClearPolicy) async throws(GuestAgentFailure)
     func addResynchronizationHandler(
         _ handler: @escaping @Sendable (GuestSnapshotState) async -> Void
     ) async -> UUID
@@ -1018,11 +1020,23 @@ extension EmbeddedSessionGuestAgent {
     }
 
     func removeResynchronizationHandler(_ id: UUID) async {}
+
+    func applyClearPolicy(_ displayID: Int32, policy: GPClearPolicy) async throws(GuestAgentFailure) {
+        throw GuestAgentFailure.operationFailed(reason: "clearDisplayUnsupported")
+    }
 }
 
 extension DevelopmentGuestAgent: EmbeddedSessionGuestAgent {
     func isInstalled(_ package: String) async throws(GuestAgentFailure) -> Bool {
         try await queryPackage(package) != nil
+    }
+
+    func applyClearPolicy(_ displayID: Int32, policy: GPClearPolicy) async throws(GuestAgentFailure) {
+        do throws(DisplayControlFailure) {
+            try await clearDisplay(displayID, policy: policy)
+        } catch {
+            throw GuestAgentFailure.operationFailed(reason: "\(error)")
+        }
     }
 
     func addResynchronizationHandler(

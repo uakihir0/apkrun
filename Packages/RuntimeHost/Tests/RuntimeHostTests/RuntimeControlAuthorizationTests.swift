@@ -13,6 +13,8 @@ import Testing
         .stopRuntime,
         .restartRuntime,
         .resetRuntime,
+        .configuration,
+        .updateConfiguration,
         .listPackages,
         .packageInfo,
         .launch,
@@ -29,6 +31,8 @@ import Testing
     #expect(fullControlClients.allSatisfy { RuntimeControlOperation.stopRuntime.allows($0) })
     #expect(fullControlClients.allSatisfy { RuntimeControlOperation.restartRuntime.allows($0) })
     #expect(fullControlClients.allSatisfy { RuntimeControlOperation.resetRuntime.allows($0) })
+    #expect(fullControlClients.allSatisfy { RuntimeControlOperation.configuration.allows($0) })
+    #expect(fullControlClients.allSatisfy { RuntimeControlOperation.updateConfiguration.allows($0) })
     #expect(fullControlClients.allSatisfy { RuntimeControlOperation.listPackages.allows($0) })
     #expect(fullControlClients.allSatisfy { RuntimeControlOperation.packageInfo.allows($0) })
     #expect(fullControlClients.allSatisfy { RuntimeControlOperation.launch.allows($0) })
@@ -51,5 +55,15 @@ import Testing
     #expect(!RuntimeControlOperation.importPackage.allows(.launcher))
     #expect(!RuntimeControlOperation.installImported.allows(.launcher))
     #expect(!RuntimeControlOperation.beginUninstallPackage.allows(.launcher))
+    #expect(!RuntimeControlOperation.listSessions.allows(.launcher))
+    #expect(!RuntimeControlOperation.configuration.allows(.launcher))
+    #expect(!RuntimeControlOperation.updateConfiguration.allows(.launcher))
     #expect(allOperations.allSatisfy { !$0.allows(.wrapper) })
+
+    // §7.6: window close belongs to the window-owning clients only.
+    #expect(RuntimeControlOperation.closeSession.allows(.wrapper))
+    #expect(RuntimeControlOperation.closeSession.allows(.launcher))
+    #expect(!RuntimeControlOperation.closeSession.allows(.app))
+    #expect(!RuntimeControlOperation.closeSession.allows(.menuBar))
+    #expect(!RuntimeControlOperation.closeSession.allows(.cli))
 }

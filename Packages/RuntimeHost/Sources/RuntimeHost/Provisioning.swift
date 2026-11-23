@@ -22,6 +22,8 @@ public struct ProvisioningRecord: Codable, Equatable, Sendable {
     public var lastRuntimeVersion: String?
     /// The last APKRun build that provisioned, for migrations.
     public var lastRuntimeBuild: String?
+    /// The self-update probe's persistence block (runtime-maintenance.md §9).
+    public var selfUpdate: SelfUpdateProbeState?
 
     /// Creates an empty record for a data root that was never provisioned.
     public init() {
@@ -32,6 +34,7 @@ public struct ProvisioningRecord: Codable, Equatable, Sendable {
         userdataGeneration = nil
         lastRuntimeVersion = nil
         lastRuntimeBuild = nil
+        selfUpdate = nil
     }
 }
 

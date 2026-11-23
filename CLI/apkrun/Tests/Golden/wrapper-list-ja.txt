@@ -1,0 +1,3 @@
+NAME\tPACKAGE	STATUS	PATH
+HelloText\tio.apkrun.fixture.hellotext	valid	/Applications/HelloText.app
+Other\tcom.example.other	missing	/Applications/Other.app

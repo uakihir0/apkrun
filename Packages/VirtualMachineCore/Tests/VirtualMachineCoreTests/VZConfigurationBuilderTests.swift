@@ -103,6 +103,36 @@ import Virtualization
     #expect(configuration.usbControllers.isEmpty)
 }
 
+/// §8.1: `audio.output` gives one output stream and no input stream;
+/// `nil` gives no sound device at all.
+@Test func soundOutputOnlyBuildsOneOutputStream() throws {
+    var builder = VMDefinitionBuilder()
+    builder.sound = SoundDefinition(output: true, input: false)
+    let definition = builder.build()
+    let attachments = try VZConfigurationBuilder.nullDeviceConsoleAttachments(
+        count: definition.consolePorts.count
+    )
+    let configuration = try VZConfigurationBuilder.build(
+        definition, consolePortAttachments: attachments
+    ).configuration
+
+    #expect(configuration.audioDevices.count == 1)
+    #expect(
+        (configuration.audioDevices[0] as? VZVirtioSoundDeviceConfiguration)?
+            .streams.count == 1
+    )
+    #expect(
+        (configuration.audioDevices[0] as? VZVirtioSoundDeviceConfiguration)?
+            .streams.first is VZVirtioSoundDeviceOutputStreamConfiguration
+    )
+
+    builder.sound = nil
+    let silent = try VZConfigurationBuilder.build(
+        builder.build(), consolePortAttachments: attachments
+    ).configuration
+    #expect(silent.audioDevices.isEmpty)
+}
+
 @Test func vzBuilderDoesNotAttachVsockWhenDisabled() throws {
     let definition = VMDefinitionBuilder().build()
     let attachments = try VZConfigurationBuilder.nullDeviceConsoleAttachments(

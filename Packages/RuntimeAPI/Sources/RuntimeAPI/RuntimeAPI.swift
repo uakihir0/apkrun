@@ -2,16 +2,39 @@
 
 /// The major and minor version used by RuntimeAPI compatibility checks.
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    /// Version 1.0 introduces the authenticated control endpoint; 1.1 adds Guest Agent status fields;
-    /// 1.2 adds control-endpoint launch and terminate operations; 1.3 adds bounded endpoint admission;
-    /// 1.4 adds package queries; 1.5 adds runtime reset; 1.6 adds one-request runtime restart;
-    /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
-    /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
-    /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
     /// 1.12 adds the createWrapper long operation, the wrappers event topic, and WrapperInfo;
     /// 1.13 adds approval prompts and decisions, denied wrappers, and broker requestApproval;
-    /// 1.14 adds `perfStatistics`, `frameStatistics`, and `RuntimeLaunchRequest.launchTiming`.
-    public static let current = APIVersion(major: 1, minor: 16)
+    /// 1.14 adds `perfStatistics`, `frameStatistics`, and `RuntimeLaunchRequest.launchTiming`;
+    /// 1.15 adds the gentle-update session rules and `update` package changes;
+    /// 1.16 adds update ownership and rollback surfaces;
+    /// 1.17 adds the `iconChanged` package change (package-store.md §10.2);
+    /// 1.18 adds `placeStagedWrapper` for TCC-protected destinations (wrapper.md §6.3);
+    /// 1.19 adds `wrapperInfo` (runtime-api.md §10.2).
+    /// 1.20 adds `listWrappers`, `removeWrapper`, and `rescanWrappers`
+    /// (runtime-api.md §10.5).
+    /// 1.21 adds `refreshWrapper` and `refreshAllWrappers` (wrapper.md §9.3).
+    /// 1.22 adds `repairPackage` (package-store.md §11.1).
+    /// 1.23 adds `listSessions`, `packageIcon`, and `sessions` topic events
+    /// (host-ui.md §5.2–§5.3).
+    /// 1.24 adds `packageSettings` and `updatePackageSettings` (host-ui.md §7).
+    /// 1.25 adds `RuntimePackageDetails.previous`; 1.26 adds the wrapper
+    /// endpoint's `importBootstrap` (wrapper-json.md §3.4).
+    /// 1.27 adds the notification relays and host notifications
+    /// (runtime-api.md §11.3); 1.28 adds `linkPrompt` and
+    /// `resolveLinkPrompt` (runtime-api.md §11.2).
+    /// 1.29 adds the shared-folder and file operations of §11; 1.30 adds
+    /// `SettingApplies` on `updateGlobalConfiguration` (desktop-integration.md
+    /// §9). 1.31 adds `selfUpdateStatus` and `noteSelfUpdateStatus`
+    /// (runtime-api.md §12.2).
+    /// 1.36 adds the buildDistributionWrapper long operation and
+    /// `DistributionWrapperResult` (wrapper.md §11). 1.37 adds
+    /// RuntimeCompatibilityInfo on package details and import previews
+    /// (#91).
+    public static let current = APIVersion(major: 1, minor: 39)
+    /// 1.38 adds `StartRuntimeRequest.hold`, which keeps a CLI start
+    /// activity until its control connection closes (runtime-daemon.md §5).
+    /// 1.39 adds the `closeSession` operation and `WireClosePolicy`
+    /// (display-and-windowing.md §7.6).
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -97,6 +120,9 @@ public struct RuntimeHelloReply: Codable, Equatable, Sendable {
 public enum RuntimeEndpointKind: String, Codable, Equatable, Sendable {
     /// APKRun.app, menu bar, CLI, and launcher control surface.
     case control
+    /// The frozen maintenance endpoint (runtime-api.md §12.1): available in
+    /// every host state so any two APKRun builds can coordinate an update.
+    case maintenance
 }
 
 /// Requests one authenticated endpoint from the broker.
@@ -287,10 +313,15 @@ public struct RuntimeStatusRequest: Codable, Equatable, Sendable {
 public struct StartRuntimeRequest: Codable, Equatable, Sendable {
     /// The request metadata.
     public let header: APIRequestHeader
+    /// Keeps the runtime active until the requesting client disconnects.
+    ///
+    /// Nil is equivalent to false and preserves compatibility with clients that omit this field.
+    public let hold: Bool?
 
     /// Creates a start request.
-    public init(header: APIRequestHeader) {
+    public init(header: APIRequestHeader, hold: Bool? = nil) {
         self.header = header
+        self.hold = hold
     }
 }
 
@@ -583,6 +614,34 @@ public struct RuntimeListPackagesControlReply: Codable, Equatable, Sendable {
     }
 }
 
+/// Returns the composed Mac icon of one package (host-ui.md §5.3).
+public struct RuntimePackageIconControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The Android package whose icon is requested.
+    public let packageID: RuntimePackageID
+
+    /// Creates a package-icon request.
+    public init(header: APIRequestHeader, packageID: RuntimePackageID) {
+        self.header = header
+        self.packageID = packageID
+    }
+}
+
+/// The result or typed error returned by a control package-icon request.
+public struct RuntimePackageIconControlReply: Codable, Equatable, Sendable {
+    /// The icon PNG bytes, present when the package has an icon.
+    public let png: Data?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a reply.
+    public init(png: Data? = nil, error: RuntimeWireError? = nil) {
+        self.png = png
+        self.error = error
+    }
+}
+
 /// The result or typed error returned by a control package-info request.
 public struct RuntimePackageInfoControlReply: Codable, Equatable, Sendable {
     /// The package details, present on success.
@@ -609,11 +668,15 @@ public struct RuntimeControlError: Codable, Equatable, Sendable {
     public let code: String
     /// A short user-facing summary.
     public let message: String
+    /// Catalog parameters a client needs to finish a deferred step, such as
+    /// `stagingToken` on `wrapper.destinationNotAccessible` (wrapper.md §6.3).
+    public let parameters: [String: String]
 
     /// Creates a control error.
-    public init(code: String, message: String) {
+    public init(code: String, message: String, parameters: [String: String] = [:]) {
         self.code = code
         self.message = message
+        self.parameters = parameters
     }
 }
 
@@ -659,6 +722,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func restartRuntime(_ request: Data, reply: @escaping (Data) -> Void)
     /// Clears a runtime failure and boot-loop guard without deleting Android data.
     func resetRuntime(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns the effective global configuration.
+    func configuration(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Validates and applies a global configuration merge patch.
+    func updateConfiguration(_ request: Data, reply: @escaping (Data) -> Void)
     /// Starts or resumes first-run provisioning and returns its operation handle.
     func setup(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
     /// Resets Android data: backup, delete, re-provision, reinstall managed packages.
@@ -667,6 +734,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func listPackages(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns details for one package.
     func packageInfo(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Lists the live app sessions (host-ui.md §5.2).
+    func listSessions(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns the composed Mac icon PNG of one package (host-ui.md §5.3).
+    func packageIcon(_ request: Data, reply: @escaping (Data) -> Void)
     /// Copies and inspects APK files without starting Android.
     func importPackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
     /// Starts installation and returns an operation handle without waiting for installation to finish.
@@ -675,6 +746,7 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func beginUninstallPackage(_ request: Data, reply: @escaping (Data) -> Void)
     /// Requests cancellation at the operation's next cancellation point, if it is still cancellable.
     func cancelOperation(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Lists running operations and recently finished operations retained by the daemon.
     /// Lists running operations and recently finished operations retained by the daemon.
     func listOperations(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the latest snapshot for one operation, or a typed not-found error.
@@ -693,10 +765,45 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func launch(_ request: Data, reply: @escaping (Data) -> Void)
     /// Terminates an installed package session.
     func terminate(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Closes a package session per `window.closeBehavior`
+    /// (display-and-windowing.md §7.6); the window process only.
+    func closeSession(_ request: Data, reply: @escaping (Data) -> Void)
     /// Checks a wrapper bundle against the registry and the store.
     func verifyWrapper(_ request: Data, reply: @escaping (Data) -> Void)
     /// Starts a wrapper generation; replies with the operation handle.
     func createWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void)
+
+    /// Starts a distribution-wrapper build (wrapper.md §11); replies with
+    /// the `distributionWrapper` operation handle.
+    func buildDistributionWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void)
+
+    /// Completes a staged wrapper placement (wrapper.md §6.3).
+    func placeStagedWrapper(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns the registry row of one package's wrapper (runtime-api.md §10.2).
+    func wrapperInfo(_ request: Data, reply: @escaping (Data) -> Void)
+
+    /// Lists every registered wrapper with the status the validator
+    /// computed (wrapper.md §9.1). Reply: `RuntimeWrapperListControlReply`.
+    func listWrappers(_ request: Data, reply: @escaping (Data) -> Void)
+
+    /// Removes a wrapper's registry entry, optionally trashing the bundle
+    /// (wrapper.md §9.5). Reply: `RuntimeRemoveWrapperControlReply`.
+    func removeWrapper(_ request: Data, reply: @escaping (Data) -> Void)
+
+    /// Scans the Applications folders for APKRun wrapper bundles
+    /// (wrapper.md §7.2). Reply: `RuntimeRescanWrappersControlReply`.
+    func rescanWrappers(_ request: Data, reply: @escaping (Data) -> Void)
+
+    /// Starts a wrapper refresh (wrapper.md §9.3); replies with the
+    /// operation handle. An icon file handle accompanies `change.icon`.
+    func refreshWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void)
+    /// Installs the embedded bootstrap package of an approved portable wrapper;
+    /// one file handle per `files` item of bootstrap.json (wrapper-json.md §3.4).
+    func importBootstrap(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+
+    /// Starts a batch refresh (wrapper.md §9.4 Update All Mac Apps);
+    /// replies with the operation handle.
+    func refreshAllWrappers(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the approval prompts waiting for APKRun.app.
     func pendingApprovals(_ request: Data, reply: @escaping (Data) -> Void)
     /// Answers an approval prompt (APKRun.app only).
@@ -715,21 +822,111 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func clipboardWritten(_ request: Data, reply: @escaping (Data) -> Void)
     /// Reports whether the session's window is the key window (desktop-integration.md §4.1).
     func focusChanged(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Answers a link prompt for the session's key window (runtime-api.md §11.2).
+    func resolveLinkPrompt(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the per-kind integration status of a package (runtime-api.md §11).
     func integrationStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Imports files the user dropped on the session's window into Android
+    /// (runtime-api.md §11.2, desktop-integration.md §6.2). The open
+    /// `FileHandle`s travel beside the request, indexed by `fileIndex`.
+    func importFiles(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+    /// Answers a "Save to Mac" offer for the session's window
+    /// (runtime-api.md §11.2, desktop-integration.md §6.3). Zero or one
+    /// `FileHandle` (the picked file, open for writing); none is the cancel.
+    func acceptExport(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+    /// Lists the shared-folder roots (runtime-api.md §11.1). Reply:
+    /// `RuntimeSharedFoldersControlReply`.
+    func sharedFolders(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Adds a shared-folder root from a security bookmark (runtime-api.md
+    /// §11.1). Reply: `RuntimeSharedFolderControlReply`.
+    func addSharedFolder(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Removes a shared-folder root (runtime-api.md §11.1). Reply:
+    /// `RuntimeRemoveSharedFolderControlReply`.
+    func removeSharedFolder(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Changes a root's maximum access (runtime-api.md §11.1). Reply:
+    /// `RuntimeSharedFolderControlReply`.
+    func setSharedFolderAccess(_ request: Data, reply: @escaping (Data) -> Void)
     /// Checks packages for updates (runtime-api.md §9.1).
     func checkForUpdates(_ request: Data, reply: @escaping (Data) -> Void)
     /// Lists per-package update state (runtime-api.md §9.1).
     func listUpdates(_ request: Data, reply: @escaping (Data) -> Void)
     /// Reads update history (runtime-api.md §9.1, update-system.md §10.2).
     func updateHistory(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns the package's stored `settings.json` groups (host-ui.md §7).
+    /// Reply: `RuntimePackageSettingsControlReply`.
+    func packageSettings(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Applies a `settings.json` patch and returns the stored settings
+    /// (host-ui.md §7). Reply: `RuntimeUpdatePackageSettingsControlReply`.
+    func updatePackageSettings(_ request: Data, reply: @escaping (Data) -> Void)
     /// Sets a package's update mode and provider (runtime-api.md §9.1).
     func setUpdatePolicy(_ request: Data, reply: @escaping (Data) -> Void)
     /// Sets a package's update authority (runtime-api.md §9.1, update-system.md §2.1).
     func setUpdateAuthority(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Rolls a package back to `previous/` (update-system.md §8.5).
+    func rollbackPackage(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Reads `updates.*` settings (configuration.md §2.7).
+    func getConfig(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Writes one `updates.*` setting (configuration.md §2.7).
+    func setConfig(_ request: Data, reply: @escaping (Data) -> Void)
+    /// The self-update probe snapshot (runtime-api.md §12.2). Reply:
+    /// `SelfUpdateStatusReply`.
+    func selfUpdateStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// APKRun.app reports Sparkle's result (runtime-api.md §12.2). Reply:
+    /// `RuntimeEmptyReply`.
+    func noteSelfUpdateStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Runs the self-update probe (runtime-api.md §12.2). Reply:
+    /// `SelfUpdateStatusReply`.
+    func checkSelfUpdate(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Adds or removes a version on the package's skip list (§8.4).
+    func updateSkipped(_ request: Data, reply: @escaping (Data) -> Void)
     /// Checks and installs a package update now, optionally from files
     /// (runtime-api.md §9.1). File handles travel like `importPackage`.
     func updatePackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+    /// Starts reinstalling a broken package from its retained artifacts
+    /// (package-store.md §11.1, runtime-api.md §8.4).
+    func beginRepairPackage(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Opens a `notificationRelay` stream (wrapper connections only,
+    /// runtime-api.md §11.3/§16.4). Reply: `RuntimeStreamHandleControlReply`.
+    func notificationRelay(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Delivers a `RelayResponse` on an open notification relay stream
+    /// (runtime-api.md §11.3). Reply: `RuntimeStreamControlReply`.
+    func notificationRelayResponse(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Opens the single `hostNotifications` stream (APKRun.app only,
+    /// runtime-api.md §11.3/§16.4). Reply: `RuntimeStreamHandleControlReply`.
+    func hostNotifications(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Delivers a `HostNotificationResponse` on the host notifications stream
+    /// (runtime-api.md §11.3). Reply: `RuntimeStreamControlReply`.
+    func hostNotificationResponse(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Closes one of this connection's streams; idempotent
+    /// (runtime-api.md §16.4). Reply: `RuntimeStreamControlReply`.
+    func closeStream(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Installs an Android image from an `.aar` file (runtime-maintenance.md
+    /// §4.7). Reply: `WireImageInstallReply`.
+    func installImage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+    /// The image update status (`apkrun image list`). Reply: `WireImageStatusReply`.
+    func imageStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Applies a `ready` image (`apkrun image apply` / the UI apply gate).
+    /// Reply: `WireImageApplyReply`.
+    func applyImage(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Goes back to the previous image (`apkrun image rollback`).
+    /// Reply: `WireImageApplyReply`.
+    func rollbackImage(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Deletes a recovery point (`apkrun image recovery-points delete`).
+    /// Reply: `WireImageApplyReply`.
+    func deleteImageRecoveryPoint(_ request: Data, reply: @escaping (Data) -> Void)
+    /// User-initiated feed actions (`apkrun image check`,
+    /// `apkrun image install --latest`). Reply: `WireImageApplyReply`.
+    func imageFeedAction(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Health report (`apkrun doctor`). Reply: `WireHealthReport`
+    /// (runtime-api.md §13).
+    func healthReport(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Safe health repairs (`apkrun doctor --fix`). Reply:
+    /// `WireHealthReport`.
+    func applyHealthFixes(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Starts a diagnostics report (diagnostics.md §8.1): the output ZIP is
+    /// the single `FileHandle` beside the request, opened by the client.
+    /// Reply: `RuntimeCreateDiagnosticsControlReply`.
+    func createDiagnostics(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.
@@ -797,3 +994,14 @@ public protocol RuntimeSessionService: Sendable {
 
 /// The package and application session operations shared by embedded and daemon clients.
 public protocol RuntimeService: RuntimePackageService, RuntimeSessionService {}
+
+/// Frozen maintenance endpoint implemented by apkrund (runtime-api.md §12.1).
+///
+/// One envelope method carries every maintenance operation so the endpoint
+/// stays additive-only: new operations extend `MaintenanceControlOperation`
+/// inside `MaintenanceControlRequest` without a new XPC selector. The server
+/// ignores the request header's API version and answers in every host state.
+@objc public protocol RuntimeMaintenanceXPC {
+    /// Performs a maintenance control operation.
+    func perform(_ request: Data, reply: @escaping (Data) -> Void)
+}

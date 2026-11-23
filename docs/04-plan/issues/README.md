@@ -163,6 +163,7 @@ The tasks in working order ([../roadmap.md](../roadmap.md) §1.3). A task can st
 | #78 | Home and store UI | M7 | #49 |  |
 | #79 | Add flow | M7 | #78, #74 |  |
 | #80 | Per-app settings | M7 | #78, #40, #75 |  |
+| #116 | Keep-running task lifetime and idle activity | M7 | #69, #70, #80 |  |
 | #90 | Portable wrappers | M7 | #76 |  |
 | #52 | F-Droid provider | M8 | #51 |  |
 | #53 | GitHub provider | M8 | #51 |  |
@@ -170,7 +171,7 @@ The tasks in working order ([../roadmap.md](../roadmap.md) §1.3). A task can st
 | #81 | Image and HTML clipboard | M9 | #54 |  |
 | #82 | Links | M9 | #35, #36, #48 |  |
 | #83 | Files | M9 | #35, #36 |  |
-| #86 | Locale, time zone, clock format, and time | M9 | #35, #36, #70 |  |
+| #86 | Locale, time zone, clock format, and time | M9 | #35, #36, #70, #77 |  |
 | #87 | Menu bar | M9 | #33 |  |
 | #58 | APKRun runtime updater | M10 | #32, #50 |  |
 | #59 | Guest image versioning and migration | M10 | #36, #58 |  |
@@ -185,6 +186,7 @@ The tasks in working order ([../roadmap.md](../roadmap.md) §1.3). A task can st
 | #93 | Localization and accessibility | M12 | #78 |  |
 | #94 | Legal and licensing compliance | M12 | #21, #36 |  |
 | #95 | v1.0 release readiness | M12 | every other v1.0 task |  |
+| #120 | Release APKRun image | M12 | #36 |  |
 | #97 | Vulkan track | Post-v1 | #24, #36 |  |
 | #98 | Google Play authority | Post-v1 | #40, #50 |  |
 

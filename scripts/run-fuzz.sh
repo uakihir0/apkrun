@@ -71,16 +71,30 @@ resolve_toolchain() {
 
 toolchain="$(resolve_toolchain)" || exit $?
 
+# TOOLCHAINS is ignored by swift build (the swiftbuild driver resolves the
+# compiler itself), so call the toolchain's own swift binary instead.
+toolchain_dir=""
+for dir in "$HOME/Library/Developer/Toolchains" "/Library/Developer/Toolchains"; do
+    if [[ -d "$dir/$toolchain.xctoolchain" ]]; then
+        toolchain_dir="$dir/$toolchain.xctoolchain"
+        break
+    fi
+done
+[[ -n "$toolchain_dir" && -x "$toolchain_dir/usr/bin/swift" ]] \
+    || { printf 'run-fuzz: %s has no usr/bin/swift\n' "$toolchain_dir" >&2; exit 78; }
+fuzz_swift="$toolchain_dir/usr/bin/swift"
+
 run_one() {
     local product="$1" name="$2"
     local corpus="Tests/Fixtures/fuzz/$name"
     local artifacts="build/fuzz/$name"
     mkdir -p "$artifacts" "$corpus"
     printf '==> fuzz %s (%ss)\n' "$name" "$seconds"
-    APKRUN_FUZZ=1 TOOLCHAINS="$toolchain" swift build -c debug \
+    APKRUN_FUZZ=1 "$fuzz_swift" build -c debug \
         --product "$product" \
         --sanitize=fuzzer --sanitize=address --sanitize=undefined
-    local bin=".build/debug/$product"
+    local bin
+    bin="$("$fuzz_swift" build --show-bin-path -c debug | tail -1)/$product"
     APKRUN_FUZZ_TARGET="$name" "$bin" \
         -max_total_time="$seconds" -timeout=10 -rss_limit_mb=2048 \
         -artifact_prefix="$artifacts/" "$corpus"

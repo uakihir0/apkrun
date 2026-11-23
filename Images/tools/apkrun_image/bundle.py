@@ -208,7 +208,10 @@ def render_notice(manifest: Mapping[str, Any], source_offer: Path) -> str:
         f" builderImageDigest {html.escape(str(provenance.get('builderImageDigest')))}"
     )
     return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>APKRun Android image {version} — legal notices</title></head>
+<html><head>
+<meta charset="utf-8">
+<title>APKRun Android image {version} — legal notices</title>
+</head>
 <body>
 <h1>APKRun Android image {version}</h1>
 <p>Provenance: {provenance_fields}.</p>

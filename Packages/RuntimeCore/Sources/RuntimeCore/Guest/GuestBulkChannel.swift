@@ -68,10 +68,11 @@ public actor GuestBulkChannel {
         []
     /// Fetchers waiting on an announced transfer, keyed by transfer id and
     /// tagged with the fetch token that registered them.
-    private var waiters: [UInt64: [(
-        token: UInt64,
-        continuation: CheckedContinuation<GuestInboundTransfer?, Never>
-    )]] = [:]
+    private var waiters:
+        [UInt64: [(
+            token: UInt64,
+            continuation: CheckedContinuation<GuestInboundTransfer?, Never>
+        )]] = [:]
     /// Fetch tokens whose wait was settled before their waiter registration
     /// landed; a late registration answers nil instead of lingering forever.
     /// Tokens are unique per fetch, so a bounded FIFO keeps the newest 16.

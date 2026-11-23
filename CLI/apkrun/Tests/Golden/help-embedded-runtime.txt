@@ -19,6 +19,7 @@ SUBCOMMANDS:
   launch                  Launch an installed Android app.
   stop                    Stop an Android app session.
   integrations            Inspect desktop integrations of an Android app.
+  shared-folders          List, add, and remove folders shared with Android
   update                  Check for, list, and manage Android app updates.
   config                  Read and write daemon settings.
   dev                     Run development-only APKRun commands.

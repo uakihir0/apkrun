@@ -59,7 +59,7 @@ private actor FakeSessionHandling: RuntimeSessionService, PackageMutationSession
         lastEndAt[packageID.rawValue]
     }
 
-    func endSessionForUpdate(packageID: RuntimePackageID, reason: SessionEndReason) {
+    func endSessionForUpdate(packageID: RuntimePackageID) {
         endedForUpdate.append(packageID.rawValue)
         liveSessions.remove(packageID.rawValue)
         lastEndAt[packageID.rawValue] = .now

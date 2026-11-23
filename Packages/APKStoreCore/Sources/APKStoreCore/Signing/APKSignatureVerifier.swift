@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Security
+import zlib
 
 /// How much of the signature the host could check (package-store.md §4.5).
 enum SignatureLevel: String, Codable, Sendable, Equatable {
@@ -226,23 +227,17 @@ struct APKSignatureVerifier: Sendable {
     /// v3.1 block: every signer carries minSdk/maxSdkVersion. It applies when some signer covers
     /// the guest SDK.
     private func schemeCoversSDK(_ block: Data, sdk: Int) -> Bool {
-        for signer in Self.lengthPrefixed(block) {
-            for signedDataField in Self.lengthPrefixed(signer) {
-                guard let signedData = Self.lengthPrefixed(signedDataField).first else { continue }
-                let parts = Self.lengthPrefixed(signedData)
-                guard parts.count >= 3 else { continue }
-                var minSDK = 0
-                var maxSDK = Int.max
-                for attribute in Self.lengthPrefixed(parts[2]) where attribute.count >= 12 {
-                    let id = attribute.readUInt32LE(at: 0)
-                    // v3.1 stores minSdk/maxSdkVersion as additional attributes 0x0103c58f/… not
-                    // standardized; Android's apksig reads them from the signer record's own
-                    // header — keep both: the pair 0x0103c58f is used for min, 0x0103c590 for max.
-                    if id == 0x0103_C58F { minSDK = Int(attribute.readUInt32LE(at: 8)) }
-                    if id == 0x0103_C590 { maxSDK = Int(attribute.readUInt32LE(at: 8)) }
-                }
-                if sdk >= minSDK, sdk <= maxSDK { return true }
-            }
+        // Same `signers` nesting as verifyScheme: a length-prefixed sequence of
+        // length-prefixed signer records. A v3.1 signer record is
+        // [signed-data][minSdk u32][maxSdk u32][signatures][public key].
+        for signer in Self.lengthPrefixed(block).flatMap(Self.lengthPrefixed) {
+            var cursor = 0
+            guard Self.takeLengthPrefixed(signer, at: &cursor) != nil,
+                cursor + 8 <= signer.count
+            else { continue }
+            let minSDK = Int(signer.readUInt32LE(at: cursor))
+            let maxSDK = Int(signer.readUInt32LE(at: cursor + 4))
+            if sdk >= minSDK, sdk <= maxSDK { return true }
         }
         return false
     }
@@ -470,10 +465,22 @@ struct APKSignatureVerifier: Sendable {
                     name.hasSuffix(".RSA") || name.hasSuffix(".EC") || name.hasSuffix(".DSA")
                 {
                     hasJarSignature = true
+                    let method = Int(data.readUInt16LE(at: index + 8))
                     let compressedSize = Int(data.readUInt32LE(at: index + 18))
+                    let uncompressedSize = Int(data.readUInt32LE(at: index + 22))
                     let dataStart = index + 30 + nameLength + Int(data.readUInt16LE(at: index + 28))
                     if dataStart + compressedSize <= data.count {
-                        certificateDER = Self.findCertificateDER(in: data[dataStart..<dataStart + compressedSize])
+                        let payload = Data(data[dataStart..<dataStart + compressedSize])
+                        switch method {
+                        case 0:
+                            certificateDER = Self.findCertificateDER(in: payload)
+                        case 8:
+                            if let inflated = Self.inflate(payload, expectedSize: uncompressedSize) {
+                                certificateDER = Self.findCertificateDER(in: inflated)
+                            }
+                        default:
+                            break
+                        }
                     }
                 }
             }
@@ -493,6 +500,30 @@ struct APKSignatureVerifier: Sendable {
             scheme: .jarOnly,
             level: .certificateOnly
         )
+    }
+
+    /// Inflates a raw DEFLATE stream (ZIP method 8) to its declared uncompressed size.
+    private static func inflate(_ compressed: Data, expectedSize: Int) -> Data? {
+        guard expectedSize > 0, expectedSize <= (1 << 28) else { return nil }
+        var output = Data(count: expectedSize)
+        var stream = z_stream()
+        guard inflateInit2_(&stream, -MAX_WBITS, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK
+        else { return nil }
+        defer { inflateEnd(&stream) }
+        var result: Int32 = Z_OK
+        let outputCapacity = output.count
+        compressed.withUnsafeBytes { src in
+            output.withUnsafeMutableBytes { dst in
+                stream.next_in = UnsafeMutablePointer<Bytef>(
+                    mutating: src.baseAddress?.assumingMemoryBound(to: Bytef.self))
+                stream.avail_in = uInt(compressed.count)
+                stream.next_out = dst.baseAddress?.assumingMemoryBound(to: Bytef.self)
+                stream.avail_out = uInt(outputCapacity)
+                result = zlib.inflate(&stream, Z_FINISH)
+            }
+        }
+        guard result == Z_STREAM_END, Int(stream.total_out) == expectedSize else { return nil }
+        return output
     }
 
     /// Scans a PKCS#7 blob for the first DER certificate (0x30, plausible length, X.509 v3 version).

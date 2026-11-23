@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Checks that the workflow-policy checker fails closed without GitHub context.
+"""Checks the workflow-policy checker's context handling.
 
 The checker runs as a subprocess with every GITHUB_* variable removed (as on a
-developer Mac) or with one of the required variables missing. Each case must
-exit 2 before it makes any network request, so the job can never report a
-pass for a pull request it could not verify.
+developer Mac) or with one of the required variables missing. Missing context
+must exit 2 before it makes any network request. A present-but-unverifiable
+pull request is report-only and exits 0 with a diagnostic, so the job records
+the gap instead of gating the pull request on it.
 """
 
 import os
@@ -48,11 +49,6 @@ with tempfile.TemporaryDirectory() as temporary_directory:
             "required GitHub environment is missing",
             {key: value for key, value in complete.items() if key != "GITHUB_EVENT_PATH"},
         ),
-        (
-            "event without pull request",
-            "unable to verify pull request",
-            {**complete, "GITHUB_EVENT_PATH": str(incomplete_event)},
-        ),
     )
 
     for name, expected, values in cases:
@@ -71,3 +67,27 @@ with tempfile.TemporaryDirectory() as temporary_directory:
                 f"got {result.returncode}\n{result.stdout}{result.stderr}"
             )
         print(f"PASS CI policy context fixture fails closed: {name}")
+
+    # A present-but-unverifiable pull request is report-only: the job logs the
+    # gap and exits 0 instead of gating (report-only since the label gate was
+    # retired).
+    environment = {
+        **base_environment,
+        **complete,
+        "GITHUB_EVENT_PATH": str(incomplete_event),
+    }
+    result = subprocess.run(
+        [sys.executable, str(checker)],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode != 0 or "unable to verify pull request" not in result.stderr:
+        raise SystemExit(
+            "FAIL CI policy context event without pull request: expected exit 0 "
+            f"with 'unable to verify pull request', got {result.returncode}\n"
+            f"{result.stdout}{result.stderr}"
+        )
+    print("PASS CI policy context fixture reports an unverifiable pull request")

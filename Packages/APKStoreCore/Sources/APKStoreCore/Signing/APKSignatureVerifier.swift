@@ -150,7 +150,9 @@ struct APKSignatureVerifier: Sendable {
         }
         // Pick the scheme for the guest SDK (37 baseline): v3.1 when a signer's range covers it.
         let guestSDK = 37
-        if let v31 = sigBlock[Self.v31BlockID], schemeCoversSDK(v31, sdk: guestSDK) {
+        if let v31 = sigBlock[Self.v31BlockID],
+            try schemeCoversSDK(v31, sdk: guestSDK, file: file)
+        {
             return try verifyScheme(
                 v31, data: data, layout: layout, sigBlockOffset: sigBlockOffset, scheme: .v31, file: file)
         }
@@ -224,7 +226,9 @@ struct APKSignatureVerifier: Sendable {
 
     /// v3.1 block: every signer carries minSdk/maxSdkVersion. It applies when some signer covers
     /// the guest SDK.
-    private func schemeCoversSDK(_ block: Data, sdk: Int) -> Bool {
+    private func schemeCoversSDK(
+        _ block: Data, sdk: Int, file: String
+    ) throws(StoreFailure) -> Bool {
         // Same `signers` nesting as verifyScheme: a length-prefixed sequence of
         // length-prefixed signer records. A v3.1 signer record is
         // [signed-data][minSdk u32][maxSdk u32][signatures][public key].
@@ -240,10 +244,16 @@ struct APKSignatureVerifier: Sendable {
             var sdCursor = 0
             guard Self.takeLengthPrefixed(signedData, at: &sdCursor) != nil,
                 Self.takeLengthPrefixed(signedData, at: &sdCursor) != nil,
-                sdCursor + 8 <= signedData.count,
-                Int(signedData.readUInt32LE(at: sdCursor)) == minSDK,
-                Int(signedData.readUInt32LE(at: sdCursor + 4)) == maxSDK
+                sdCursor + 8 <= signedData.count
             else { continue }
+            // A tampered range would silently downgrade to v3/v2 instead of
+            // being refused, so a mismatch rejects the APK.
+            guard Int(signedData.readUInt32LE(at: sdCursor)) == minSDK,
+                Int(signedData.readUInt32LE(at: sdCursor + 4)) == maxSDK
+            else {
+                throw .invalidSignature(
+                    file: file, reason: "v3.1 SDK range differs from the signed data")
+            }
             if sdk >= minSDK, sdk <= maxSDK { return true }
         }
         return false
@@ -464,6 +474,7 @@ struct APKSignatureVerifier: Sendable {
     ) throws(StoreFailure) -> APKSignatureInfo {
         var hasJarSignature = false
         var certificateDER: Data?
+        var cdIndex: [String: (method: Int, compressedSize: Int, uncompressedSize: Int)]?
         var index = 0
         while index + 30 <= data.count {
             if data[index] == 0x50, data[index + 1] == 0x4B, data[index + 2] == 0x03, data[index + 3] == 0x04 {
@@ -481,27 +492,33 @@ struct APKSignatureVerifier: Sendable {
                     // Bit 3 = a data descriptor follows the entry and the local
                     // header's size fields are zero; resolve them from the
                     // central directory (jarsigner writes this form).
-                    if flags & 0x08 != 0 || compressedSize == 0,
-                        let cdEntry = Self.centralDirectoryEntry(
-                            name: name, data: data, layout: layout)
-                    {
-                        method = cdEntry.method
-                        compressedSize = cdEntry.compressedSize
-                        uncompressedSize = cdEntry.uncompressedSize
+                    if flags & 0x08 != 0 || compressedSize == 0 {
+                        if cdIndex == nil {
+                            cdIndex = Self.centralDirectoryIndex(data: data, layout: layout)
+                        }
+                        if let cdEntry = cdIndex?[name] {
+                            method = cdEntry.method
+                            compressedSize = cdEntry.compressedSize
+                            uncompressedSize = cdEntry.uncompressedSize
+                        }
                     }
                     let dataStart = index + 30 + nameLength + Int(data.readUInt16LE(at: index + 28))
                     if dataStart + compressedSize <= data.count {
                         let payload = Data(data[dataStart..<dataStart + compressedSize])
+                        // A false-positive local header inside an uncompressed
+                        // embedded archive can yield no certificate; keep a
+                        // certificate found earlier instead of wiping it.
+                        let candidate: Data?
                         switch method {
                         case 0:
-                            certificateDER = Self.findCertificateDER(in: payload)
+                            candidate = Self.findCertificateDER(in: payload)
                         case 8:
-                            if let inflated = Self.inflate(payload, expectedSize: uncompressedSize) {
-                                certificateDER = Self.findCertificateDER(in: inflated)
-                            }
+                            candidate = Self.inflate(payload, expectedSize: uncompressedSize)
+                                .flatMap(Self.findCertificateDER)
                         default:
-                            break
+                            candidate = nil
                         }
+                        if let candidate { certificateDER = candidate }
                     }
                 }
             }
@@ -549,11 +566,12 @@ struct APKSignatureVerifier: Sendable {
         return output
     }
 
-    /// Looks up an entry in the central directory by name and returns its
-    /// compression method and declared sizes.
-    private static func centralDirectoryEntry(
-        name: String, data: Data, layout: ZIPLayout
-    ) -> (method: Int, compressedSize: Int, uncompressedSize: Int)? {
+    /// Indexes the central directory by entry name, for resolving the sizes of
+    /// entries written with a data descriptor.
+    private static func centralDirectoryIndex(
+        data: Data, layout: ZIPLayout
+    ) -> [String: (method: Int, compressedSize: Int, uncompressedSize: Int)] {
+        var entries: [String: (Int, Int, Int)] = [:]
         var index = layout.cdOffset
         let end = Swift.min(layout.cdOffset + layout.cdSize, data.count)
         while index + 46 <= end {
@@ -564,18 +582,16 @@ struct APKSignatureVerifier: Sendable {
             guard index + 46 + nameLength <= end else { break }
             let entryName = String(
                 decoding: data[(index + 46)..<(index + 46 + nameLength)], as: UTF8.self)
-            if entryName == name {
-                return (
-                    Int(data.readUInt16LE(at: index + 10)),
-                    Int(data.readUInt32LE(at: index + 20)),
-                    Int(data.readUInt32LE(at: index + 24))
-                )
-            }
+            entries[entryName] = (
+                Int(data.readUInt16LE(at: index + 10)),
+                Int(data.readUInt32LE(at: index + 20)),
+                Int(data.readUInt32LE(at: index + 24))
+            )
             index +=
                 46 + nameLength + Int(data.readUInt16LE(at: index + 30))
                 + Int(data.readUInt16LE(at: index + 32))
         }
-        return nil
+        return entries
     }
 
     /// Scans a PKCS#7 blob for the first DER certificate (0x30, plausible length, X.509 v3 version).

@@ -200,7 +200,7 @@ jobs:
         id: cache-key
         run: echo "key=$(scripts/build-third-party.sh --print-cache-key virgl-runtime)" >> "$GITHUB_OUTPUT"
       - name: Restore verified graphics libraries
-        uses: actions/cache@0400d5f644dc74513175e3b8b85b7f6cf5f0f400 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v4
         with:
           path: ThirdParty/out
           key: ${{ steps.cache-key.outputs.key }}
@@ -220,7 +220,7 @@ jobs:
             sudo installer -pkg /tmp/swift.pkg -target /
           fi
       - name: Restore the growing corpus
-        uses: actions/cache@0400d5f644dc74513175e3b8b85b7f6cf5f0f400 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v4
         with:
           path: Tests/Fixtures/fuzz/
           # A unique key per run: actions/cache never overwrites an existing

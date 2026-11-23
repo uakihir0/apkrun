@@ -6,86 +6,8 @@ import Testing
 @Test func errorCatalogHasLocalizedEnglishTextAndDeclaredPlaceholders() {
     let expectedCodes = Set(
         [
-            "invalidTransition", "startFailed", "stoppedWithError", "pauseFailed",
-            "resumeFailed", "stopTimedOut", "vsockDeviceNotConfigured", "vsockDeviceUnavailable",
-            "vsockConnectFailed",
-            "vsockPortNotListening",
-            "vsockConnectTimedOut", "virtualizationUnavailable", "cpuCountOutOfRange",
-            "memoryOutOfRange", "memoryExceedsHostCap", "kernelMissing",
-            "kernelNotUncompressedImage", "initrdMissing", "initrdTooLarge",
-            "commandLineInvalid", "diskMissing", "diskIsAndroidSparse", "duplicateDisk",
-            "diskNotReadable", "diskNotWritable", "diskSyncModeTestOnly", "diskIdentifierInvalid",
-            "missingSystemConsole", "invalidMACAddress", "machineIdentifierInvalid",
-            "customDeviceInvalid", "microphoneUsageDescriptionMissing", "frameworkRejected",
-            "configurationInvalid", "networkAttachmentLost", "consoleLogWriteFailed",
-            "loopbackPortInUse", "loopbackListenFailed",
-        ].map { "vm.\($0)" }
-            + [
-                "confirmationRequired", "declined", "invalidPackageName", "invalidSourceSpec",
-                "invalidArgument", "fileNotAccessible", "developerModeRequired", "logsUnavailable",
-                "malformedReply", "versionSkew", "invalidArguments", "devConsoleRequiresTerminal",
-                "displayStatusUnavailable",
-            ].map { "cli.\($0)" }
-            + [
-                "instanceLocked", "instanceLockFailed", "hostShuttingDown", "hostStartupFailed",
-                "serviceUnavailable", "apiVersionMismatch", "operationResultUnknown",
-                "requestTimedOut", "cancelled", "notAuthorized", "malformedRequest",
-                "internal", "devLinuxTimedOut",
-                "devLinuxInvalidOptions", "devLinuxArtifactDirectoryMustBeAbsolute",
-                "devLinuxCheckFailed", "devLinuxDidNotFinish",
-                "adbExecutableMissing", "adbLaunchFailed", "adbConnectionUnavailable",
-                "adbCommandFailed", "adbCommandTimedOut", "adbInvalidArgument", "adbUnexpectedOutput",
-                "adbPackageRejected",
-                "devConsoleGuestFailed", "devConsoleInputFailed",
-                "devConsoleOutputDropped", "devConsoleCleanupPending",
-                "devConsoleNotRunning", "devConsoleSocketUnavailable",
-                "image", "vmConfiguration", "vm", "kernelPanic", "androidBootFailed",
-                "bootTimedOut", "bootStalled", "gpuProfileUnavailable", "graphics",
-                "guestAgent", "adb",
-                "guestAgentBundleMissing", "guestAgentInstallFailed", "guestAgentStartFailed", "guestAgentStopped",
-                "guestAgentConnectTimedOut", "guestAgentHandshakeFailed", "requiredAgentUnavailable",
-                "guestAgentOperationFailed", "inputNotBound",
-                "busy", "operationNotFound", "notProvisioned", "hostRequirementsNotMet",
-                "developerModeRequired",
-            ].map { "runtime.\($0)" }
-            + [
-                "rendererInitFailed", "rendererOperationFailed", "rendererLost", "libraryMissing",
-                "scanoutInvalid",
-                "modeUnsupported", "poolAllocationFailed", "configUpdateFailed", "deviceNotReady",
-            ].map { "graphics.\($0)" }
-            + [
-                "manifestInvalid", "insufficientSpace", "cloneUnsupported", "cloneFailed",
-                "instanceCorrupt", "instanceMissing", "missingFile", "hashMismatch",
-                "bootconfigConflict", "bootconfigTooLarge", "cmdlineTooLong",
-                "untrustedKey", "signatureInvalid", "unexpectedFile", "downgradeRejected",
-                "imageNotInstalled", "noCurrentImage",
-            ].map { "image.\($0)" }
-            + [
-                "packageNotInstalled", "invalidName", "customIconInvalid", "iconConversionFailed",
-                "launcherTemplateInvalid", "destinationNotWritable", "destinationNotAccessible",
-                "nameConflict", "wrapperExists", "wrapperNotFound", "signingFailed",
-                "verificationFailed", "registrationFailed", "registryUnavailable",
-                "stagingExpired", "bundleInvalid",
-                "approvalDenied", "approvalTimedOut", "approvalNotFound",
-            ].map { "wrapper.\($0)" }
-            + [
-                "disabled", "notSupportedOnImage", "guestUnavailable", "clipboardTooLarge",
-            ].map { "integration.\($0)" }
-            + [
-                "providerNotConfigured", "providerUnreachable", "providerHTTPStatus",
-                "providerRateLimited", "providerMetadataInvalid", "providerSignatureInvalid",
-                "ambiguousAsset", "noCompatibleArtifact", "downloadFailed", "hashMismatch",
-                "tooLarge", "cancelled", "validation", "installFailed", "healthCheckFailed",
-                "rollbackFailed", "authorityDoesNotAllowUpdates",
-            ].map { "update.\($0)" }
-            + [
-                "unsupportedContainer", "unreadableArchive", "archiveLimitExceeded", "notAnAPK",
-                "missingBase", "multipleBases", "duplicateSplit", "inconsistentSplits",
-                "incompleteSplitSet", "unsignedAPK", "invalidSignature", "legacySignatureNotAllowed",
-                "unsupportedABI", "minSdkTooHigh", "targetSdkTooLow", "expansionFilesNotSupported",
-                "reservedPackage", "tooLarge", "resourcesArscNotAligned", "signerMismatch",
-                "alreadyInstalled", "downgradeRefused", "packageAlreadyManaged",
-            ].map { "store.\($0)" }
+            "errors", "version",
+        ]
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)
     #expect(

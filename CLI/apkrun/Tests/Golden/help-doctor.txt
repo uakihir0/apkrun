@@ -1,11 +1,9 @@
 OVERVIEW: Check APKRun's health and repair what is safe to repair.
 
-USAGE: apkrun doctor [--deep] [--fix] [--json]
+USAGE: doctor [--deep] [--fix] [--json]
 
 OPTIONS:
   --deep                  Run the deep checks too.
   --fix                   Apply the safe fixes of failed checks.
   --json                  Print the report as JSON.
-  --version               Show the version.
   -h, --help              Show help information.
-

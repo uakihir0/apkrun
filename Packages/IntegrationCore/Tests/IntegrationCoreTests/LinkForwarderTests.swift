@@ -362,7 +362,12 @@ struct LinkForwarderTests {
             Issue.record("expected a prompt")
             return
         }
-        try await Task.sleep(for: .milliseconds(120))
+        // Wait for the 50 ms lifetime to expire instead of a fixed sleep: on a
+        // loaded CI runner the expiry task can be scheduled late, so poll.
+        for _ in 0..<40 {
+            if rig.channel.resolves.map(\.1) == [.drop] { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
         #expect(rig.channel.resolves.map(\.1) == [.drop])
         await #expect(throws: IntegrationFailure.promptTimedOut) {
             try await forwarder.resolvePrompt(

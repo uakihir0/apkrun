@@ -119,6 +119,7 @@ public final class Redactor: @unchecked Sendable {
         defer { lock.unlock() }
 
         // Layer 3, ordered so names are gone before patterns see the text.
+        text = reduceHomePaths(text)
         for (name, replacement) in [
             (identity.fullUserName, "<user-name>"),
             (identity.userName, "<user>"),
@@ -131,12 +132,11 @@ public final class Redactor: @unchecked Sendable {
                 bump("user", by: occurrences)
             }
         }
-        text = reduceHomePaths(text)
         text = reduceURLs(text)
         text = replace(#"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#, in: text, rule: "email", with: "<email>")
-        text = reduceIPs(text)
         text = replace(
             #"(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b"#, in: text, rule: "mac", with: "<mac>")
+        text = reduceIPs(text)
         text = reduceContentURIs(text)
 
         // Layer 4: patterns first, known secrets last so their exact bytes are
@@ -227,33 +227,56 @@ public final class Redactor: @unchecked Sendable {
     private func reduceHomePaths(_ text: String) -> String {
         let home = identity.homeDirectory
         guard !home.isEmpty else { return text }
+        var result = text
+        // Preserved roots keep their suffix and run first: their paths may
+        // contain spaces ("Application Support"), which the general rule
+        // below cannot match. The boundary after the root keeps a sibling
+        // like "/…/APKRun2" out.
+        for preserved in identity.preservedPaths where preserved.hasPrefix(home) {
+            guard
+                let regex = try? NSRegularExpression(
+                    pattern: NSRegularExpression.escapedPattern(for: preserved)
+                        + #"(?=[/\s"'\\]|$)"#
+                )
+            else { continue }
+            let range = NSRange(result.startIndex..<result.endIndex, in: result)
+            let matches = regex.matches(in: result, range: range)
+            guard !matches.isEmpty else { continue }
+            var rebuilt = ""
+            var cursor = result.startIndex
+            for match in matches {
+                guard let matchRange = Range(match.range, in: result) else { continue }
+                rebuilt += result[cursor..<matchRange.lowerBound]
+                rebuilt += "~" + result[matchRange].dropFirst(home.count)
+                bump("path")
+                cursor = matchRange.upperBound
+            }
+            rebuilt += result[cursor...]
+            result = rebuilt
+        }
         let escaped = NSRegularExpression.escapedPattern(for: home)
         guard
             let regex = try? NSRegularExpression(
                 pattern: escaped + #"[^\s"'\\]*"#
             )
-        else { return text }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        let matches = regex.matches(in: text, range: range)
-        guard !matches.isEmpty else { return text }
-        var result = ""
-        var cursor = text.startIndex
+        else { return result }
+        let range = NSRange(result.startIndex..<result.endIndex, in: result)
+        let matches = regex.matches(in: result, range: range)
+        guard !matches.isEmpty else { return result }
+        var collapsed = ""
+        var cursor = result.startIndex
         for match in matches {
-            guard let matchRange = Range(match.range, in: text) else { continue }
-            let path = String(text[matchRange])
-            result += text[cursor..<matchRange.lowerBound]
-            if identity.preservedPaths.contains(where: { path.hasPrefix($0) }) {
-                result += "~" + path.dropFirst(home.count)
-            } else {
-                let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/.,;:)]}"))
-                let last = trimmed.split(separator: "/").last.map(String.init) ?? "…"
-                result += "~/…/" + last
-            }
+            guard let matchRange = Range(match.range, in: result) else { continue }
+            let path = String(result[matchRange])
+            collapsed += result[cursor..<matchRange.lowerBound]
+            let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/.,;:)]}"))
+            let last = trimmed.split(separator: "/").last.map(String.init) ?? "…"
+            collapsed += "~/…/" + last
             bump("path")
             cursor = matchRange.upperBound
         }
-        result += text[cursor...]
-        return result
+        collapsed += result[cursor...]
+        return collapsed
     }
 
     /// URLs lose path, query, fragment, and user info; APKRun's own endpoint
@@ -305,7 +328,7 @@ public final class Redactor: @unchecked Sendable {
                     || ip.hasPrefix("192.168.64.")
             })
         result = replaceIPMatches(
-            #"(?i)\b(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{0,4}\b"#, in: result,
+            #"(?i)\b(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}\b"#, in: result,
             isAllowed: { ip in
                 let lower = ip.lowercased()
                 return lower == "::1" || lower.hasPrefix("fe80:") || lower.hasPrefix(":")

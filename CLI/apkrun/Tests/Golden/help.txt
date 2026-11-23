@@ -36,5 +36,7 @@ SUBCOMMANDS:
   self-update             Check for, install, and finish APKRun updates.
   doctor                  Check APKRun's health and repair what is safe to
                           repair.
+  diagnostics             Write a diagnostics bundle (ZIP) with host and guest
+                          state.
 
   See 'apkrun help <subcommand>' for detailed help.

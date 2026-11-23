@@ -1,6 +1,7 @@
 package io.apkrun.guest.daemon
 
 import android.content.ComponentName
+import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.ClearPolicy
 import io.apkrun.guest.protocol.v1.DisplayEmpty

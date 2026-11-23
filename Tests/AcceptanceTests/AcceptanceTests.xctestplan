@@ -1,79 +1,117 @@
 {
-  "configurations" : [
+  "configurations": [
     {
-      "id" : "00300001-0000-4000-8000-000000000001",
-      "name" : "G1",
-      "options" : {
-        "environmentVariableEntries" : [
+      "id": "00300001-0000-4000-8000-000000000001",
+      "name": "G1",
+      "options": {
+        "environmentVariableEntries": [
           {
-            "key" : "APKRUN_ACCEPTANCE_SUITE",
-            "value" : "g1",
-            "enabled" : true
+            "key": "APKRUN_ACCEPTANCE_SUITE",
+            "value": "g1",
+            "enabled": true
           }
         ]
       }
     },
     {
-      "id" : "00300001-0000-4000-8000-000000000006",
-      "name" : "Network",
-      "options" : {
-        "environmentVariableEntries" : [
+      "id": "00300001-0000-4000-8000-000000000006",
+      "name": "Network",
+      "options": {
+        "environmentVariableEntries": [
           {
-            "key" : "APKRUN_ACCEPTANCE_SUITE",
-            "value" : "network",
-            "enabled" : true
+            "key": "APKRUN_ACCEPTANCE_SUITE",
+            "value": "network",
+            "enabled": true
           }
         ]
       }
     },
     {
-      "id" : "00300001-0000-4000-8000-000000000002",
-      "name" : "G2",
-      "options" : {
-        "environmentVariableEntries" : [
+      "id": "00300001-0000-4000-8000-000000000002",
+      "name": "G2",
+      "options": {
+        "environmentVariableEntries": [
           {
-            "key" : "APKRUN_ACCEPTANCE_SUITE",
-            "value" : "g2",
-            "enabled" : true
+            "key": "APKRUN_ACCEPTANCE_SUITE",
+            "value": "g2",
+            "enabled": true
           }
         ],
-        "maximumTestExecutionTimeAllowance" : 5400
+        "maximumTestExecutionTimeAllowance": 5400
       }
     },
     {
-      "id" : "00300001-0000-4000-8000-000000000003",
-      "name" : "G3",
-      "options" : {
-        "environmentVariableEntries" : [
+      "id": "00300001-0000-4000-8000-000000000003",
+      "name": "G3",
+      "options": {
+        "environmentVariableEntries": [
           {
-            "key" : "APKRUN_ACCEPTANCE_SUITE",
-            "value" : "g3",
-            "enabled" : true
+            "key": "APKRUN_ACCEPTANCE_SUITE",
+            "value": "g3",
+            "enabled": true
           },
           {
-            "key" : "APKRUN_G3_REQUIRED",
-            "value" : "1",
-            "enabled" : true
+            "key": "APKRUN_G3_REQUIRED",
+            "value": "1",
+            "enabled": true
           }
         ],
-        "maximumTestExecutionTimeAllowance" : 3600
+        "maximumTestExecutionTimeAllowance": 3600
+      }
+    },
+    {
+      "id": "00300001-0000-4000-8000-000000000008",
+      "name": "G8",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_ACCEPTANCE_SUITE",
+            "value": "g8",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_G8_REQUIRED",
+            "value": "1",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 3600
+      }
+    },
+    {
+      "id": "00300001-0000-4000-8000-000000000007",
+      "name": "G7",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_ACCEPTANCE_SUITE",
+            "value": "g7",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_G7_REQUIRED",
+            "value": "1",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 3600
       }
     }
   ],
-  "defaultOptions" : {
-    "maximumTestExecutionTimeAllowance" : 1800,
-    "testTimeoutsEnabled" : true
+  "defaultOptions": {
+    "maximumTestExecutionTimeAllowance": 1800,
+    "testTimeoutsEnabled": true
   },
-  "testTargets" : [
+  "testTargets": [
     {
-      "target" : {
-        "containerPath" : "container:APKRun.xcodeproj",
-        "identifier" : "B7A78BC626A509F5435EA189",
-        "name" : "AcceptanceTests"
+      "target": {
+        "containerPath": "container:APKRun.xcodeproj",
+        "identifier": "B7A78BC626A509F5435EA189",
+        "name": "AcceptanceTests"
       },
-      "parallelizable" : false,
-      "skippedTests" : [ ]
+      "parallelizable": false,
+      "skippedTests": []
     }
   ],
-  "version" : 1
+  "version": 1
 }

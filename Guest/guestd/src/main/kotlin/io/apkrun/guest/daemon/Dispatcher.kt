@@ -1,6 +1,7 @@
 package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.GuestCapability
+import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.Empty
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.Pong
@@ -33,6 +34,9 @@ class Dispatcher(
     private val displayLocks = ConcurrentHashMap<Int, Mutex>()
     private val displayExecutors = ConcurrentHashMap<Int, CoroutineDispatcher>()
     private val active = ConcurrentHashMap<Long, Deferred<Response?>>()
+    // `CollectDiagnostics` owns the single bulk-channel writer for the whole
+    // collect, so two collects can never run together.
+    private val diagnosticsMutex = Mutex()
     private val cancelled = ConcurrentHashMap.newKeySet<Long>()
 
     /**
@@ -165,10 +169,22 @@ class Dispatcher(
                 Response.newBuilder()
                     .setListPackages(operations.listPackages(request.listPackages))
                     .build()
+            Request.OpCase.COLLECT_DIAGNOSTICS ->
+                diagnosticsMutex.withLock {
+                    Response.newBuilder()
+                        .setCollectDiagnostics(
+                            operations.collectDiagnostics(request.collectDiagnostics)
+                        )
+                        .build()
+                }
             Request.OpCase.FOCUS_DISPLAY -> {
                 val displayId = request.focusDisplay.displayId
                 withDisplayLock(displayId) { operations.focusDisplay(displayId) }
                 Response.newBuilder().setFocusDisplay(Empty.getDefaultInstance()).build()
+            }
+            Request.OpCase.SET_CLIPBOARD -> {
+                operations.setClipboard(request.setClipboard)
+                Response.newBuilder().setSetClipboard(Empty.getDefaultInstance()).build()
             }
             else ->
                 failure(
@@ -213,6 +229,8 @@ class Dispatcher(
                 Request.OpCase.FOCUS_DISPLAY -> GuestCapability.INPUT
                 Request.OpCase.QUERY_PACKAGE,
                 Request.OpCase.LIST_PACKAGES -> GuestCapability.PACKAGES
+                Request.OpCase.COLLECT_DIAGNOSTICS -> GuestCapability.DIAGNOSTICS
+                Request.OpCase.SET_CLIPBOARD -> GuestCapability.CLIPBOARD_TEXT
                 else -> null
             }
 

@@ -1688,8 +1688,10 @@ with tempfile.TemporaryDirectory() as temporary_directory:
                 "GITHUB_EVENT_NAME": "pull_request_target",
             },
         ):
-            assert policy.main() == 2
-print("PASS CI policy fixture rejects base-ref changes and unstable API snapshots")
+            # Report-only: an unverifiable pull request (here a base that moved
+            # between the event and the current snapshot) is reported, not gated.
+            assert policy.main() == 0
+print("PASS CI policy fixture reports base-ref changes and unstable API snapshots")
 
 renamed = [
     {

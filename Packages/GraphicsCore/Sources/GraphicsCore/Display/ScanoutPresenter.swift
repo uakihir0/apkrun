@@ -73,6 +73,11 @@ public final class ScanoutPresenter: @unchecked Sendable {
     private let lock = NSLock()
     private var scheduler = LatestFrameScheduler<PresentRequest>()
     private var statisticsValue = PresentStatistics()
+    /// Blit submit times per buffer index, for the present-time ring (diagnostics.md §9.3).
+    private var blitStartUptimeNanos: [Int: UInt64] = [:]
+    /// The most recent present-blit durations in microseconds, oldest first.
+    private var recentPresentDurationsUs: [UInt64] = []
+    private static let presentDurationRingCapacity = 256
     private var isClosed = false
     private var isReconfiguring = false
     private let waiter = DispatchQueue(label: "io.apkrun.graphics.present-waiter")
@@ -150,6 +155,11 @@ public final class ScanoutPresenter: @unchecked Sendable {
     /// The statistics so far.
     public var statistics: PresentStatistics {
         lock.withLock { statisticsValue }
+    }
+
+    /// The most recent present-blit durations in microseconds, for `frameStatistics`.
+    public var presentDurationsUs: [UInt64] {
+        lock.withLock { recentPresentDurationsUs }
     }
 
     /// The device queue asks for a present of `resource` through `source`, the scanout rectangle of SET_SCANOUT.
@@ -257,6 +267,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
         let target = targets[index]
         return { [self] engine in
             do throws(GraphicsFailure) {
+                lock.withLock { blitStartUptimeNanos[index] = DispatchTime.now().uptimeNanoseconds }
                 let fence = try engine.presentBlit(
                     resource: request.resource,
                     sourceRect: request.source,
@@ -331,6 +342,14 @@ public final class ScanoutPresenter: @unchecked Sendable {
             scheduler.endBlit()
             statisticsValue.framesPresented &+= 1
             statisticsValue.droppedFrames = scheduler.droppedFrames
+            if let started = blitStartUptimeNanos[index] {
+                let durationUs =
+                    (DispatchTime.now().uptimeNanoseconds &- started) / 1_000
+                if recentPresentDurationsUs.count == Self.presentDurationRingCapacity {
+                    recentPresentDurationsUs.removeFirst()
+                }
+                recentPresentDurationsUs.append(durationUs)
+            }
             continuation.yield(.frameReady(generation: pool.generation, bufferIndex: index, sequence: sequence))
             if let work = startPendingLocked() {
                 backend.submitRenderWork(work)

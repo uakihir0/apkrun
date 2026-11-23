@@ -21,6 +21,8 @@ struct APKRunCommand: AsyncParsableCommand {
                     PackageInfoCommand.self,
                     LaunchCommand.self,
                     StopCommand.self,
+                    IntegrationsCommand.self,
+                    UpdateCommand.self,
                     DevCommand.self,
                 ]
             )
@@ -31,15 +33,21 @@ struct APKRunCommand: AsyncParsableCommand {
                 version: Output.versionFlag(BuildInfo.current),
                 subcommands: [
                     VersionCommand.self,
+                    SetupCommand.self,
                     RuntimeCommand.self,
                     LogsCommand.self,
                     InstallCommand.self,
+                    InspectCommand.self,
                     UninstallCommand.self,
                     ListPackagesCommand.self,
                     PackageInfoCommand.self,
+                    AdoptCommand.self,
                     LaunchCommand.self,
                     StopCommand.self,
+                    IntegrationsCommand.self,
+                    UpdateCommand.self,
                     OperationsCommand.self,
+                    WrapCommand.self,
                 ]
             )
         #endif
@@ -87,6 +95,8 @@ struct APKRunCommand: AsyncParsableCommand {
             }
         } catch let cleanExit as CleanExit {
             Self.exit(withError: cleanExit)
+        } catch let exitCode as ExitCode {
+            Self.exit(withError: exitCode)
         } catch {
             if Self.isBuiltInOutputRequest(arguments) {
                 Self.exit(withError: error)

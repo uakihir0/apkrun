@@ -1581,6 +1581,11 @@ public nonisolated struct GPHello: Sendable {
 
   public var mode: GPAgentMode = .unspecified
 
+  /// Per-capability detail strings, keyed by the capability name. The Store Agent reports the
+  /// update-ownership enforcement flag here ("store.ownership.v1" → "enforcement=on|off")
+  /// (guest-components.md §8.2).
+  public var capabilityDetails: Dictionary<String,String> = [:]
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -4304,7 +4309,7 @@ nonisolated extension GPProtocolVersion: SwiftProtobuf.Message, SwiftProtobuf._M
 
 nonisolated extension GPHello: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".Hello"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}protocol_version\0\u{1}agent\0\u{3}runtime_image_version\0\u{1}android\0\u{1}capabilities\0\u{1}channel\0\u{1}mode\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}protocol_version\0\u{1}agent\0\u{3}runtime_image_version\0\u{1}android\0\u{1}capabilities\0\u{1}channel\0\u{1}mode\0\u{3}capability_details\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -4319,6 +4324,7 @@ nonisolated extension GPHello: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
       case 5: try { try decoder.decodeRepeatedStringField(value: &self.capabilities) }()
       case 6: try { try decoder.decodeSingularEnumField(value: &self.channel) }()
       case 7: try { try decoder.decodeSingularEnumField(value: &self.mode) }()
+      case 8: try { try decoder.decodeMapField(fieldType: SwiftProtobuf._ProtobufMap<SwiftProtobuf.ProtobufString,SwiftProtobuf.ProtobufString>.self, value: &self.capabilityDetails) }()
       default: break
       }
     }
@@ -4350,6 +4356,9 @@ nonisolated extension GPHello: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
     if self.mode != .unspecified {
       try visitor.visitSingularEnumField(value: self.mode, fieldNumber: 7)
     }
+    if !self.capabilityDetails.isEmpty {
+      try visitor.visitMapField(fieldType: SwiftProtobuf._ProtobufMap<SwiftProtobuf.ProtobufString,SwiftProtobuf.ProtobufString>.self, value: self.capabilityDetails, fieldNumber: 8)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -4361,6 +4370,7 @@ nonisolated extension GPHello: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
     if lhs.capabilities != rhs.capabilities {return false}
     if lhs.channel != rhs.channel {return false}
     if lhs.mode != rhs.mode {return false}
+    if lhs.capabilityDetails != rhs.capabilityDetails {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

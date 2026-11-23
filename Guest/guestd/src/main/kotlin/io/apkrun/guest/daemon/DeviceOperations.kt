@@ -1,7 +1,12 @@
 package io.apkrun.guest.daemon
 
 import android.os.SystemClock
+import android.provider.Settings
+import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.ClearDisplay
+import io.apkrun.guest.protocol.v1.ClipData
+import io.apkrun.guest.protocol.v1.CollectDiagnostics
+import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
@@ -14,17 +19,19 @@ import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
 import io.apkrun.guest.protocol.v1.SystemState
 import io.apkrun.guest.runtime.HiddenApi
+import io.apkrun.guest.runtime.SystemContext
 
 /**
  * The operations of the agent on the device, over the services (guest-components.md §6.1). The
- * snapshot reports what the services know. The IME, notification, and clipboard fields keep their
- * defaults until #72, #54, and #55.
+ * snapshot reports what the services know. The notification field keeps its default until #55.
  */
-class DeviceOperations(
+internal class DeviceOperations(
     private val displays: DisplayService,
     private val tasks: TaskService,
     private val launch: LaunchService,
     private val packages: PackageService,
+    private val diagnostics: DiagnosticsService,
+    private val clipboard: ClipboardBridge,
 ) : AgentOperations {
     override fun snapshot(): Snapshot =
         Snapshot.newBuilder()
@@ -32,9 +39,9 @@ class DeviceOperations(
             .addAllDisplays(displays.readDisplays().values)
             .addAllTasks(tasks.list())
             .setFocusedDisplayId(tasks.focusedDisplayId())
-            .setImeSelected(false)
+            .setImeSelected(imeSelected())
             .setNotificationListenerEnabled(false)
-            .setClipboardSeq(0)
+            .setClipboardSeq(clipboard.currentSequence())
             .build()
 
     override fun setDisplayPolicy(request: SetDisplayPolicy) = displays.applyPolicy(request)
@@ -61,10 +68,27 @@ class DeviceOperations(
 
     override fun listPackages(request: ListPackages): PackageList = packages.list(request)
 
+    override fun setClipboard(request: ClipData) = clipboard.setClipboard(request)
+
+    override fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult =
+        diagnostics.collect(request)
+
+    /** Whether the development IME is the selected input method (input.md §5.6). */
+    private fun imeSelected(): Boolean =
+        Settings.Secure.getString(
+            SystemContext.get().contentResolver,
+            Settings.Secure.DEFAULT_INPUT_METHOD,
+        ) == IME_COMPONENT
+
     private fun systemState(): SystemState =
         SystemState.newBuilder()
             .setBootCompleted(HiddenApi.systemProperty("sys.boot_completed") == "1")
             .setUserUnlocked(HiddenApi.systemProperty("sys.user.0.ce_available") == "true")
             .setAndroidUptimeMs(SystemClock.uptimeMillis())
             .build()
+
+    private companion object {
+        /** Flat component of the development IME, as `DeviceSetup` selects it. */
+        const val IME_COMPONENT = "io.apkrun.guest/.ime.ApkRunInputMethodService"
+    }
 }

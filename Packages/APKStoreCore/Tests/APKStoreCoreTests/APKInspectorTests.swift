@@ -24,6 +24,21 @@ import Testing
     #expect(facts.nativeABIs == ["arm64-v8a", "armeabi-v7a"])
 }
 
+@Test func apkInspectorParsesMinSdkVersionFromNewerAapt2() throws {
+    // build-tools 37 renamed sdkVersion to minSdkVersion.
+    let facts = try APKInspector.parseBadging(
+        """
+        package: name='org.example.app' versionCode='1' versionName='1.0'
+        application-label:'App'
+        minSdkVersion:'29'
+        targetSdkVersion:'37'
+        """
+    )
+
+    #expect(facts.minSDK == 29)
+    #expect(facts.targetSDK == 37)
+}
+
 @Test func apkInspectorParsesSplitAndUsesPackageNameWhenLabelIsMissing() throws {
     let facts = try APKInspector.parseBadging(
         """

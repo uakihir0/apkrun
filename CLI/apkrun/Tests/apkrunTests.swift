@@ -332,6 +332,41 @@ import Testing
     #expect(command is RuntimeResetCommand)
 }
 
+#if !APKRUN_EMBEDDED_RUNTIME
+    @Test func setupCommandParsesImageAndConfirmation() async throws {
+        let command = try await APKRunCommand.asyncParseAsRoot(["setup", "--image", "/tmp/bundle", "--yes"])
+        guard let setup = command as? SetupCommand else {
+            Issue.record("setup did not parse as SetupCommand")
+            return
+        }
+        #expect(setup.image == "/tmp/bundle")
+        #expect(setup.yes == true)
+    }
+
+    @Test func setupCommandDefaultsToFeedImage() async throws {
+        let command = try await APKRunCommand.asyncParseAsRoot(["setup"])
+        guard let setup = command as? SetupCommand else {
+            Issue.record("setup did not parse as SetupCommand")
+            return
+        }
+        #expect(setup.image == nil)
+        #expect(setup.yes == false)
+    }
+
+    @Test func runtimeResetCommandParsesEraseFlags() async throws {
+        let command = try await APKRunCommand.asyncParseAsRoot([
+            "runtime", "reset", "--erase", "--no-backup", "--yes",
+        ])
+        guard let reset = command as? RuntimeResetCommand else {
+            Issue.record("runtime reset did not parse as RuntimeResetCommand")
+            return
+        }
+        #expect(reset.erase == true)
+        #expect(reset.noBackup == true)
+        #expect(reset.yes == true)
+    }
+#endif
+
 @Test func packageInfoRejectsTheDisplayOptionWithAnActionableCatalogError() async throws {
     let command = try await APKRunCommand.asyncParseAsRoot(["info", "--displays"])
     guard var infoCommand = command as? PackageInfoCommand else {
@@ -841,6 +876,10 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
     #endif
 }
 
+@Test func updateHelpMatchesGolden() {
+    #expect(UpdateCommand.helpMessage() == golden("help-update.txt"))
+}
+
 #if APKRUN_EMBEDDED_RUNTIME
     @Test func developmentLaunchOnlyStartsTheWindowForAnActualLaunch() {
         #expect(DisplayWindowSession.request(in: ["dev", "launch", "HelloText.apk"]) == .launch)
@@ -1013,6 +1052,102 @@ private final class CLIOutputRecorder: @unchecked Sendable {
         #expect(ExitCodes.code(for: entry.code) == expected)
     }
 }
+
+#if !APKRUN_EMBEDDED_RUNTIME
+    @Test func wrapCommandParsesPackageOutputReplaceAndJSON() async throws {
+        let parsed = try await APKRunCommand.asyncParseAsRoot([
+            "wrap", "io.apkrun.fixture.hellotext",
+            "--output", "/tmp", "--replace", "--json",
+        ])
+        let command = try #require(parsed as? WrapCommand)
+        #expect(command.package == "io.apkrun.fixture.hellotext")
+        #expect(command.output == "/tmp")
+        #expect(command.replace == true)
+        #expect(command.json == true)
+    }
+
+    @Test func wrapSuccessResultPrintsTheBundlePath() {
+        #expect(WrapCommandSupport.resultText(helloWrapperInfo()) == golden("wrap-success.txt"))
+    }
+
+    @Test func wrapperInfoReturnsTheSucceededWrapper() throws {
+        let info = helloWrapperInfo()
+        let snapshot = wrapSnapshot(result: .succeeded(.wrapper(info)))
+        #expect(
+            try WrapCommandSupport.wrapperInfo(
+                from: snapshot, expectedPackageID: helloPackageID) == info)
+    }
+
+    @Test func wrapperInfoPropagatesPackageNotInstalled() {
+        let wireError = RuntimeWireError(
+            domain: "wrapper",
+            code: "wrapper.packageNotInstalled",
+            message: "io.apkrun.fixture.hellotext isn't installed in APKRun.",
+            remediation: "Install io.apkrun.fixture.hellotext first. "
+                + "apkrun wrap installs it too when you add --install."
+        )
+        let snapshot = wrapSnapshot(result: .failed(wireError))
+        #expect(throws: wireError) {
+            try WrapCommandSupport.wrapperInfo(
+                from: snapshot, expectedPackageID: helloPackageID)
+        }
+        #expect(ErrorOutput.render(wireError, json: false) == golden("wrap-package-not-installed.txt"))
+    }
+
+    @Test func wrapperInfoPropagatesWrapperExists() {
+        let wireError = RuntimeWireError(
+            domain: "wrapper",
+            code: "wrapper.wrapperExists",
+            message:
+                "io.apkrun.fixture.hellotext already has a Mac app (HelloText.app).",
+            remediation:
+                "Use Update Mac App, or run: apkrun wrap io.apkrun.fixture.hellotext --replace"
+        )
+        let snapshot = wrapSnapshot(result: .failed(wireError))
+        #expect(throws: wireError) {
+            try WrapCommandSupport.wrapperInfo(
+                from: snapshot, expectedPackageID: helloPackageID)
+        }
+        #expect(ErrorOutput.render(wireError, json: false) == golden("wrap-wrapper-exists.txt"))
+    }
+
+    private var helloPackageID: RuntimePackageID {
+        RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext")!
+    }
+
+    private func helloWrapperInfo() -> WrapperInfo {
+        WrapperInfo(
+            summary: WrapperSummary(
+                packageID: helloPackageID,
+                bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+                displayName: "HelloText",
+                kind: .local,
+                bundleURL: URL(fileURLWithPath: "/Applications/HelloText.app"),
+                status: WrapperStatus(state: .valid),
+                approval: .generated,
+                launcherVersion: "1",
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+            ),
+            fileName: "HelloText",
+            customization: WrapperCustomizationWire(),
+            signer: .adHoc,
+            cdhash: "0123456789abcdef0123456789abcdef01234567",
+            launcherAPI: APIVersion(major: 1, minor: 0),
+            formatVersion: 1
+        )
+    }
+
+    private func wrapSnapshot(result: OperationResult) -> OperationSnapshot {
+        OperationSnapshot(
+            operationID: OperationID(),
+            kind: .wrapperCreate,
+            packageID: helloPackageID,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            result: result,
+            finishedAt: Date(timeIntervalSince1970: 1_700_000_001)
+        )
+    }
+#endif
 
 private func golden(_ name: String) -> String {
     let contents = try! String(

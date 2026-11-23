@@ -1,3 +1,5 @@
+import AppKit
+import Combine
 import CryptoKit
 import Darwin
 import ServiceManagement
@@ -5,13 +7,25 @@ import SwiftUI
 
 @main
 struct APKRunApp: App {
+    @NSApplicationDelegateAdaptor(ApprovalWindowDelegate.self) private var appDelegate
     @State private var registrationTitle = "Background service setup failed"
     @State private var registrationMessage: String?
     @State private var isRegistrationErrorPresented = false
+    @StateObject private var approvalCenter = ApprovalCenter.shared
+    @State private var runtimeStatus = RuntimeStatusModel()
+
+    /// Whether apkrund opened the app for a wrapper approval (host-ui.md §3.3).
+    /// Only the approval window is shown then.
+    private let approvalOnly: Bool
 
     init() {
+        approvalOnly = CommandLine.arguments.dropFirst().contains("--approve")
+        _approvalCenter = StateObject(wrappedValue: .shared)
         if CommandLine.arguments.dropFirst().contains("--register-runtime") {
             RuntimeRegistrationCommand.run()
+        }
+        Task { @MainActor in
+            ApprovalCenter.shared.start()
         }
 
         do {
@@ -33,6 +47,15 @@ struct APKRunApp: App {
         WindowGroup("APKRun") {
             Text("APKRun")
                 .frame(minWidth: 480, minHeight: 320)
+                .environment(runtimeStatus)
+                .task { runtimeStatus.start() }
+                // First-run provisioning (host-ui.md §4): the sheet reopens
+                // whenever setup is not `complete`; apkrund resumes at the
+                // first incomplete step.
+                .sheet(isPresented: onboardingPresented) {
+                    OnboardingView()
+                        .environment(runtimeStatus)
+                }
                 .alert(registrationTitle, isPresented: $isRegistrationErrorPresented) {
                     Button("Open Login Items Settings") {
                         SMAppService.openSystemSettingsLoginItems()
@@ -46,6 +69,55 @@ struct APKRunApp: App {
                 }
         }
         .windowResizability(.contentSize)
+        .defaultLaunchBehavior(approvalOnly ? .suppressed : .automatic)
+
+        settingsScene
+    }
+
+    /// The onboarding sheet opens until setup completes; it never opens on an
+    /// approval-only launch (host-ui.md §3.3).
+    private var onboardingPresented: Binding<Bool> {
+        Binding(
+            get: { !approvalOnly && !runtimeStatus.setupComplete },
+            set: { _ in }
+        )
+    }
+}
+
+/// Opens and closes the wrapper approval window (host-ui.md §10.1).
+///
+/// A plain `NSWindowController`, not a SwiftUI `Window` scene: a scene's view
+/// tree dies with its last window, so a prompt arriving while every window is
+/// closed would never open. The delegate lives as long as the app.
+@MainActor
+private final class ApprovalWindowDelegate: NSObject, NSApplicationDelegate {
+    private var windowController: NSWindowController?
+    private var cancellable: AnyCancellable?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        cancellable = ApprovalCenter.shared.$current.sink { [weak self] prompt in
+            if prompt != nil {
+                self?.showApprovalWindow()
+            } else {
+                self?.windowController?.close()
+            }
+        }
+    }
+
+    private func showApprovalWindow() {
+        if windowController == nil {
+            let rootView = ApprovalPromptView()
+                .environmentObject(ApprovalCenter.shared)
+            let window = NSWindow(
+                contentViewController: NSHostingController(rootView: rootView))
+            window.title = "Approval Required"
+            window.styleMask = [.titled, .closable]
+            window.isReleasedWhenClosed = false
+            window.center()
+            windowController = NSWindowController(window: window)
+        }
+        windowController?.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 

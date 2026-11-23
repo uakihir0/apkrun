@@ -9,3 +9,10 @@ public protocol PointerInputSink: Sendable {
     /// Delivers `events`, in the order they happened.
     func deliver(_ events: [InputEvent])
 }
+
+/// Receives the text and editor events of editor mode (input.md §5.1). The events are produced on the
+/// main thread by `NSTextInputClient` calls, in the order the macOS input method made them.
+public protocol ImeTextSink: Sendable {
+    /// Delivers one event.
+    func deliverText(_ event: ImeTextEvent)
+}

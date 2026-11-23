@@ -1,6 +1,7 @@
 package io.apkrun.guest.daemon
 
 import android.content.Intent
+import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.DisplayInfo
 import io.apkrun.guest.protocol.v1.DisplayMode
 import io.apkrun.guest.protocol.v1.GuestErrorCode

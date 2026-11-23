@@ -84,11 +84,11 @@ apkrund sets a requirement on each listener with `setConnectionCodeSigningRequir
 
 ### 2.1 Constants
 
-`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 11}`. Ordering compares `major`, then `minor`.
+`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 12}`. Ordering compares `major`, then `minor`.
 
 ```swift
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    public static let current = APIVersion(major: 1, minor: 11)
+    public static let current = APIVersion(major: 1, minor: 12)
     public let major: Int
     public let minor: Int
 }
@@ -110,6 +110,9 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.9 | `subscribe`, `unsubscribe`; event-sink handshake; sequenced batches |
 | 1.10 | `packages.installed` and `packages.updated` events |
 | 1.11 | `beginUninstallPackage`; `PackageChange.removed`; `OperationSnapshot.requestFingerprint` |
+| 1.12 | `createWrapper`; the `wrappers` event topic and `WrapperChange`; `OperationOutput.wrapper` (`WrapperInfo`) |
+| 1.13 | `pendingApprovals`, `decideApproval`, `deniedWrappers`, `clearWrapperDenial`; broker `requestApproval` |
+| 1.14 | `perfStatistics`, `frameStatistics` (developer mode); `RuntimeLaunchRequest.launchTiming` |
 
 ### 2.2 Rules per endpoint
 
@@ -1216,7 +1219,9 @@ Semantics: [diagnostics.md](../02-design/diagnostics.md). All of §13 is control
 - `createDiagnostics` produces a result whenever the writer works. A cancel truncates the handle to 0 bytes; the client deletes the file (§4.7).
 - `guestLog` needs `developer.enabled`, else `runtime.developerModeRequired`. It never starts Android. Host logs use `apkrun logs --follow` in the CLI, without an operation ([cli.md](../02-design/cli.md) §4.8).
 
-`WirePerfStatistics`: `since` (Date), `markers` (`name`, `count`, `p50Us`, `p95Us`, `maxUs`), `input` (`segment` (`input.translate`, `input.route`), `boundsUs`, `counts`), `sessions` (`SessionGraphicsStatistics`: `packageID`, `displayID`, `fps` (Double, last 10 s), `droppedFrames`, `hostReadbacks` (must stay 0; [AGENTS.md](../../AGENTS.md) §6.4), `cpuPixelCopies`, `presentGPUTimeP50Us`, `presentGPUTimeP95Us`). Values are microseconds with suffix `Us`, an exception to §4.2.
+`WirePerfStatistics`: `since` (Date), `markers` (`name`, `count`, `p50Us`, `p95Us`, `maxUs`), `input` (`segment` (`input.translate`, `input.route`), `boundsUs`, `counts`), `sessions` (`SessionGraphicsStatistics`: `packageID`, `displayID`, `fps` (Double, last 10 s), `droppedFrames`, `hostReadbacks` (must stay 0; [AGENTS.md](../../AGENTS.md) §6.4), `cpuPixelCopies`, `presentGPUTimeP50Us`, `presentGPUTimeP95Us`), `metrics`? (`WireMetricsSnapshot`: `sampledAt`, `vmDefinitionBytes`?, `balloonTargetBytes`?, `guestMemTotalBytes`?, `guestMemAvailableBytes`?, `vmServiceFootprintBytes`?, `guestProcesses` (`name`, `pssBytes`, `rssBytes`), `iosurfaceBytes`, `metalAllocatedBytes`?, `daemonFootprintBytes`, `daemonResidentBytes`, `daemonCPUUserUs`, `daemonCPUSystemUs`). Values are microseconds with suffix `Us`, an exception to §4.2.
+
+Both `perfStatistics` and `frameStatistics` need `developer.enabled`, else `runtime.developerModeRequired`; neither starts Android.
 
 ### 13.2 Events
 
@@ -1230,6 +1235,7 @@ Topic `health`: `healthChanged(WireHealthResult)`, coalesced per check ID; live 
 | `applyHealthFixes` | `diagnostics.unknownHealthCheck`, `diagnostics.fixNotAvailable`. A failed fix is `diagnostics.fixFailed` in that row's `error` |
 | `createDiagnostics` | `diagnostics.stagingFailed`, `diagnostics.bundleWriteFailed`, `runtime.malformedRequest` |
 | `guestLog` | `runtime.developerModeRequired` |
+| `perfStatistics`, `frameStatistics` | `runtime.developerModeRequired` |
 
 ---
 

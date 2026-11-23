@@ -933,6 +933,45 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
         reply(Self.encode(RuntimeEndpointReply.granted), controlListener.listener.endpoint)
     }
 
+    func requestApproval(_ request: Data, reply: @escaping (Data) -> Void) {
+        // Not allowed during shutdown: a new prompt could not be answered and
+        // would hold the request drain for the full ten-minute timeout.
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            let rejection = Self.rejection(for: admission)
+            reply(
+                Self.encode(
+                    RuntimeApprovalBrokerReply(
+                        error: RuntimeWireError(domain: "runtime", code: rejection.errorCode, message: ""))))
+            return
+        }
+        guard
+            request.count <= Self.maximumRequestSize,
+            let approvalRequest = try? JSONDecoder().decode(ApprovalRequest.self, from: request)
+        else {
+            reply(
+                Self.encode(
+                    RuntimeApprovalBrokerReply(
+                        error: RuntimeWireError(
+                            domain: "runtime", code: "malformedRequest", message: ""))))
+            pending.finish()
+            return
+        }
+        let response = XPCDataReply(reply)
+        Task {
+            defer { pending.finish() }
+            do {
+                let result = try await host.requestApproval(approvalRequest)
+                response.send(Self.encode(RuntimeApprovalBrokerReply(result: result)))
+            } catch {
+                let wireError =
+                    (error as? RuntimeWireError)
+                    ?? RuntimeWireError(domain: "runtime", code: "internal", message: "")
+                response.send(Self.encode(RuntimeApprovalBrokerReply(error: wireError)))
+            }
+        }
+    }
+
     private static let maximumRequestSize = 16 * 1024
 
     private static func endpointRejection(
@@ -1041,6 +1080,15 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             argumentIndex: 1,
             ofReply: false
         )
+        // `updatePackage` carries the same FileHandle array as `importPackage`
+        // for a manual `--file` update; without the whitelist NSXPC refuses
+        // the call before it reaches the handler.
+        controlInterface.setClasses(
+            fileHandleClasses,
+            for: #selector(RuntimeControlXPC.updatePackage(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
         connection.remoteObjectInterface = NSXPCInterface(with: RuntimeEventSink.self)
         let eventHub = host.eventHub
         let remoteSink =
@@ -1070,12 +1118,16 @@ extension StartRuntimeRequest: VersionedControlRequest {}
 extension StopRuntimeRequest: VersionedControlRequest {}
 extension RestartRuntimeRequest: VersionedControlRequest {}
 extension RuntimeResetControlRequest: VersionedControlRequest {}
+extension RuntimeSetupControlRequest: VersionedControlRequest {}
+extension RuntimeResetAndroidControlRequest: VersionedControlRequest {}
 extension RuntimeListPackagesControlRequest: VersionedControlRequest {}
 extension RuntimePackageInfoControlRequest: VersionedControlRequest {}
 extension RuntimeLaunchControlRequest: VersionedControlRequest {}
 extension RuntimeTerminateControlRequest: VersionedControlRequest {}
 extension RuntimeImportPackageControlRequest: VersionedControlRequest {}
 extension RuntimeInstallImportedControlRequest: VersionedControlRequest {}
+extension RuntimeDiscardImportControlRequest: VersionedControlRequest {}
+extension RuntimeAdoptPackageControlRequest: VersionedControlRequest {}
 extension RuntimeBeginInstallImportedControlRequest: VersionedControlRequest {}
 extension RuntimeBeginUninstallPackageControlRequest: VersionedControlRequest {}
 extension RuntimeCancelOperationControlRequest: VersionedControlRequest {}
@@ -1083,6 +1135,24 @@ extension RuntimeListOperationsControlRequest: VersionedControlRequest {}
 extension RuntimeOperationStatusControlRequest: VersionedControlRequest {}
 extension RuntimeSubscribeControlRequest: VersionedControlRequest {}
 extension RuntimeUnsubscribeControlRequest: VersionedControlRequest {}
+extension RuntimeVerifyWrapperControlRequest: VersionedControlRequest {}
+extension RuntimeCreateWrapperControlRequest: VersionedControlRequest {}
+extension RuntimePendingApprovalsControlRequest: VersionedControlRequest {}
+extension RuntimeDecideApprovalControlRequest: VersionedControlRequest {}
+extension RuntimeDeniedWrappersControlRequest: VersionedControlRequest {}
+extension RuntimeClearWrapperDenialControlRequest: VersionedControlRequest {}
+extension RuntimePerfStatisticsControlRequest: VersionedControlRequest {}
+extension RuntimeFrameStatisticsControlRequest: VersionedControlRequest {}
+extension RuntimePushClipboardControlRequest: VersionedControlRequest {}
+extension RuntimeClipboardWrittenControlRequest: VersionedControlRequest {}
+extension RuntimeFocusChangedControlRequest: VersionedControlRequest {}
+extension RuntimeIntegrationStatusControlRequest: VersionedControlRequest {}
+extension RuntimeCheckForUpdatesControlRequest: VersionedControlRequest {}
+extension RuntimeListUpdatesControlRequest: VersionedControlRequest {}
+extension RuntimeUpdateHistoryControlRequest: VersionedControlRequest {}
+extension RuntimeSetUpdatePolicyControlRequest: VersionedControlRequest {}
+extension RuntimeSetUpdateAuthorityControlRequest: VersionedControlRequest {}
+extension RuntimeUpdatePackageControlRequest: VersionedControlRequest {}
 
 enum RuntimeControlOperation {
     case runtimeStatus
@@ -1090,12 +1160,16 @@ enum RuntimeControlOperation {
     case stopRuntime
     case restartRuntime
     case resetRuntime
+    case setup
+    case resetAndroid
     case listPackages
     case packageInfo
     case launch
     case terminate
     case importPackage
     case installImported
+    case discardImport
+    case adoptPackage
     case beginInstallImported
     case beginUninstallPackage
     case cancelOperation
@@ -1103,6 +1177,24 @@ enum RuntimeControlOperation {
     case operationStatus
     case subscribe
     case unsubscribe
+    case verifyWrapper
+    case createWrapper
+    case pendingApprovals
+    case decideApproval
+    case deniedWrappers
+    case clearWrapperDenial
+    case perfStatistics
+    case frameStatistics
+    case pushClipboard
+    case clipboardWritten
+    case focusChanged
+    case integrationStatus
+    case checkForUpdates
+    case listUpdates
+    case updateHistory
+    case setUpdatePolicy
+    case setUpdateAuthority
+    case updatePackage
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1114,7 +1206,8 @@ enum RuntimeControlOperation {
                 false
             }
         case .startRuntime, .stopRuntime, .restartRuntime, .resetRuntime,
-            .importPackage, .installImported, .beginInstallImported,
+            .setup, .resetAndroid,
+            .importPackage, .installImported, .beginInstallImported, .discardImport, .adoptPackage,
             .beginUninstallPackage,
             .cancelOperation, .listOperations, .operationStatus:
             switch clientKind {
@@ -1128,6 +1221,27 @@ enum RuntimeControlOperation {
             case .app, .menuBar, .cli, .launcher:
                 true
             case .wrapper:
+                false
+            }
+        case .createWrapper:
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
+                false
+            }
+        case .pendingApprovals, .decideApproval:
+            switch clientKind {
+            case .app:
+                true
+            case .menuBar, .cli, .launcher, .wrapper:
+                false
+            }
+        case .deniedWrappers, .clearWrapperDenial:
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
                 false
             }
         case .listPackages:
@@ -1144,7 +1258,35 @@ enum RuntimeControlOperation {
             case .wrapper:
                 false
             }
-        case .launch, .terminate:
+        case .launch, .terminate, .verifyWrapper:
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
+                false
+            }
+        case .perfStatistics, .frameStatistics:
+            // Developer-mode reads; the developer.enabled gate is enforced in
+            // RuntimeHost (diagnostics.md §9.3, runtime-api.md §13.1).
+            true
+        case .pushClipboard, .clipboardWritten, .focusChanged:
+            // Session-channel messages of desktop-integration.md §3.3: the
+            // window process reports for its own session.
+            switch clientKind {
+            case .wrapper, .launcher:
+                true
+            case .app, .menuBar, .cli:
+                false
+            }
+        case .integrationStatus:
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
+                false
+            }
+        case .checkForUpdates, .listUpdates, .updateHistory, .setUpdatePolicy,
+            .setUpdateAuthority, .updatePackage:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -1311,6 +1453,96 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         }
     }
 
+    func setup(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeSetupControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .setup,
+                as: RuntimeSetupControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeSetupControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(RuntimeSetupControlRequest.self, from: request),
+                let operationID = RuntimeAPI.OperationID(rawValue: decoded.header.operationID)
+            else {
+                response.send(Self.encode(RuntimeSetupControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let handle = try await host.beginSetup(
+                    decoded.request,
+                    files: files,
+                    operationID: operationID,
+                    clientKind: clientKind
+                )
+                response.send(Self.encode(RuntimeSetupControlReply(result: handle)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeSetupControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func resetAndroid(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeResetAndroidControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .resetAndroid,
+                as: RuntimeResetAndroidControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeResetAndroidControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeResetAndroidControlRequest.self,
+                    from: request
+                ),
+                let operationID = RuntimeAPI.OperationID(rawValue: decoded.header.operationID)
+            else {
+                response.send(Self.encode(RuntimeResetAndroidControlReply(error: Self.malformedWireError)))
+                return
+            }
+            guard decoded.request.confirmed else {
+                response.send(Self.encode(RuntimeResetAndroidControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let handle = try await host.beginResetAndroid(
+                    decoded.request,
+                    operationID: operationID,
+                    clientKind: clientKind
+                )
+                response.send(Self.encode(RuntimeResetAndroidControlReply(result: handle)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeResetAndroidControlReply(error: wireError)))
+            }
+        }
+    }
+
     func listPackages(_ request: Data, reply: @escaping (Data) -> Void) {
         let response = makeReplyHandler(reply, snapshotBarrier: true)
         let admission = connectionRegistry.beginRequest(on: connectionID)
@@ -1442,6 +1674,79 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         }
     }
 
+    func updatePackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeUpdatePackageControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .updatePackage,
+                as: RuntimeUpdatePackageControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeUpdatePackageControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeUpdatePackageControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeUpdatePackageControlReply(error: Self.malformedWireError)))
+                return
+            }
+            if let sources = decoded.options.files,
+                sources.isEmpty || sources.count > 20 || sources.count != files.count
+            {
+                response.send(
+                    Self.encode(
+                        RuntimeUpdatePackageControlReply(
+                            error: .store("invalidImport", message: "Choose between 1 and 20 APK files.")
+                        )
+                    )
+                )
+                return
+            }
+            if decoded.options.files == nil, !files.isEmpty {
+                response.send(
+                    Self.encode(
+                        RuntimeUpdatePackageControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let (operation, outcome) = try await host.updatePackage(
+                    packageID: decoded.packageID,
+                    options: decoded.options,
+                    files: files,
+                    operationID: OperationID(rawValue: decoded.header.operationID)
+                        ?? OperationID(),
+                    requestPayload: request,
+                    clientKind: clientKind
+                )
+                response.send(
+                    Self.encode(
+                        RuntimeUpdatePackageControlReply(
+                            operation: operation, outcome: outcome)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeUpdatePackageControlReply(error: wireError)))
+            }
+        }
+    }
+
     func installImported(_ request: Data, reply: @escaping (Data) -> Void) {
         let response = makeReplyHandler(reply)
         let admission = connectionRegistry.beginRequest(on: connectionID)
@@ -1473,6 +1778,76 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeInstallImportedControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func discardImport(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeDiscardImportControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .discardImport,
+                as: RuntimeDiscardImportControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeDiscardImportControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeDiscardImportControlRequest.self, from: request)
+            else {
+                response.send(Self.encode(RuntimeDiscardImportControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.discardImport(decoded.request)
+                response.send(Self.encode(RuntimeDiscardImportControlReply()))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeDiscardImportControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func adoptPackage(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeAdoptPackageControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .adoptPackage,
+                as: RuntimeAdoptPackageControlRequest.self
+            ) {
+                response.send(Self.encode(RuntimeAdoptPackageControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeAdoptPackageControlRequest.self, from: request)
+            else {
+                response.send(Self.encode(RuntimeAdoptPackageControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let summary = try await host.adoptPackage(decoded.request)
+                response.send(Self.encode(RuntimeAdoptPackageControlReply(summary: summary)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeAdoptPackageControlReply(error: wireError)))
             }
         }
     }
@@ -1861,7 +2236,9 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 return
             }
             do {
-                let result = try await host.launch(RuntimeLaunchRequest(packageID: decoded.packageID))
+                let result = try await host.launch(
+                    RuntimeLaunchRequest(
+                        packageID: decoded.packageID, launchTiming: decoded.launchTiming))
                 response.send(Self.encode(RuntimeLaunchControlReply(result: result)))
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
@@ -1900,6 +2277,768 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeTerminateControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func verifyWrapper(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeVerifyWrapperControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .verifyWrapper,
+                as: RuntimeVerifyWrapperControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeVerifyWrapperControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeVerifyWrapperControlRequest.self, from: request) else {
+                response.send(
+                    Self.encode(RuntimeVerifyWrapperControlReply(error: Self.malformedWireError))
+                )
+                return
+            }
+            do {
+                let result = try await host.verifyWrapper(
+                    VerifyWrapperRequest(bundleURL: decoded.bundleURL, deep: decoded.deep)
+                )
+                response.send(Self.encode(RuntimeVerifyWrapperControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeVerifyWrapperControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func createWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeCreateWrapperControlReply(error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .createWrapper,
+                as: RuntimeCreateWrapperControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeCreateWrapperControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeCreateWrapperControlRequest.self,
+                    from: request
+                ),
+                let operationID = RuntimeAPI.OperationID(rawValue: decoded.header.operationID)
+            else {
+                response.send(
+                    Self.encode(RuntimeCreateWrapperControlReply(error: Self.malformedWireError))
+                )
+                return
+            }
+            do {
+                let result = try await host.createWrapper(
+                    decoded.request,
+                    icon: icon,
+                    operationID: operationID,
+                    clientKind: decoded.header.clientKind
+                )
+                response.send(Self.encode(RuntimeCreateWrapperControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeCreateWrapperControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func pendingApprovals(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimePendingApprovalsControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .pendingApprovals,
+                as: RuntimePendingApprovalsControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimePendingApprovalsControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            let prompts = await host.pendingApprovals()
+            response.send(Self.encode(RuntimePendingApprovalsControlReply(result: prompts)))
+        }
+    }
+
+    func decideApproval(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeDecideApprovalControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .decideApproval,
+                as: RuntimeDecideApprovalControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeDecideApprovalControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeDecideApprovalControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(RuntimeDecideApprovalControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.decideApproval(
+                    DecideApprovalRequest(approvalID: decoded.approvalID, allow: decoded.allow))
+                response.send(Self.encode(RuntimeDecideApprovalControlReply()))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeDecideApprovalControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func deniedWrappers(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeDeniedWrappersControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .deniedWrappers,
+                as: RuntimeDeniedWrappersControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeDeniedWrappersControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            let denied = await host.deniedWrappers()
+            response.send(Self.encode(RuntimeDeniedWrappersControlReply(result: denied)))
+        }
+    }
+
+    func clearWrapperDenial(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeClearWrapperDenialControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .clearWrapperDenial,
+                as: RuntimeClearWrapperDenialControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeClearWrapperDenialControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeClearWrapperDenialControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeClearWrapperDenialControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.clearWrapperDenial(
+                    ClearWrapperDenialRequest(bundleID: decoded.bundleID, cdhash: decoded.cdhash))
+                response.send(Self.encode(RuntimeClearWrapperDenialControlReply()))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeClearWrapperDenialControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func perfStatistics(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimePerfStatisticsControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .perfStatistics,
+                as: RuntimePerfStatisticsControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimePerfStatisticsControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimePerfStatisticsControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimePerfStatisticsControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let result = try await host.perfStatistics(
+                    PerfStatisticsRequest(reset: decoded.reset))
+                response.send(Self.encode(RuntimePerfStatisticsControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimePerfStatisticsControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func frameStatistics(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeFrameStatisticsControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .frameStatistics,
+                as: RuntimeFrameStatisticsControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeFrameStatisticsControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeFrameStatisticsControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeFrameStatisticsControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let sessions = try await host.frameStatistics(sessionID: decoded.sessionID)
+                response.send(Self.encode(RuntimeFrameStatisticsControlReply(sessions: sessions)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeFrameStatisticsControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func pushClipboard(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimePushClipboardControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .pushClipboard,
+                as: RuntimePushClipboardControlRequest.self,
+                byteLimit: Self.maximumClipboardRequestSize
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimePushClipboardControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimePushClipboardControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimePushClipboardControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let ack = try await host.pushClipboard(
+                    sessionID: decoded.sessionID, item: decoded.item)
+                response.send(Self.encode(RuntimePushClipboardControlReply(ack: ack)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimePushClipboardControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func clipboardWritten(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeClipboardWrittenControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .clipboardWritten,
+                as: RuntimeClipboardWrittenControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeClipboardWrittenControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeClipboardWrittenControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeClipboardWrittenControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.clipboardWritten(
+                    sessionID: decoded.sessionID, written: decoded.written)
+                response.send(Self.encode(RuntimeClipboardWrittenControlReply()))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeClipboardWrittenControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func focusChanged(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeFocusChangedControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .focusChanged,
+                as: RuntimeFocusChangedControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeFocusChangedControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeFocusChangedControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeFocusChangedControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.focusChanged(sessionID: decoded.sessionID, isKey: decoded.isKey)
+                response.send(Self.encode(RuntimeFocusChangedControlReply()))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeFocusChangedControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func integrationStatus(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeIntegrationStatusControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .integrationStatus,
+                as: RuntimeIntegrationStatusControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeIntegrationStatusControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeIntegrationStatusControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeIntegrationStatusControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let status = try await host.integrationStatus(packageID: decoded.packageID)
+                response.send(Self.encode(RuntimeIntegrationStatusControlReply(status: status)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeIntegrationStatusControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func checkForUpdates(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeCheckForUpdatesControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .checkForUpdates,
+                as: RuntimeCheckForUpdatesControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeCheckForUpdatesControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeCheckForUpdatesControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeCheckForUpdatesControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let (operation, results) = try await host.checkForUpdates(
+                    packages: decoded.packages,
+                    checkOnly: decoded.checkOnly,
+                    operationID: OperationID(rawValue: decoded.header.operationID)
+                        ?? OperationID(),
+                    requestPayload: request,
+                    clientKind: clientKind
+                )
+                response.send(
+                    Self.encode(
+                        RuntimeCheckForUpdatesControlReply(
+                            operation: operation, results: results)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeCheckForUpdatesControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func listUpdates(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeListUpdatesControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .listUpdates,
+                as: RuntimeListUpdatesControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeListUpdatesControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                (try? JSONDecoder().decode(
+                    RuntimeListUpdatesControlRequest.self,
+                    from: request
+                )) != nil
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeListUpdatesControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let updates = try await host.listUpdates()
+                response.send(Self.encode(RuntimeListUpdatesControlReply(updates: updates)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeListUpdatesControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func updateHistory(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeUpdateHistoryControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .updateHistory,
+                as: RuntimeUpdateHistoryControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeUpdateHistoryControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeUpdateHistoryControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeUpdateHistoryControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let entries = try await host.updateHistory(
+                    packageID: decoded.packageID,
+                    limit: min(decoded.limit ?? 50, 1000)
+                )
+                response.send(Self.encode(RuntimeUpdateHistoryControlReply(entries: entries)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeUpdateHistoryControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func setUpdatePolicy(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeSetUpdatePolicyControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .setUpdatePolicy,
+                as: RuntimeSetUpdatePolicyControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeSetUpdatePolicyControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeSetUpdatePolicyControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeSetUpdatePolicyControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let status = try await host.setUpdatePolicy(
+                    packageID: decoded.packageID, policy: decoded.policy)
+                response.send(Self.encode(RuntimeSetUpdatePolicyControlReply(status: status)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeSetUpdatePolicyControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func setUpdateAuthority(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeSetUpdateAuthorityControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .setUpdateAuthority,
+                as: RuntimeSetUpdateAuthorityControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeSetUpdateAuthorityControlReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeSetUpdateAuthorityControlRequest.self,
+                    from: request
+                )
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeSetUpdateAuthorityControlReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let status = try await host.setUpdateAuthority(
+                    packageID: decoded.packageID, authority: decoded.authority)
+                response.send(Self.encode(RuntimeSetUpdateAuthorityControlReply(status: status)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeSetUpdateAuthorityControlReply(error: wireError)))
             }
         }
     }
@@ -1948,6 +3087,11 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
 
     private static let maximumRequestSize = 1024 * 1024
 
+    /// The bound of a clipboard request: 1 MiB text + 1 MiB HTML + a 16 MiB
+    /// PNG (which JSON-encodes to base64, ~1.34x), plus envelope overhead
+    /// (runtime-api.md §11.4).
+    private static let maximumClipboardRequestSize = 24 * 1024 * 1024
+
     private static let malformedWireError = RuntimeWireError.runtime(
         "malformedRequest",
         message: safeMessage(for: "runtime.malformedRequest")
@@ -1968,9 +3112,10 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         _ data: Data,
         clientKind: RuntimeClientKind,
         operation: RuntimeControlOperation,
-        as requestType: Request.Type
+        as requestType: Request.Type,
+        byteLimit: Int = maximumRequestSize
     ) -> RuntimeControlError? {
-        guard data.count <= maximumRequestSize,
+        guard data.count <= byteLimit,
             let request = try? JSONDecoder().decode(requestType, from: data)
         else {
             return RuntimeControlError(

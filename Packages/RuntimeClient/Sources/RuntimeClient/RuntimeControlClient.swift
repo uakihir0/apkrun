@@ -77,6 +77,9 @@ public actor RuntimeControlClient {
     private let connectionFactory: any RuntimeXPCConnectionFactory
     private let eventStreamHub: RuntimeEventStreamHub
     private let eventSink: RuntimeEventSinkReceiver
+    /// The closest stamp to this process's start (diagnostics.md §4.2,
+    /// `WRAPPER_PROCESS_START`): taken when the client is created.
+    private let processStartNanos = mach_continuous_time()
     private var openedControl: OpenedControlConnection?
     private var openingControl: Task<OpenedControlConnection, any Error>?
     private var remoteEventTopics: [EventTopic] = []
@@ -196,6 +199,128 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Starts first-run provisioning and returns a handle that can be polled.
+    ///
+    /// The supplied operation ID makes an ambiguous begin reply recoverable: if the request may
+    /// have reached the daemon but its reply is lost, the client checks that ID once instead of
+    /// resending (runtime-daemon.md §9.2).
+    public func setup(
+        _ request: SetupRequest,
+        operationID: OperationID,
+        files: [FileHandle] = []
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let requestFingerprint: String
+        do {
+            requestFingerprint = try RuntimeOperationRequestFingerprint.make(for: request)
+        } catch {
+            throw .encodingFailure
+        }
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeSetupControlRequest(
+                header: APIRequestHeader(
+                    operationID: operationID.rawValue,
+                    clientKind: configuration.clientKind
+                ),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.setup(data, files: files)
+            let handle = try Self.decodeSetupReply(from: response)
+            guard handle.operationID == operationID, handle.kind == .setup else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return handle
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            switch clientError {
+            case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply, .invalidRemoteProxy:
+                do {
+                    let snapshot = try await operationStatus(operationID)
+                    guard snapshot.operationID == operationID,
+                        snapshot.kind == .setup,
+                        snapshot.requestFingerprint == requestFingerprint
+                    else {
+                        throw RuntimeControlClientError.operationResultUnknown(
+                            operation: "setup"
+                        )
+                    }
+                    return OperationHandle(
+                        operationID: snapshot.operationID,
+                        parent: snapshot.parent,
+                        kind: snapshot.kind
+                    )
+                } catch {
+                    throw RuntimeControlClientError.operationResultUnknown(
+                        operation: "setup"
+                    )
+                }
+            default:
+                throw clientError
+            }
+        }
+    }
+
+    /// Starts a Reset Android operation and returns a handle that can be polled
+    /// (runtime-daemon.md §9.5).
+    public func resetAndroid(
+        _ request: ResetAndroidRequest,
+        operationID: OperationID
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let requestFingerprint: String
+        do {
+            requestFingerprint = try RuntimeOperationRequestFingerprint.make(for: request)
+        } catch {
+            throw .encodingFailure
+        }
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeResetAndroidControlRequest(
+                header: APIRequestHeader(
+                    operationID: operationID.rawValue,
+                    clientKind: configuration.clientKind
+                ),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.resetAndroid(data)
+            let handle = try Self.decodeResetAndroidReply(from: response)
+            guard handle.operationID == operationID, handle.kind == .resetAndroid else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return handle
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            switch clientError {
+            case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply, .invalidRemoteProxy:
+                do {
+                    let snapshot = try await operationStatus(operationID)
+                    guard snapshot.operationID == operationID,
+                        snapshot.kind == .resetAndroid,
+                        snapshot.requestFingerprint == requestFingerprint
+                    else {
+                        throw RuntimeControlClientError.operationResultUnknown(
+                            operation: "resetAndroid"
+                        )
+                    }
+                    return OperationHandle(
+                        operationID: snapshot.operationID,
+                        parent: snapshot.parent,
+                        kind: snapshot.kind
+                    )
+                } catch {
+                    throw RuntimeControlClientError.operationResultUnknown(
+                        operation: "resetAndroid"
+                    )
+                }
+            default:
+                throw clientError
+            }
+        }
+    }
+
     /// Launches the requested package once and returns the session result.
     ///
     /// A transport failure is returned to the caller without replaying this side-effecting request.
@@ -204,9 +329,16 @@ public actor RuntimeControlClient {
     {
         let opened = try await ensureControl()
         do {
+            // Stamp APP_LAUNCH_REQUEST just before the send; the caller's own
+            // stamps win when it carried them (diagnostics.md §4.2).
             let controlRequest = RuntimeLaunchControlRequest(
                 header: makeHeader(),
-                packageID: request.packageID
+                packageID: request.packageID,
+                launchTiming: request.launchTiming
+                    ?? LaunchTiming(
+                        processStart: processStartNanos,
+                        requestSent: mach_continuous_time()
+                    )
             )
             let data = try Self.encode(controlRequest)
             let response = try await opened.channel.launch(data)
@@ -235,6 +367,38 @@ public actor RuntimeControlClient {
         } catch {
             invalidateAfterTransportFailure(opened.channel, error: error)
             throw error
+        }
+    }
+
+    /// Verifies a wrapper bundle against the daemon's registry and package store.
+    public func verifyWrapper(
+        bundleURL: URL,
+        deep: Bool = false
+    ) async throws(RuntimeControlClientError) -> WrapperVerification {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeVerifyWrapperControlRequest(
+                header: makeHeader(),
+                bundleURL: bundleURL,
+                deep: deep
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.verifyWrapper(data)
+            let reply = try Self.decode(RuntimeVerifyWrapperControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let failure = error as? RuntimeControlClientError ?? .malformedReply
+            invalidateAfterTransportFailure(opened.channel, error: failure)
+            throw failure
         }
     }
 
@@ -324,6 +488,56 @@ public actor RuntimeControlClient {
             default:
                 throw clientError
             }
+        }
+    }
+
+    /// Drops an import ticket and its private APK copies without starting Android.
+    public func discardImport(
+        _ request: RuntimeDiscardImportRequest
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeDiscardImportControlRequest(
+                header: makeHeader(),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.discardImport(data)
+            let reply = try Self.decode(RuntimeDiscardImportControlReply.self, from: response)
+            if let error = reply.error {
+                throw Self.clientError(from: error)
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
+    public func adoptPackage(
+        _ request: RuntimeAdoptPackageRequest
+    ) async throws(RuntimeControlClientError) -> RuntimePackageSummary {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeAdoptPackageControlRequest(
+                header: makeHeader(),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.adoptPackage(data)
+            let reply = try Self.decode(RuntimeAdoptPackageControlReply.self, from: response)
+            if let error = reply.error {
+                throw Self.clientError(from: error)
+            }
+            guard let summary = reply.summary else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return summary
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
         }
     }
 
@@ -445,6 +659,507 @@ public actor RuntimeControlClient {
             default:
                 throw clientError
             }
+        }
+    }
+
+    /// Starts wrapper generation on the daemon and returns the operation handle.
+    ///
+    /// `icon` carries the optional custom icon file sent next to the request.
+    /// A transport failure is reconciled through `operationStatus` like every
+    /// other long operation, because the daemon deduplicates by operation ID.
+    public func createWrapper(
+        _ request: WrapperRequest,
+        icon: FileHandle?,
+        operationID: OperationID
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let requestFingerprint: String
+        do {
+            requestFingerprint = try RuntimeOperationRequestFingerprint.make(for: request)
+        } catch {
+            throw .encodingFailure
+        }
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeCreateWrapperControlRequest(
+                header: APIRequestHeader(
+                    operationID: operationID.rawValue,
+                    clientKind: configuration.clientKind
+                ),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.createWrapper(data, icon: icon)
+            let reply = try Self.decode(RuntimeCreateWrapperControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let handle = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            guard handle.operationID == operationID, handle.kind == .wrapperCreate else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return handle
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            switch clientError {
+            case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply, .invalidRemoteProxy:
+                do {
+                    let snapshot = try await operationStatus(operationID)
+                    guard snapshot.operationID == operationID,
+                        snapshot.kind == .wrapperCreate,
+                        snapshot.packageID == request.packageID,
+                        snapshot.requestFingerprint == requestFingerprint
+                    else {
+                        throw RuntimeControlClientError.operationResultUnknown(
+                            operation: "createWrapper"
+                        )
+                    }
+                    return OperationHandle(
+                        operationID: snapshot.operationID,
+                        parent: snapshot.parent,
+                        kind: snapshot.kind
+                    )
+                } catch {
+                    throw RuntimeControlClientError.operationResultUnknown(
+                        operation: "createWrapper"
+                    )
+                }
+            default:
+                throw clientError
+            }
+        }
+    }
+
+    /// The approval prompts waiting for APKRun.app (runtime-api.md §10.6).
+    public func pendingApprovals() async throws(RuntimeControlClientError) -> [ApprovalPrompt] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimePendingApprovalsControlRequest(header: makeHeader())
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.pendingApprovals(data)
+            let reply = try Self.decode(RuntimePendingApprovalsControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Answers an approval prompt (runtime-api.md §10.6, APKRun.app only).
+    public func decideApproval(
+        approvalID: ApprovalID,
+        allow: Bool
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeDecideApprovalControlRequest(
+                header: makeHeader(), approvalID: approvalID, allow: allow)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.decideApproval(data)
+            let reply = try Self.decode(RuntimeDecideApprovalControlReply.self, from: response)
+            guard (reply.acknowledged == true) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// The wrappers the user denied (runtime-api.md §10.6).
+    public func deniedWrappers() async throws(RuntimeControlClientError) -> [DeniedWrapper] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeDeniedWrappersControlRequest(header: makeHeader())
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.deniedWrappers(data)
+            let reply = try Self.decode(RuntimeDeniedWrappersControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Removes a denied entry (runtime-api.md §10.6, Settings → Privacy → Remove).
+    public func clearWrapperDenial(
+        bundleID: String,
+        cdhash: String
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeClearWrapperDenialControlRequest(
+                header: makeHeader(), bundleID: bundleID, cdhash: cdhash)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.clearWrapperDenial(data)
+            let reply = try Self.decode(RuntimeClearWrapperDenialControlReply.self, from: response)
+            guard (reply.acknowledged == true) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Returns host-side performance statistics; developer mode only
+    /// (diagnostics.md §9.3, runtime-api.md §13.1).
+    public func perfStatistics(
+        reset: Bool = false
+    ) async throws(RuntimeControlClientError) -> WirePerfStatistics {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimePerfStatisticsControlRequest(
+                header: makeHeader(), reset: reset)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.perfStatistics(data)
+            let reply = try Self.decode(RuntimePerfStatisticsControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Returns per-session graphics statistics; developer mode only.
+    /// `sessionID` narrows the reply to one session; `nil` asks for all live sessions.
+    public func frameStatistics(
+        sessionID: UUID? = nil
+    ) async throws(RuntimeControlClientError) -> [SessionGraphicsStatistics] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeFrameStatisticsControlRequest(
+                header: makeHeader(), sessionID: sessionID)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.frameStatistics(data)
+            let reply = try Self.decode(RuntimeFrameStatisticsControlReply.self, from: response)
+            guard (reply.sessions != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let sessions = reply.sessions else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return sessions
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Pushes a Mac clip toward Android; the reply carries the acknowledged
+    /// seq (desktop-integration.md §4.2, runtime-api.md §11.2).
+    public func pushClipboard(
+        sessionID: UUID, item: ClipItem
+    ) async throws(RuntimeControlClientError) -> ClipAck {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimePushClipboardControlRequest(
+                header: makeHeader(), sessionID: sessionID, item: item)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.pushClipboard(data)
+            let reply = try Self.decode(RuntimePushClipboardControlReply.self, from: response)
+            guard (reply.ack != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let ack = reply.ack else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return ack
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Reports the pasteboard write the window made (one-way; §4.2).
+    public func clipboardWritten(
+        sessionID: UUID, written: ClipboardWritten
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeClipboardWrittenControlRequest(
+                header: makeHeader(), sessionID: sessionID, written: written)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.clipboardWritten(data)
+            let reply = try Self.decode(RuntimeClipboardWrittenControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Reports whether the session's window is the key window (one-way; §4.1).
+    public func focusChanged(
+        sessionID: UUID, isKey: Bool
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeFocusChangedControlRequest(
+                header: makeHeader(), sessionID: sessionID, isKey: isKey)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.focusChanged(data)
+            let reply = try Self.decode(RuntimeFocusChangedControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Returns the per-kind integration status of a package (runtime-api.md §11).
+    public func integrationStatus(
+        packageID: RuntimePackageID
+    ) async throws(RuntimeControlClientError) -> IntegrationStatus {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeIntegrationStatusControlRequest(
+                header: makeHeader(), packageID: packageID)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.integrationStatus(data)
+            let reply = try Self.decode(RuntimeIntegrationStatusControlReply.self, from: response)
+            guard (reply.status != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let status = reply.status else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return status
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Checks packages for updates (runtime-api.md §9.1). `packages` nil
+    /// selects every `apkrun`-authority package. `checkOnly` reports without
+    /// downloading or notifying.
+    public func checkForUpdates(
+        packages: [RuntimePackageID]? = nil,
+        checkOnly: Bool = false
+    ) async throws(RuntimeControlClientError) -> (operation: OperationHandle, results: [UpdateCheckResult]) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeCheckForUpdatesControlRequest(
+                header: makeHeader(), packages: packages, checkOnly: checkOnly)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.checkForUpdates(data)
+            let reply = try Self.decode(RuntimeCheckForUpdatesControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let operation = reply.operation else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return (operation, reply.results ?? [])
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Lists per-package update state (runtime-api.md §9.1).
+    public func listUpdates() async throws(RuntimeControlClientError) -> [PackageUpdateStatus] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeListUpdatesControlRequest(header: makeHeader())
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.listUpdates(data)
+            let reply = try Self.decode(RuntimeListUpdatesControlReply.self, from: response)
+            guard (reply.updates != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let updates = reply.updates else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return updates
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Reads update history (runtime-api.md §9.1). `packageID` nil reads every
+    /// package; `limit` defaults to 50 and clamps to 1000.
+    public func updateHistory(
+        packageID: RuntimePackageID? = nil,
+        limit: Int? = nil
+    ) async throws(RuntimeControlClientError) -> [UpdateHistoryEntry] {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeUpdateHistoryControlRequest(
+                header: makeHeader(), packageID: packageID, limit: limit)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.updateHistory(data)
+            let reply = try Self.decode(RuntimeUpdateHistoryControlReply.self, from: response)
+            guard (reply.entries != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let entries = reply.entries else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return entries
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Sets a package's update mode and provider (runtime-api.md §9.1) and
+    /// returns its update status after the write.
+    public func setUpdatePolicy(
+        packageID: RuntimePackageID,
+        policy: UpdatePolicy
+    ) async throws(RuntimeControlClientError) -> PackageUpdateStatus {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeSetUpdatePolicyControlRequest(
+                header: makeHeader(), packageID: packageID, policy: policy)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.setUpdatePolicy(data)
+            let reply = try Self.decode(RuntimeSetUpdatePolicyControlReply.self, from: response)
+            guard (reply.status != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let status = reply.status else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return status
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Sets a package's update authority (runtime-api.md §9.1, update-system.md
+    /// §2.1) and returns its update status after the write.
+    public func setUpdateAuthority(
+        packageID: RuntimePackageID,
+        authority: AuthorityChoice
+    ) async throws(RuntimeControlClientError) -> PackageUpdateStatus {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeSetUpdateAuthorityControlRequest(
+                header: makeHeader(), packageID: packageID, authority: authority)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.setUpdateAuthority(data)
+            let reply = try Self.decode(RuntimeSetUpdateAuthorityControlReply.self, from: response)
+            guard (reply.status != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let status = reply.status else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return status
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Checks and installs a package update now (runtime-api.md §9.1).
+    /// `options.files` turns the request into a manual file update; the
+    /// matching file handles travel like `importPackage`'s.
+    /// `outcome` is nil while the run still waits (a staged update gated by
+    /// an open session, update-system.md §7.3).
+    public func updatePackage(
+        packageID: RuntimePackageID,
+        options: UpdateNowOptions = UpdateNowOptions(),
+        files: [FileHandle] = []
+    ) async throws(RuntimeControlClientError) -> (operation: OperationHandle, outcome: WireUpdateOutcome?) {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeUpdatePackageControlRequest(
+                header: makeHeader(), packageID: packageID, options: options)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.updatePackage(data, files: files)
+            let reply = try Self.decode(RuntimeUpdatePackageControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+            guard let operation = reply.operation else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return (operation, reply.outcome)
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
         }
     }
 
@@ -1003,6 +1718,38 @@ public actor RuntimeControlClient {
         return result
     }
 
+    private static func decodeSetupReply(from data: Data) throws(RuntimeControlClientError)
+        -> OperationHandle
+    {
+        let reply = try Self.decode(RuntimeSetupControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
+    private static func decodeResetAndroidReply(from data: Data) throws(RuntimeControlClientError)
+        -> OperationHandle
+    {
+        let reply = try Self.decode(RuntimeResetAndroidControlReply.self, from: data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let result = reply.result else {
+            throw .malformedReply
+        }
+        return result
+    }
+
     private static func decodeBeginUninstallPackageReply(from data: Data) throws(RuntimeControlClientError)
         -> OperationHandle
     {
@@ -1323,6 +2070,8 @@ struct RuntimeBrokerEndpointReply: Sendable {
 protocol RuntimeBrokerChannel: Sendable {
     func hello(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func requestEndpoint(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeBrokerEndpointReply
+    /// Asks the user to approve an unknown wrapper (runtime-api.md §3.4).
+    func requestApproval(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func invalidate()
 }
 
@@ -1332,10 +2081,14 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func stopRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func restartRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func resetRuntime(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func setup(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
+    func resetAndroid(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func listPackages(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func packageInfo(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func importPackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
     func installImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func discardImport(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func adoptPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func beginInstallImported(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func beginUninstallPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func cancelOperation(_ request: Data) async throws(RuntimeControlClientError) -> Data
@@ -1345,6 +2098,42 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func unsubscribe(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func terminate(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func verifyWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data
+
+    /// Starts a wrapper generation; the reply carries the operation handle.
+    func createWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data
+    /// Returns the approval prompts waiting for APKRun.app.
+    func pendingApprovals(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Answers an approval prompt.
+    func decideApproval(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Lists the wrappers the user denied.
+    func deniedWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Removes a denied entry.
+    func clearWrapperDenial(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Returns host-side performance statistics; developer mode only.
+    func perfStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Returns per-session graphics statistics; developer mode only.
+    func frameStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Pushes a Mac clip toward Android (desktop-integration.md §4.2).
+    func pushClipboard(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Reports a pasteboard write the window made (desktop-integration.md §4.2).
+    func clipboardWritten(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Reports whether the session's window is the key window (§4.1).
+    func focusChanged(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Returns the per-kind integration status of a package (runtime-api.md §11).
+    func integrationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Checks packages for updates (runtime-api.md §9.1).
+    func checkForUpdates(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Lists per-package update state (runtime-api.md §9.1).
+    func listUpdates(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Reads update history (runtime-api.md §9.1).
+    func updateHistory(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Sets a package's update mode and provider (runtime-api.md §9.1).
+    func setUpdatePolicy(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Sets a package's update authority (runtime-api.md §9.1).
+    func setUpdateAuthority(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Checks and installs a package update now, optionally from files (runtime-api.md §9.1).
+    func updatePackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
@@ -1437,6 +2226,12 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
             argumentIndex: 1,
             ofReply: false
         )
+        interface.setClasses(
+            fileClasses,
+            for: #selector(RuntimeControlXPC.updatePackage(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
         return interface
     }
 }
@@ -1476,6 +2271,20 @@ private final class XPCBrokerChannel: RuntimeBrokerChannel, @unchecked Sendable 
                 let wrappedEndpoint = endpoint.map { RuntimeXPCListenerEndpoint(value: $0) }
                 finish(.success(RuntimeBrokerEndpointReply(data: response, endpoint: wrappedEndpoint)))
             }
+        }
+    }
+
+    func requestApproval(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeBrokerXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.requestApproval(request) { response in finish(.success(response)) }
         }
     }
 
@@ -1577,6 +2386,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
         }
     }
 
+    func setup(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.setup(request, files: files) { response in finish(.success(response)) }
+        }
+    }
+
+    func resetAndroid(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.resetAndroid(request) { response in finish(.success(response)) }
+        }
+    }
+
     func listPackages(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         try await withXPCReply { finish in
             let proxy =
@@ -1616,6 +2453,34 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.importPackage(request, files: files) { response in finish(.success(response)) }
+        }
+    }
+
+    func discardImport(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.discardImport(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func adoptPackage(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.adoptPackage(request) { response in finish(.success(response)) }
         }
     }
 
@@ -1756,6 +2621,259 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.terminate(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func verifyWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.verifyWrapper(request) { response in finish(.success(response)) }
+        }
+    }
+
+    /// Starts a wrapper generation; the reply carries the operation handle.
+    func createWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.createWrapper(request, icon: icon) { response in finish(.success(response)) }
+        }
+    }
+
+    func pendingApprovals(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.pendingApprovals(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func decideApproval(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.decideApproval(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func deniedWrappers(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.deniedWrappers(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func clearWrapperDenial(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.clearWrapperDenial(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func perfStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.perfStatistics(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func frameStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.frameStatistics(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func pushClipboard(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.pushClipboard(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func clipboardWritten(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.clipboardWritten(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func focusChanged(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.focusChanged(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func integrationStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.integrationStatus(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func checkForUpdates(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.checkForUpdates(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func listUpdates(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.listUpdates(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func updateHistory(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.updateHistory(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func setUpdatePolicy(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.setUpdatePolicy(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func setUpdateAuthority(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.setUpdateAuthority(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func updatePackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.updatePackage(request, files: files) { response in finish(.success(response)) }
         }
     }
 

@@ -4,6 +4,8 @@ import android.net.LocalSocket
 import android.os.Build
 import io.apkrun.guest.BuildConfig
 import io.apkrun.guest.protocol.AgentHandshake
+import io.apkrun.guest.protocol.FrameReader
+import io.apkrun.guest.protocol.FrameWriter
 import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.GuestProtocolFailure
 import io.apkrun.guest.protocol.ProtocolVersion
@@ -97,10 +99,17 @@ class Connection(
             return
         }
         daemon.sessions.track(socket)
+        if (channel == ChannelKind.CHANNEL_KIND_GUEST_BULK) {
+            // Diagnostics payloads leave on this connection (guest-protocol.md §10).
+            daemon.bulkTransfers.attach(writer)
+        }
         try {
             secondaryLoop(negotiated.enabled)
         } finally {
             daemon.sessions.untrack(socket)
+            if (channel == ChannelKind.CHANNEL_KIND_GUEST_BULK) {
+                daemon.bulkTransfers.detach(writer)
+            }
             if (channel == ChannelKind.CHANNEL_KIND_GUEST_INPUT) {
                 // A closed input stream releases the gestures it left open (input.md §7.3).
                 daemon.input.streamClosed(this)
@@ -260,6 +269,8 @@ class Connection(
                 GuestCapability.INPUT,
                 GuestCapability.INPUT_ACK_TRACE,
                 GuestCapability.PACKAGES,
+                GuestCapability.DIAGNOSTICS,
+                GuestCapability.CLIPBOARD_TEXT,
             )
     }
 }

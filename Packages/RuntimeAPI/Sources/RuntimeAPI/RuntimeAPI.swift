@@ -7,8 +7,11 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.4 adds package queries; 1.5 adds runtime reset; 1.6 adds one-request runtime restart;
     /// 1.7 adds daemon-backed package import and install; 1.8 adds asynchronous install handles
     /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
-    /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints.
-    public static let current = APIVersion(major: 1, minor: 11)
+    /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
+    /// 1.12 adds the createWrapper long operation, the wrappers event topic, and WrapperInfo;
+    /// 1.13 adds approval prompts and decisions, denied wrappers, and broker requestApproval;
+    /// 1.14 adds `perfStatistics`, `frameStatistics`, and `RuntimeLaunchRequest.launchTiming`.
+    public static let current = APIVersion(major: 1, minor: 16)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -216,6 +219,9 @@ public struct RuntimeHostStatus: Codable, Equatable, Sendable {
     public let guestAgentState: GuestAgentConnectionState?
     /// The Guest Agent protocol version from its latest handshake, when available.
     public let guestAgentProtocolVersion: String?
+    /// The first-run provisioning state (runtime-daemon.md §9.2). Decoding an older
+    /// daemon's reply leaves this nil; clients treat nil as `.notStarted`.
+    public let provisioning: WireProvisioningState?
 
     /// Creates a status snapshot.
     public init(
@@ -228,7 +234,8 @@ public struct RuntimeHostStatus: Codable, Equatable, Sendable {
         daemonPID: Int32,
         imageVersion: String?,
         guestAgentState: GuestAgentConnectionState? = nil,
-        guestAgentProtocolVersion: String? = nil
+        guestAgentProtocolVersion: String? = nil,
+        provisioning: WireProvisioningState? = nil
     ) {
         self.hostState = hostState
         self.runtimeState = runtimeState
@@ -240,6 +247,7 @@ public struct RuntimeHostStatus: Codable, Equatable, Sendable {
         self.imageVersion = imageVersion
         self.guestAgentState = guestAgentState
         self.guestAgentProtocolVersion = guestAgentProtocolVersion
+        self.provisioning = provisioning
     }
 }
 
@@ -325,11 +333,19 @@ public struct RuntimeLaunchControlRequest: Codable, Equatable, Sendable {
     public let header: APIRequestHeader
     /// The Android package to launch.
     public let packageID: RuntimePackageID
+    /// The launcher's own stamps for `WRAPPER_PROCESS_START`/`APP_LAUNCH_REQUEST`
+    /// in continuous-clock nanoseconds (diagnostics.md §4.2).
+    public var launchTiming: LaunchTiming?
 
     /// Creates a launch request.
-    public init(header: APIRequestHeader, packageID: RuntimePackageID) {
+    public init(
+        header: APIRequestHeader,
+        packageID: RuntimePackageID,
+        launchTiming: LaunchTiming? = nil
+    ) {
         self.header = header
         self.packageID = packageID
+        self.launchTiming = launchTiming
     }
 }
 
@@ -463,6 +479,70 @@ public struct RuntimeInstallImportedControlReply: Codable, Equatable, Sendable {
     }
 }
 
+/// Drops an import ticket through the authenticated control endpoint.
+public struct RuntimeDiscardImportControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The ticket to discard.
+    public let request: RuntimeDiscardImportRequest
+
+    /// Creates a discard request.
+    public init(header: APIRequestHeader, request: RuntimeDiscardImportRequest) {
+        self.header = header
+        self.request = request
+    }
+}
+
+/// The result or typed error returned by a control discard-import request.
+public struct RuntimeDiscardImportControlReply: Codable, Equatable, Sendable {
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init() {
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        self.error = error
+    }
+}
+
+/// Adopts an unmanaged Android package through the authenticated control endpoint.
+public struct RuntimeAdoptPackageControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The package to adopt.
+    public let request: RuntimeAdoptPackageRequest
+
+    /// Creates an adopt request.
+    public init(header: APIRequestHeader, request: RuntimeAdoptPackageRequest) {
+        self.header = header
+        self.request = request
+    }
+}
+
+/// The result or typed error returned by a control adopt-package request.
+public struct RuntimeAdoptPackageControlReply: Codable, Equatable, Sendable {
+    /// The adopted package summary, present on success.
+    public let summary: RuntimePackageSummary?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(summary: RuntimePackageSummary) {
+        self.summary = summary
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        summary = nil
+        self.error = error
+    }
+}
+
 /// The result or typed error returned by a control terminate request.
 public struct RuntimeTerminateControlReply: Codable, Equatable, Sendable {
     /// The termination result, present on success.
@@ -563,6 +643,8 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func hello(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns only an anonymous endpoint protected by a code-signing requirement.
     func requestEndpoint(_ request: Data, reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void)
+    /// Asks the user to approve an unknown wrapper (wrapper.md §7.3).
+    func requestApproval(_ request: Data, reply: @escaping (Data) -> Void)
 }
 
 /// Authenticated control endpoint operations implemented by apkrund.
@@ -577,6 +659,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func restartRuntime(_ request: Data, reply: @escaping (Data) -> Void)
     /// Clears a runtime failure and boot-loop guard without deleting Android data.
     func resetRuntime(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Starts or resumes first-run provisioning and returns its operation handle.
+    func setup(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+    /// Resets Android data: backup, delete, re-provision, reinstall managed packages.
+    func resetAndroid(_ request: Data, reply: @escaping (Data) -> Void)
     /// Lists managed or all known packages.
     func listPackages(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns details for one package.
@@ -599,10 +685,51 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func unsubscribe(_ request: Data, reply: @escaping (Data) -> Void)
     /// Installs a previously inspected import synchronously.
     func installImported(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Drops an import ticket and its private APK copies (runtime-api.md §10).
+    func discardImport(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
+    func adoptPackage(_ request: Data, reply: @escaping (Data) -> Void)
     /// Launches an installed package session.
     func launch(_ request: Data, reply: @escaping (Data) -> Void)
     /// Terminates an installed package session.
     func terminate(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Checks a wrapper bundle against the registry and the store.
+    func verifyWrapper(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Starts a wrapper generation; replies with the operation handle.
+    func createWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void)
+    /// Returns the approval prompts waiting for APKRun.app.
+    func pendingApprovals(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Answers an approval prompt (APKRun.app only).
+    func decideApproval(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Lists wrappers the user denied (Settings → Privacy).
+    func deniedWrappers(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Removes a denied entry (Settings → Privacy → Remove).
+    func clearWrapperDenial(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns host-side performance statistics; developer mode only (diagnostics.md §9.3).
+    func perfStatistics(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns per-session graphics statistics; developer mode only; never starts Android.
+    func frameStatistics(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Pushes a Mac clip toward Android; the reply carries the acknowledged seq (runtime-api.md §11.2).
+    func pushClipboard(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Reports that the window wrote a guest clip to the Mac pasteboard (runtime-api.md §11.2).
+    func clipboardWritten(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Reports whether the session's window is the key window (desktop-integration.md §4.1).
+    func focusChanged(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Returns the per-kind integration status of a package (runtime-api.md §11).
+    func integrationStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Checks packages for updates (runtime-api.md §9.1).
+    func checkForUpdates(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Lists per-package update state (runtime-api.md §9.1).
+    func listUpdates(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Reads update history (runtime-api.md §9.1, update-system.md §10.2).
+    func updateHistory(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Sets a package's update mode and provider (runtime-api.md §9.1).
+    func setUpdatePolicy(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Sets a package's update authority (runtime-api.md §9.1, update-system.md §2.1).
+    func setUpdateAuthority(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Checks and installs a package update now, optionally from files
+    /// (runtime-api.md §9.1). File handles travel like `importPackage`.
+    func updatePackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.
@@ -624,6 +751,19 @@ public protocol RuntimePackageService: Sendable {
     /// Installs a previously inspected import into Android through the runtime's package channel.
     func installImported(
         _ request: RuntimeInstallImportedRequest
+    ) async throws(RuntimeWireError) -> RuntimePackageSummary
+
+    /// Drops an import ticket and its private APK copies without starting Android.
+    func discardImport(
+        _ request: RuntimeDiscardImportRequest
+    ) async throws(RuntimeWireError)
+
+    /// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
+    ///
+    /// The record gets `installer: external`, `updateAuthority: external`, no artifact, and
+    /// `source: adopted`. Requires a running runtime so Android's facts can be read.
+    func adoptPackage(
+        _ request: RuntimeAdoptPackageRequest
     ) async throws(RuntimeWireError) -> RuntimePackageSummary
 
     /// Uninstalls a package and applies the requested Android-data policy.

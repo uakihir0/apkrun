@@ -33,6 +33,10 @@ struct DevInputBinding: Sendable {
     func run(report: @escaping @Sendable (DevBootEvent) -> Void) async {
         var channel: GuestInputChannel?
         var boundToken: Data?
+        var boundRoutes: [DevInputRoute] = []
+        var imeChannel: GuestImeChannel?
+        var imeStatesTask: Task<Void, Never>?
+        var imeNeedsRebind = true
         var reportedFailure = false
         while !Task.isCancelled {
             if let token = await agent.supervisor.session?.sessionToken {
@@ -50,7 +54,7 @@ struct DevInputBinding: Sendable {
                             },
                             logSink: logSink
                         )
-                        var boundRoutes: [DevInputRoute] = []
+                        boundRoutes = []
                         for (index, route) in routes.enumerated() {
                             guard await route.canBind() else {
                                 continue
@@ -66,6 +70,9 @@ struct DevInputBinding: Sendable {
                         channel = next
                         boundToken = token
                         reportedFailure = false
+                        // A fresh router keeps the IME channel, but it must be re-announced to the
+                        // freshly bound routes.
+                        imeNeedsRebind = true
                         let displayIDs = await boundRoutes.asyncMap { await $0.targetDisplayIDForDiagnostics() }
                         report(.message("input is bound to display\(displayIDs.count == 1 ? "" : "s") \(displayIDs)"))
                         report(.message("ADB shell invocations so far: \(await agent.adbShellInvocationCount)"))
@@ -74,6 +81,41 @@ struct DevInputBinding: Sendable {
                             report(.catalogWarning(RuntimeFailure.inputNotBound(cause: error)))
                             reportedFailure = true
                         }
+                    }
+                }
+                // The IME binds on its own channel (input.md §5.6); a failure or a fresh route set
+                // re-binds only the IME, without touching the input router (a rebuild would cancel
+                // the gestures of unrelated pointers and keys).
+                var imeUsable = false
+                if let imeChannel {
+                    imeUsable = await imeChannel.connection.isUsable
+                }
+                if imeNeedsRebind || !imeUsable {
+                    imeStatesTask?.cancel()
+                    imeStatesTask = nil
+                    do {
+                        // The `states` stream has one subscriber: this task fans each report out to
+                        // every bound route (per-route pumps would contend for the stream).
+                        let ime = try await agent.imeChannel()
+                        imeChannel = ime
+                        for route in boundRoutes {
+                            await route.bindIme(ime)
+                        }
+                        let routesForStates = boundRoutes
+                        imeStatesTask = Task {
+                            for await state in ime.states {
+                                for route in routesForStates {
+                                    await route.editorStateArrived(state)
+                                }
+                            }
+                        }
+                        imeNeedsRebind = false
+                    } catch {
+                        imeChannel = nil
+                        for route in boundRoutes {
+                            await route.bindIme(nil)
+                        }
+                        report(.warning("the IME channel could not be bound; editor mode is off"))
                     }
                 }
             }

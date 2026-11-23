@@ -1,6 +1,10 @@
 package io.apkrun.guest.daemon
 
+import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.ClearDisplay
+import io.apkrun.guest.protocol.v1.ClipData
+import io.apkrun.guest.protocol.v1.CollectDiagnostics
+import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
 import io.apkrun.guest.protocol.v1.ListPackages
@@ -40,4 +44,10 @@ interface AgentOperations {
 
     /** Lists packages from Android's PackageManager (packages.v1). */
     fun listPackages(request: ListPackages): PackageList
+
+    /** Applies a host clip to the Android clipboard (clipboard.*, desktop-integration.md §4.2). */
+    fun setClipboard(request: ClipData)
+
+    /** Collects the requested diagnostics items, each on the bulk channel (diagnostics.v1). */
+    fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult
 }

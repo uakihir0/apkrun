@@ -4,6 +4,7 @@ import ImageCore
 import IntegrationCore
 import RuntimeAPI
 import RuntimeCore
+import UpdateCore
 import WrapperCore
 
 typealias WireOperationID = RuntimeAPI.OperationID
@@ -34,7 +35,7 @@ public enum RuntimeHostError: Error, Equatable, Sendable {
     case stateStore(DaemonStateStoreError)
 }
 
-private struct RuntimeTrackedOperation {
+struct RuntimeTrackedOperation {
     let handle: OperationHandle
     let requestPayload: Data
     var snapshot: OperationSnapshot
@@ -49,7 +50,7 @@ private struct RuntimeTrackedOperation {
 public actor RuntimeHost {
     nonisolated let eventHub = RuntimeEventHub()
 
-    private let paths: APKRunPaths
+    let paths: APKRunPaths
     private let buildInfo: BuildInfo
     private let environment: [String: String]
     private let executableURL: URL
@@ -60,13 +61,18 @@ public actor RuntimeHost {
     private var provisioningState: WireProvisioningState = .notStarted
     private var imageStore: ImageStore?
     private var diagnostics: DiagnosticsContext?
+    /// The health-check registry, for checks hosted outside this file
+    /// (`updates.waiting` in RuntimeHostUpdates.swift).
+    var healthCheckRegistry: HealthCheckRegistry? {
+        diagnostics?.healthChecks
+    }
     private var logger: APKLogger?
     private var instanceLock: InstanceLock?
     private var stateStore: DaemonStateStore?
     private var startupAssessment: DaemonStartupAssessment?
     private var image: InstalledImage?
     private var instanceStore: InstanceStore?
-    private var supervisor: RuntimeSupervisor?
+    var supervisor: RuntimeSupervisor?
     private var supervisorEventsTask: Task<Void, Never>?
     private var packageQueryService: EmbeddedPackageService?
     private var wrapperRegistry: WrapperRegistry?
@@ -74,7 +80,7 @@ public actor RuntimeHost {
     private var wrapperHealthChecksRegistered = false
     /// Package IDs with a `wrapperCreate` operation in flight.
     private var wrapperCreationsInFlight: Set<String> = []
-    private var headlessSessionService: (any RuntimeSessionService)?
+    var headlessSessionService: (any RuntimeSessionService)?
     private var runtimeSessionGeneration: UInt64 = 0
     private var bootProgressEstimator: BootProgressEstimator?
     private var bootStartedAt: ContinuousClock.Instant?
@@ -105,7 +111,27 @@ public actor RuntimeHost {
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
     private var packageMutationWaiters: [CheckedContinuation<Void, Never>] = []
     private var shutdownWaiters: [CheckedContinuation<Void, Never>] = []
-    private var trackedOperations: [WireOperationID: RuntimeTrackedOperation] = [:]
+    var trackedOperations: [WireOperationID: RuntimeTrackedOperation] = [:]
+    /// The lazily created update service (update-system.md). Internal for
+    /// `RuntimeHostUpdates.swift`.
+    var updateService: EmbeddedUpdateService?
+    /// The §7.1 gentle-update gate shared by update installs, created with
+    /// the pump tasks below on first use.
+    var updateGate: GentleUpdateGate?
+    /// §7.2 trigger pumps: runtime events and the 10-minute staged+ready tick.
+    var updateGatePumpTask: Task<Void, Never>?
+    var updateGateTimerTask: Task<Void, Never>?
+    /// §7.1 quiet-period re-evaluation (GU4), rearmed on every drain.
+    var updateGateQuietTask: Task<Void, Never>?
+    /// Internal subscribers of the single `supervisor.events` consumer for
+    /// §7.2 update triggers; `consumeSupervisorState` feeds them so the
+    /// update path never races the host's own event loop.
+    var updateEventContinuations: [UUID: AsyncStream<UpdateRuntimeEvent>.Continuation] = [:]
+    /// The idle controller the `storeOperation` assertion holds (#75 wires
+    /// its suspend/stop deadlines).
+    let updateIdleController = IdleController()
+    /// `updates.waiting` registers once when the update service is created.
+    var updatesHealthChecksRegistered = false
     private var packageActivityReservations = PackageActivityReservations()
     /// The perf record writer (`perf/launches.jsonl`), created with `paths`.
     private var perfRecords: PerfRecordWriter?
@@ -651,6 +677,27 @@ public actor RuntimeHost {
         let service = packageQueryServiceInstance()
         try await service.open()
         return try await service.importPackage(request, files: files)
+    }
+
+    /// Drops an import ticket and its private APK copies without starting Android.
+    public func discardImport(
+        _ request: RuntimeDiscardImportRequest
+    ) async throws(RuntimeWireError) {
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        try await service.discardImport(request)
+    }
+
+    /// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
+    public func adoptPackage(
+        _ request: RuntimeAdoptPackageRequest
+    ) async throws(RuntimeWireError) -> RuntimePackageSummary {
+        let service = packageQueryServiceInstance()
+        try await service.open()
+        // Adoption queries Android live; attach the store-agent channel like every
+        // other package op so a freshly booted runtime is usable right away.
+        try await attachPackageQueriesIfRuntimeIsReady(to: service)
+        return try await service.adoptPackage(request)
     }
 
     /// Starts Android on demand, attaches its package channel, and installs an inspected import.
@@ -1240,7 +1287,7 @@ public actor RuntimeHost {
         }
     }
 
-    private func finishOperation(_ operationID: WireOperationID, result: OperationResult) {
+    func finishOperation(_ operationID: WireOperationID, result: OperationResult) {
         guard var operation = trackedOperations[operationID], operation.snapshot.result == nil else {
             return
         }
@@ -1987,6 +2034,9 @@ public actor RuntimeHost {
         runtimeStateEventRevision = snapshot.revision
         synchronizeRuntimeStateSnapshot(snapshot)
         eventHub.publishRuntimeChange(.stateChanged(Self.wireRuntimeState(for: snapshot.state)))
+        for continuation in updateEventContinuations.values {
+            continuation.yield(.stateChanged(Self.wireRuntimeState(for: snapshot.state)))
+        }
         if case .booting = snapshot.state {
             publishBootProgress(generation: bootProgressGeneration)
         }
@@ -2212,7 +2262,7 @@ public actor RuntimeHost {
         }
     }
 
-    private func beginPackageMutation() throws(RuntimeHostError) {
+    func beginPackageMutation() throws(RuntimeHostError) {
         guard !isRuntimeStopping, !isRuntimeResetting, !isRuntimeRestarting else {
             throw .invalidTransition
         }
@@ -2220,7 +2270,7 @@ public actor RuntimeHost {
         activePackageMutations += 1
     }
 
-    private func finishPackageMutation() {
+    func finishPackageMutation() {
         activePackageMutations -= 1
         if activePackageMutations == 0 {
             let waiters = packageMutationWaiters
@@ -2434,6 +2484,7 @@ public actor RuntimeHost {
         )
         await attachPerfObservers(to: service)
         headlessSessionService = service
+        await wireUpdateGateSessionHooks()
         return service
     }
 
@@ -3440,7 +3491,7 @@ public actor RuntimeHost {
         return runtimeSupervisor
     }
 
-    private func packageQueryServiceInstance() -> EmbeddedPackageService {
+    func packageQueryServiceInstance() -> EmbeddedPackageService {
         if let packageQueryService {
             return packageQueryService
         }
@@ -3449,7 +3500,7 @@ public actor RuntimeHost {
         return service
     }
 
-    private func attachPackageQueriesIfRuntimeIsReady(
+    func attachPackageQueriesIfRuntimeIsReady(
         to service: EmbeddedPackageService
     ) async throws(RuntimeWireError) {
         guard let supervisor, await supervisor.state == .ready else {
@@ -3478,6 +3529,22 @@ public actor RuntimeHost {
         )
     }
 
+    /// The dev Store Agent channel for update constraint checks
+    /// (update-system.md §7.1 GU5); `nil` without an attached runtime.
+    func storeAccessForUpdateConstraints() -> DevelopmentStoreRuntimeAccess? {
+        guard let supervisor, let image, let instanceStore,
+            let adbExecutable = try? AdbClient.resolveExecutable(environment: environment)
+        else { return nil }
+        return DevelopmentStoreRuntimeAccess(
+            supervisor: supervisor,
+            adbExecutable: adbExecutable,
+            instanceStore: instanceStore,
+            image: image,
+            logSink: diagnostics?.logSink,
+            startRuntimeIfNeeded: false
+        )
+    }
+
     private static let launchUnavailableError = RuntimeWireError.runtime(
         "windowUnavailable",
         message: "APKRun can't open an Android app window in this build.",
@@ -3489,7 +3556,7 @@ public actor RuntimeHost {
         remediation: "Start Android and try again."
     )
 
-    private static func sessionWireError(for error: RuntimeHostError) -> RuntimeWireError {
+    static func sessionWireError(for error: RuntimeHostError) -> RuntimeWireError {
         let code: String
         switch error {
         case .notStarted, .alreadyStarted, .crashLoopActive, .stateStore:

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The development IME (input.md §5.6): a single ASCII subtype with no locale. The Mac side
+    supplies the key layout; the IME itself draws no input view, so no subtype locale applies.
+-->
+<input-method xmlns:android="http://schemas.android.com/apk/res/android">
+    <subtype
+        android:imeSubtypeMode="keyboard"
+        android:imeSubtypeExtraValue="AsciiCapable"
+        android:isAsciiCapable="true" />
+</input-method>

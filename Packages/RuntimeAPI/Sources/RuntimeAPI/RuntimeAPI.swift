@@ -11,7 +11,7 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// 1.12 adds the createWrapper long operation, the wrappers event topic, and WrapperInfo;
     /// 1.13 adds approval prompts and decisions, denied wrappers, and broker requestApproval;
     /// 1.14 adds `perfStatistics`, `frameStatistics`, and `RuntimeLaunchRequest.launchTiming`.
-    public static let current = APIVersion(major: 1, minor: 14)
+    public static let current = APIVersion(major: 1, minor: 16)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -479,6 +479,70 @@ public struct RuntimeInstallImportedControlReply: Codable, Equatable, Sendable {
     }
 }
 
+/// Drops an import ticket through the authenticated control endpoint.
+public struct RuntimeDiscardImportControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The ticket to discard.
+    public let request: RuntimeDiscardImportRequest
+
+    /// Creates a discard request.
+    public init(header: APIRequestHeader, request: RuntimeDiscardImportRequest) {
+        self.header = header
+        self.request = request
+    }
+}
+
+/// The result or typed error returned by a control discard-import request.
+public struct RuntimeDiscardImportControlReply: Codable, Equatable, Sendable {
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init() {
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        self.error = error
+    }
+}
+
+/// Adopts an unmanaged Android package through the authenticated control endpoint.
+public struct RuntimeAdoptPackageControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The package to adopt.
+    public let request: RuntimeAdoptPackageRequest
+
+    /// Creates an adopt request.
+    public init(header: APIRequestHeader, request: RuntimeAdoptPackageRequest) {
+        self.header = header
+        self.request = request
+    }
+}
+
+/// The result or typed error returned by a control adopt-package request.
+public struct RuntimeAdoptPackageControlReply: Codable, Equatable, Sendable {
+    /// The adopted package summary, present on success.
+    public let summary: RuntimePackageSummary?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(summary: RuntimePackageSummary) {
+        self.summary = summary
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        summary = nil
+        self.error = error
+    }
+}
+
 /// The result or typed error returned by a control terminate request.
 public struct RuntimeTerminateControlReply: Codable, Equatable, Sendable {
     /// The termination result, present on success.
@@ -621,6 +685,10 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func unsubscribe(_ request: Data, reply: @escaping (Data) -> Void)
     /// Installs a previously inspected import synchronously.
     func installImported(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Drops an import ticket and its private APK copies (runtime-api.md §10).
+    func discardImport(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
+    func adoptPackage(_ request: Data, reply: @escaping (Data) -> Void)
     /// Launches an installed package session.
     func launch(_ request: Data, reply: @escaping (Data) -> Void)
     /// Terminates an installed package session.
@@ -649,6 +717,19 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func focusChanged(_ request: Data, reply: @escaping (Data) -> Void)
     /// Returns the per-kind integration status of a package (runtime-api.md §11).
     func integrationStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Checks packages for updates (runtime-api.md §9.1).
+    func checkForUpdates(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Lists per-package update state (runtime-api.md §9.1).
+    func listUpdates(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Reads update history (runtime-api.md §9.1, update-system.md §10.2).
+    func updateHistory(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Sets a package's update mode and provider (runtime-api.md §9.1).
+    func setUpdatePolicy(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Sets a package's update authority (runtime-api.md §9.1, update-system.md §2.1).
+    func setUpdateAuthority(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Checks and installs a package update now, optionally from files
+    /// (runtime-api.md §9.1). File handles travel like `importPackage`.
+    func updatePackage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.
@@ -670,6 +751,19 @@ public protocol RuntimePackageService: Sendable {
     /// Installs a previously inspected import into Android through the runtime's package channel.
     func installImported(
         _ request: RuntimeInstallImportedRequest
+    ) async throws(RuntimeWireError) -> RuntimePackageSummary
+
+    /// Drops an import ticket and its private APK copies without starting Android.
+    func discardImport(
+        _ request: RuntimeDiscardImportRequest
+    ) async throws(RuntimeWireError)
+
+    /// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
+    ///
+    /// The record gets `installer: external`, `updateAuthority: external`, no artifact, and
+    /// `source: adopted`. Requires a running runtime so Android's facts can be read.
+    func adoptPackage(
+        _ request: RuntimeAdoptPackageRequest
     ) async throws(RuntimeWireError) -> RuntimePackageSummary
 
     /// Uninstalls a package and applies the requested Android-data policy.

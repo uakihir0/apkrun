@@ -71,6 +71,29 @@ import Testing
             + [
                 "disabled", "notSupportedOnImage", "guestUnavailable", "clipboardTooLarge",
             ].map { "integration.\($0)" }
+            + [
+                "providerNotConfigured", "providerUnreachable", "providerHTTPStatus",
+                "providerRateLimited", "providerMetadataInvalid", "providerSignatureInvalid",
+                "ambiguousAsset", "noCompatibleArtifact", "downloadFailed", "hashMismatch",
+                "tooLarge", "cancelled", "validation", "installFailed", "healthCheckFailed",
+                "rollbackFailed", "authorityDoesNotAllowUpdates",
+            ].map { "update.\($0)" }
+            + [
+                "unsupportedContainer", "unreadableArchive", "archiveLimitExceeded", "notAnAPK",
+                "missingBase", "multipleBases", "duplicateSplit", "inconsistentSplits",
+                "incompleteSplitSet", "unsignedAPK", "invalidSignature", "legacySignatureNotAllowed",
+                "unsupportedABI", "minSdkTooHigh", "targetSdkTooLow", "expansionFilesNotSupported",
+                "reservedPackage", "tooLarge", "resourcesArscNotAligned", "signerMismatch",
+                "alreadyInstalled", "downgradeRefused", "packageAlreadyManaged",
+                "packageInUse", "stagedUpdateMissing",
+            ].map { "store.\($0)" }
+            + [
+                "providerNotConfigured", "providerMetadataInvalid", "providerHTTPStatus",
+                "providerRateLimited", "providerSignatureInvalid", "providerUnreachable",
+                "ambiguousAsset", "noCompatibleArtifact", "downloadFailed", "hashMismatch",
+                "validation", "installFailed", "healthCheckFailed", "rollbackFailed",
+                "tooLarge", "cancelled", "authorityDoesNotAllowUpdates",
+            ].map { "update.\($0)" }
     )
     #expect(Set(ErrorCatalog.entries.keys) == expectedCodes)
     #expect(
@@ -104,6 +127,9 @@ import Testing
                 || entry.code.hasPrefix("image.")
                 || entry.code.hasPrefix("wrapper.")
                 || entry.code.hasPrefix("integration.")
+                || entry.code.hasPrefix("update.")
+                || entry.code.hasPrefix("store.")
+                || entry.code.hasPrefix("update.")
         )
         for text in entry.message?.values ?? [String: String]().values {
             #expect(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

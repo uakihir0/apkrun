@@ -67,24 +67,26 @@ func guestAgentStateStreamPublishesTheCurrentStateAndReconnectTransitions() asyn
 @Test(.timeLimit(.minutes(1)))
 func requiredAgentReadinessResetsTheOutageDeadline() async throws {
     let counter = RequiredAgentOutageCounter()
-    let monitor = RequiredAgentOutageMonitor(timeout: .milliseconds(100)) {
+    // Loaded CI runners overshoot a Task.sleep by tens of milliseconds;
+    // keep a wide margin around the 500 ms timeout.
+    let monitor = RequiredAgentOutageMonitor(timeout: .milliseconds(500)) {
         await counter.increment()
     }
 
     await monitor.observe(.reconnecting)
-    try await Task.sleep(for: .milliseconds(60))
+    try await Task.sleep(for: .milliseconds(300))
     await monitor.observe(.ready)
-    try await Task.sleep(for: .milliseconds(60))
+    try await Task.sleep(for: .milliseconds(300))
     #expect(await counter.count == 0)
 
     await monitor.observe(.unresponsive)
-    try await Task.sleep(for: .milliseconds(60))
+    try await Task.sleep(for: .milliseconds(300))
     #expect(await counter.count == 0)
-    try await Task.sleep(for: .milliseconds(60))
+    try await Task.sleep(for: .milliseconds(300))
     #expect(await counter.count == 1)
 
     await monitor.observe(.reconnecting)
-    try await Task.sleep(for: .milliseconds(120))
+    try await Task.sleep(for: .milliseconds(600))
     #expect(await counter.count == 1)
     await monitor.stop()
 }

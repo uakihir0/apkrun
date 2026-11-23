@@ -1,5 +1,6 @@
 import AppKit
 import Dispatch
+import InputCore
 
 /// Owns the native window for one app session (display-and-windowing.md §7, #27).
 ///
@@ -38,6 +39,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         title: String,
         backingScale: CGFloat,
         inputSink: PointerInputSink? = nil,
+        imeTextSink: ImeTextSink? = nil,
         allowsResize: Bool = true,
         appIcon: NSImage? = nil,
         onFocusChanged: (@MainActor (Bool) -> Void)? = nil,
@@ -58,6 +60,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         self.allowsResize = allowsResize
         self.onFocusChanged = onFocusChanged
         layerView.setInputEnabled(false)
+        layerView.imeTextSink = imeTextSink
         self.inputSink = inputSink
         let placeholderView = SessionWindowPlaceholderView(
             appName: title, appIcon: appIcon, frame: NSRect(origin: .zero, size: size))
@@ -165,6 +168,11 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         errorView = view
     }
 
+    /// The latest editor report of the IME, forwarded to the view (input.md §5.1).
+    public func updateEditor(_ state: EditorState) {
+        layerView.updateEditor(state)
+    }
+
     /// Closes the window without asking. The owner calls it when the boot ends.
     public func close() {
         window.close()
@@ -180,6 +188,7 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
 
     /// The window became key, so Android must focus the task on this window's display.
     public func windowDidBecomeKey(_ notification: Notification) {
+        layerView.windowBecameKey()
         onFocusChanged?(true)
     }
 

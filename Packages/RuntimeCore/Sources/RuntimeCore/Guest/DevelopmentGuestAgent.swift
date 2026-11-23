@@ -80,6 +80,9 @@ public actor DevelopmentGuestAgent {
     /// The input connection, and the control session token that it presents (input.md §8, decision D11).
     private var inputConnection: GuestConnection?
     private var inputConnectionToken: Data?
+    /// The development IME connection, opened on demand by ``imeChannel()`` (input.md §5.1).
+    private var imeConnection: GuestConnection?
+    private var imeConnectionToken: Data?
     private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
     private let displayEventContinuation: AsyncStream<GuestDisplayEvent>.Continuation
     private let clipboardEventContinuation: AsyncStream<GPClipData>.Continuation
@@ -252,10 +255,13 @@ public actor DevelopmentGuestAgent {
         taskEventContinuation.finish()
         displayEventContinuation.finish()
         clipboardEventContinuation.finish()
-        // The input connection belongs to the control session, so it ends with it.
+        // The input and IME connections belong to the control session, so they end with it.
         await inputConnection?.close()
         inputConnection = nil
         inputConnectionToken = nil
+        await imeConnection?.close()
+        imeConnection = nil
+        imeConnectionToken = nil
         try? await removeForwards()
     }
 
@@ -308,6 +314,55 @@ public actor DevelopmentGuestAgent {
         inputConnection = connection
         inputConnectionToken = token
         return GuestInputChannel(connection: connection)
+    }
+
+    /// The development IME channel (input.md §5.1). It opens on the first call with the control
+    /// session's token, and is reused while it is usable, exactly like ``inputChannel()``.
+    public func imeChannel() async throws(GuestAgentFailure) -> GuestImeChannel {
+        try requireAvailable()
+        guard await supervisor.statusSnapshot().state == .ready else {
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
+        guard let token = await supervisor.session?.sessionToken else {
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
+        if let connection = await reusableImeConnection(token: token) {
+            return GuestImeChannel(connection: connection)
+        }
+        let connection = GuestConnection(
+            endpoint: .developmentIME,
+            transport: transport,
+            presentedToken: token,
+            hostVersion: hostVersion,
+            logSink: logSink
+        )
+        do throws(GuestProtocolFailure) {
+            _ = try await connection.open()
+        } catch {
+            throw Self.inputFailure(error)
+        }
+        guard await supervisor.statusSnapshot().state == .ready,
+            await supervisor.session?.sessionToken == token
+        else {
+            await connection.close()
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
+        if let kept = await reusableImeConnection(token: token) {
+            await connection.close()
+            return GuestImeChannel(connection: kept)
+        }
+        await imeConnection?.close()
+        imeConnection = connection
+        imeConnectionToken = token
+        return GuestImeChannel(connection: connection)
+    }
+
+    /// The IME connection, when it is usable and presents `token`.
+    private func reusableImeConnection(token: Data) async -> GuestConnection? {
+        guard let connection = imeConnection, imeConnectionToken == token, await connection.isUsable else {
+            return nil
+        }
+        return connection
     }
 
     /// The input connection, when it is usable and presents `token`.
@@ -531,6 +586,13 @@ public actor DevelopmentGuestAgent {
             try? await Task.sleep(for: .milliseconds(50))
         }
         return !(await supervisor.snapshot.tasks.values.contains { $0.package == package })
+    }
+
+    /// Live Android tasks of `package` from the latest guest snapshot —
+    /// the stock-image `ListTasks` surface (guest-protocol.md §7.1 op 17),
+    /// used as the gentle-update GU5 fallback.
+    public func tasks(forPackage package: String) async -> [GPTaskInfo] {
+        await supervisor.snapshot.tasks.values.filter { $0.package == package }
     }
 
     /// Throws `requiredAgentUnavailable` once the restart budget is spent, and the agent stays down.

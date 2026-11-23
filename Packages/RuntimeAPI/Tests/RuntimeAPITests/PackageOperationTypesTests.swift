@@ -227,6 +227,14 @@ private struct TestRuntimeService: RuntimeService {
         RuntimePackageSummary(packageID: packageID, displayName: "Test", versionCode: 1)
     }
 
+    func discardImport(_ request: RuntimeDiscardImportRequest) async throws(RuntimeWireError) {}
+
+    func adoptPackage(_ request: RuntimeAdoptPackageRequest) async throws(RuntimeWireError)
+        -> RuntimePackageSummary
+    {
+        RuntimePackageSummary(packageID: packageID, displayName: "Test", versionCode: 1)
+    }
+
     func uninstallPackage(_ request: RuntimeUninstallPackageRequest) async throws(RuntimeWireError) {}
 
     func listPackages(

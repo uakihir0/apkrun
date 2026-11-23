@@ -16,6 +16,10 @@ public struct StorePackageInfo: Sendable, Equatable {
     public var launchableComponent: String?
     /// The package that installed this package, if reported.
     public var installerPackage: PackageID?
+    /// The package that owns update installation, if reported (API 34 `InstallSourceInfo`).
+    ///
+    /// Only channels with the `updateOwnership` capability can read it; others leave it `nil`.
+    public var updateOwner: PackageID?
     /// The time Android first installed this package, if reported.
     public var firstInstallTime: Date?
     /// The time Android last updated this package, if reported.
@@ -36,6 +40,7 @@ public struct StorePackageInfo: Sendable, Equatable {
         enabled: Bool,
         launchableComponent: String? = nil,
         installerPackage: PackageID? = nil,
+        updateOwner: PackageID? = nil,
         firstInstallTime: Date? = nil,
         lastUpdateTime: Date? = nil,
         targetSDK: Int,
@@ -49,6 +54,7 @@ public struct StorePackageInfo: Sendable, Equatable {
         self.enabled = enabled
         self.launchableComponent = launchableComponent
         self.installerPackage = installerPackage
+        self.updateOwner = updateOwner
         self.firstInstallTime = firstInstallTime
         self.lastUpdateTime = lastUpdateTime
         self.targetSDK = targetSDK
@@ -131,6 +137,19 @@ public struct StoreCapabilities: OptionSet, Sendable, Hashable {
     public static let rollback = Self(rawValue: 1 << 5)
     /// The channel can reinstall an older package version.
     public static let downgradeReinstall = Self(rawValue: 1 << 6)
+    /// The channel can ask PackageInstaller whether an install's
+    /// constraints are satisfied (Store Agent op 110, `store.constraints.v1`).
+    public static let constraints = Self(rawValue: 1 << 7)
+}
+
+/// The install mode of a `StoreInstallRequest` (guest-protocol.md §11.3).
+public enum StoreInstallMode: String, Sendable, Equatable {
+    /// First install of a package the store does not manage yet.
+    case new
+    /// Reinstall of an existing set (same or lower version).
+    case reinstall
+    /// PackageInstaller update: the guest must reject mismatched signers.
+    case update
 }
 
 /// The install facts a channel must check before passing artifacts to Android.
@@ -141,13 +160,43 @@ public struct StoreInstallRequest: Sendable, Equatable {
     public var versionCode: VersionCode
     /// Whether this operation has explicit approval to install a lower version.
     public var allowDowngrade: Bool
+    /// The install mode; `.update` requires signer equality in the guest.
+    public var mode: StoreInstallMode
+    /// Signing digests the installed set must keep for `.update`.
+    public var signerDigests: [SHA256Digest]
+    /// Keep the previous APK set for rollback (UPDATE only; masked by the
+    /// channel's `rollback` capability).
+    public var enableRollback: Bool
+    /// Ask the guest to record APKRun as this package's update owner
+    /// (UPDATE only; masked by the channel's `updateOwnership` capability).
+    public var requestUpdateOwnership: Bool
 
     /// Creates the package identity and version constraints for an install.
-    public init(packageID: PackageID, versionCode: VersionCode, allowDowngrade: Bool = false) {
+    public init(
+        packageID: PackageID,
+        versionCode: VersionCode,
+        allowDowngrade: Bool = false,
+        mode: StoreInstallMode = .new,
+        signerDigests: [SHA256Digest] = [],
+        enableRollback: Bool = false,
+        requestUpdateOwnership: Bool = false
+    ) {
         self.packageID = packageID
         self.versionCode = versionCode
         self.allowDowngrade = allowDowngrade
+        self.mode = mode
+        self.signerDigests = signerDigests
+        self.enableRollback = enableRollback
+        self.requestUpdateOwnership = requestUpdateOwnership
     }
+}
+
+/// Failures a store channel reports under its operation contract.
+public enum StoreChannelFailure: Error, Equatable, Sendable {
+    /// `PackageManager.relinquishUpdateOwnership` answered `FAILED_PRECONDITION`:
+    /// Android does not list APKRun as this package's update owner. Callers treat
+    /// it as a successful relinquish (package-store.md §6.3).
+    case updateOwnershipNotHeld(PackageID)
 }
 
 /// The Android package operations exposed to APKStoreCore.
@@ -166,6 +215,27 @@ public protocol StoreAgentChannel: Sendable {
     func packageInfo(_ package: PackageID) async throws -> StorePackageInfo?
     /// Lists installed packages selected by `filter`.
     func listPackages(_ filter: StorePackageFilter) async throws -> [StorePackageSummary]
+    /// Asks Android to drop APKRun as the package's update owner (Store Agent op 109).
+    ///
+    /// Only channels advertising `updateOwnership` are asked. Throws
+    /// `StoreChannelFailure.updateOwnershipNotHeld` when Android reports
+    /// `FAILED_PRECONDITION`.
+    func relinquishUpdateOwnership(_ package: PackageID) async throws
+
+    /// Asks Android whether the package satisfies `GENTLE_UPDATE` install
+    /// constraints (Store Agent op 110, guest-protocol.md §11.1). `nil`
+    /// means the channel cannot ask — callers fall back to a task check.
+    ///
+    /// Only channels advertising `constraints` are asked; the answer is a
+    /// hint the gentle-update gate re-evaluates before each install.
+    func installConstraintsAllow(_ package: PackageID) async throws -> Bool?
+}
+
+extension StoreAgentChannel {
+    /// Channels that cannot grant update ownership have nothing to relinquish.
+    public func relinquishUpdateOwnership(_ package: PackageID) async throws {}
+    /// Channels without `constraints` cannot ask Android: `nil`.
+    public func installConstraintsAllow(_ package: PackageID) async throws -> Bool? { nil }
 }
 
 /// The runtime gate injected by RuntimeHost.

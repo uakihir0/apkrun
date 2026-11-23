@@ -4,6 +4,7 @@ import android.net.LocalSocket
 import android.os.HandlerThread
 import android.os.Process
 import android.os.SystemClock
+import io.apkrun.guest.protocol.SessionManager
 import io.apkrun.guest.protocol.v1.ChannelKind
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.AgentSocketServer
@@ -62,7 +63,13 @@ class Daemon(internal val scope: CoroutineScope) {
     }
 
     internal val events = EventBus()
-    internal val sessions = SessionManager { SystemClock.elapsedRealtime() }
+    internal val sessions =
+        SessionManager({ SystemClock.elapsedRealtime() }) { token ->
+            // Publishing must not kill the control accept path: a settings failure degrades to
+            // the IME channel refusing connections, not to the agent dying.
+            runCatching { ControlTokenProperty.publish(SystemContext.get(), token) }
+                .onFailure { AgentLog.warning("the session token could not be published") }
+        }
     private val displays = DisplayService(events, post)
     private val tasks = TaskService(events, post)
     private val launch = LaunchService(tasks, displays) { SystemContext.get() }

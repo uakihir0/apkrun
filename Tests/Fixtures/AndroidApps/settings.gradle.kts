@@ -19,10 +19,12 @@ dependencyResolutionManagement {
 rootProject.name = "apkrun-fixtures"
 
 include(":HelloText")
+include(":HelloUpdate")
 include(":HelloGL")
 include(":HelloCompose")
 include(":HelloWebView")
 include(":HelloSplit")
+include(":OtherInstaller")
 include(":feature")
 
 project(":feature").projectDir = file("HelloSplitFeature")

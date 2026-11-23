@@ -1,4 +1,4 @@
-package io.apkrun.guest.daemon
+package io.apkrun.guest.protocol
 
 import io.apkrun.guest.protocol.v1.GuestError
 import io.apkrun.guest.protocol.v1.GuestErrorCode

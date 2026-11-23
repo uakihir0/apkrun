@@ -375,9 +375,22 @@ let package = Package(
             path: "Packages/APKStoreCore/Tests/APKStoreCoreTests"
         ),
         .testTarget(
+            name: "APKStoreCoreSystemTests",
+            dependencies: [
+                "APKStoreCore",
+                .product(name: "ZIPFoundation", package: "zipfoundation"),
+            ],
+            path: "Packages/APKStoreCore/Tests/APKStoreCoreSystemTests"
+        ),
+        .testTarget(
             name: "UpdateCoreTests",
             dependencies: ["UpdateCore"],
             path: "Packages/UpdateCore/Tests/UpdateCoreTests"
+        ),
+        .testTarget(
+            name: "UpdateCoreSystemTests",
+            dependencies: ["UpdateCore", "APKStoreCore"],
+            path: "Packages/UpdateCore/Tests/UpdateCoreSystemTests"
         ),
         .testTarget(
             name: "WrapperCoreTests",

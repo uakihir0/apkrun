@@ -109,3 +109,32 @@ jobs:
           path: build/nightly/network/Network.xcresult
           if-no-files-found: warn
           retention-days: 30
+
+  compatibility:
+    name: compatibility (F-Droid corpus)
+    if: github.ref == 'refs/heads/main'
+    runs-on:
+      - self-hosted
+      - macOS
+      - apkrun-lab
+    timeout-minutes: 60
+    env:
+      APKRUN_CI: "1"
+      ANDROID_HOME: ${{ vars.ANDROID_HOME }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install pinned repository tools
+        run: scripts/bootstrap
+      - name: Verify corpus signer digests against apksigner
+        run: scripts/dev/verify-corpus.sh
+      - name: Upload corpus evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: corpus-${{ github.sha }}
+          path: build/corpus/
+          if-no-files-found: warn
+          retention-days: 30

@@ -146,7 +146,7 @@ struct APKSignatureVerifier: Sendable {
         guard let sigBlock = Self.signingBlock(in: data, layout: layout),
             let sigBlockOffset = layout.sigBlockOffset
         else {
-            return try v1Fallback(data: data, file: file, targetSDK: targetSDK)
+            return try v1Fallback(data: data, layout: layout, file: file, targetSDK: targetSDK)
         }
         // Pick the scheme for the guest SDK (37 baseline): v3.1 when a signer's range covers it.
         let guestSDK = 37
@@ -230,11 +230,20 @@ struct APKSignatureVerifier: Sendable {
         // [signed-data][minSdk u32][maxSdk u32][signatures][public key].
         for signer in Self.lengthPrefixed(block).flatMap(Self.lengthPrefixed) {
             var cursor = 0
-            guard Self.takeLengthPrefixed(signer, at: &cursor) != nil,
+            guard let signedData = Self.takeLengthPrefixed(signer, at: &cursor),
                 cursor + 8 <= signer.count
             else { continue }
             let minSDK = Int(signer.readUInt32LE(at: cursor))
             let maxSDK = Int(signer.readUInt32LE(at: cursor + 4))
+            // The record's SDK range is not signed; apksig requires it to equal
+            // the range inside the signed data, which the signature covers.
+            var sdCursor = 0
+            guard Self.takeLengthPrefixed(signedData, at: &sdCursor) != nil,
+                Self.takeLengthPrefixed(signedData, at: &sdCursor) != nil,
+                sdCursor + 8 <= signedData.count,
+                Int(signedData.readUInt32LE(at: sdCursor)) == minSDK,
+                Int(signedData.readUInt32LE(at: sdCursor + 4)) == maxSDK
+            else { continue }
             if sdk >= minSDK, sdk <= maxSDK { return true }
         }
         return false
@@ -450,7 +459,9 @@ struct APKSignatureVerifier: Sendable {
     }
 
     /// v1-only path: read the certificate from META-INF/*.RSA, *.EC, or *.DSA.
-    private func v1Fallback(data: Data, file: String, targetSDK: Int) throws(StoreFailure) -> APKSignatureInfo {
+    private func v1Fallback(
+        data: Data, layout: ZIPLayout, file: String, targetSDK: Int
+    ) throws(StoreFailure) -> APKSignatureInfo {
         var hasJarSignature = false
         var certificateDER: Data?
         var index = 0
@@ -463,9 +474,21 @@ struct APKSignatureVerifier: Sendable {
                     name.hasSuffix(".RSA") || name.hasSuffix(".EC") || name.hasSuffix(".DSA")
                 {
                     hasJarSignature = true
-                    let method = Int(data.readUInt16LE(at: index + 8))
-                    let compressedSize = Int(data.readUInt32LE(at: index + 18))
-                    let uncompressedSize = Int(data.readUInt32LE(at: index + 22))
+                    let flags = Int(data.readUInt16LE(at: index + 6))
+                    var method = Int(data.readUInt16LE(at: index + 8))
+                    var compressedSize = Int(data.readUInt32LE(at: index + 18))
+                    var uncompressedSize = Int(data.readUInt32LE(at: index + 22))
+                    // Bit 3 = a data descriptor follows the entry and the local
+                    // header's size fields are zero; resolve them from the
+                    // central directory (jarsigner writes this form).
+                    if flags & 0x08 != 0 || compressedSize == 0,
+                        let cdEntry = Self.centralDirectoryEntry(
+                            name: name, data: data, layout: layout)
+                    {
+                        method = cdEntry.method
+                        compressedSize = cdEntry.compressedSize
+                        uncompressedSize = cdEntry.uncompressedSize
+                    }
                     let dataStart = index + 30 + nameLength + Int(data.readUInt16LE(at: index + 28))
                     if dataStart + compressedSize <= data.count {
                         let payload = Data(data[dataStart..<dataStart + compressedSize])
@@ -502,7 +525,9 @@ struct APKSignatureVerifier: Sendable {
 
     /// Inflates a raw DEFLATE stream (ZIP method 8) to its declared uncompressed size.
     private static func inflate(_ compressed: Data, expectedSize: Int) -> Data? {
-        guard expectedSize > 0, expectedSize <= (1 << 28) else { return nil }
+        // A signature file is a few KiB; a much larger declared size is bogus
+        // input, so cap the buffer before decompressing.
+        guard expectedSize > 0, expectedSize <= (1 << 20) else { return nil }
         var output = Data(count: expectedSize)
         var stream = z_stream()
         guard inflateInit2_(&stream, -MAX_WBITS, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK
@@ -522,6 +547,35 @@ struct APKSignatureVerifier: Sendable {
         }
         guard result == Z_STREAM_END, Int(stream.total_out) == expectedSize else { return nil }
         return output
+    }
+
+    /// Looks up an entry in the central directory by name and returns its
+    /// compression method and declared sizes.
+    private static func centralDirectoryEntry(
+        name: String, data: Data, layout: ZIPLayout
+    ) -> (method: Int, compressedSize: Int, uncompressedSize: Int)? {
+        var index = layout.cdOffset
+        let end = Swift.min(layout.cdOffset + layout.cdSize, data.count)
+        while index + 46 <= end {
+            guard data[index] == 0x50, data[index + 1] == 0x4B,
+                data[index + 2] == 0x01, data[index + 3] == 0x02
+            else { break }
+            let nameLength = Int(data.readUInt16LE(at: index + 28))
+            guard index + 46 + nameLength <= end else { break }
+            let entryName = String(
+                decoding: data[(index + 46)..<(index + 46 + nameLength)], as: UTF8.self)
+            if entryName == name {
+                return (
+                    Int(data.readUInt16LE(at: index + 10)),
+                    Int(data.readUInt32LE(at: index + 20)),
+                    Int(data.readUInt32LE(at: index + 24))
+                )
+            }
+            index +=
+                46 + nameLength + Int(data.readUInt16LE(at: index + 30))
+                + Int(data.readUInt16LE(at: index + 32))
+        }
+        return nil
     }
 
     /// Scans a PKCS#7 blob for the first DER certificate (0x30, plausible length, X.509 v3 version).

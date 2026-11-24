@@ -15,12 +15,6 @@ concurrency:
 
 env:
   APKRUN_CI: "1"
-  # Anonymous GitHub fetches from shared runners are rate-limited (401);
-  # authenticate every git fetch with the run's token.
-  GIT_CONFIG_COUNT: "1"
-  GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
-  GIT_CONFIG_VALUE_0: "https://github.com/"
-  GITHUB_TOKEN: ${{ github.token }}
 
 jobs:
   lint:
@@ -32,6 +26,14 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Install pinned repository tools
+        # Anonymous GitHub fetches from shared runners are rate-limited (401);
+        # authenticate every git fetch with the run's token, scoped to this
+        # step so build and test code never sees it.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Run repository checks
         run: scripts/ci/run-checks.sh
@@ -45,6 +47,14 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Install pinned repository tools
+        # Anonymous GitHub fetches from shared runners are rate-limited (401);
+        # authenticate every git fetch with the run's token, scoped to this
+        # step so build and test code never sees it.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Check generated files
         run: scripts/ci/codegen.sh
@@ -59,6 +69,14 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Install pinned repository tools
+        # Anonymous GitHub fetches from shared runners are rate-limited (401);
+        # authenticate every git fetch with the run's token, scoped to this
+        # step so build and test code never sees it.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Compute verified build cache key
         id: third-party-key
@@ -85,6 +103,14 @@ jobs:
       - name: Prepare result directories
         run: mkdir -p build/ci
       - name: Install pinned repository tools
+        # Anonymous GitHub fetches from shared runners are rate-limited (401);
+        # authenticate every git fetch with the run's token, scoped to this
+        # step so build and test code never sees it.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Compute verified build cache key
         id: third-party-key
@@ -148,6 +174,14 @@ jobs:
       - name: Prepare result directory
         run: mkdir -p build/ci
       - name: Install pinned repository tools
+        # Anonymous GitHub fetches from shared runners are rate-limited (401);
+        # authenticate every git fetch with the run's token, scoped to this
+        # step so build and test code never sees it.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Compute verified build cache key
         id: third-party-key
@@ -186,6 +220,14 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Install pinned repository tools
+        # Anonymous GitHub fetches from shared runners are rate-limited (401);
+        # authenticate every git fetch with the run's token, scoped to this
+        # step so build and test code never sees it.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Compute verified build cache key
         id: third-party-key
@@ -248,6 +290,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install pinned repository tools
+        # Anonymous GitHub fetches from shared runners are rate-limited (401);
+        # authenticate every git fetch with the run's token, scoped to this
+        # step so build and test code never sees it.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Compute verified build cache key
         id: cache-key

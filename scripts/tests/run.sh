@@ -1166,7 +1166,7 @@ def workflow_errors(workflow, trigger_key)
     errors << "push checks must run only for main"
   end
   workflow.fetch("jobs").each do |job_name, job|
-    expected_runner = job_name == "test-vsockd" ? "ubuntu-24.04" : "xcode-27"
+    expected_runner = job_name == "test-vsockd" ? "ubuntu-latest" : "xcode-27"
     unless job["runs-on"] == expected_runner
       errors << "#{job_name} must use a fresh GitHub-hosted #{expected_runner} runner"
     end

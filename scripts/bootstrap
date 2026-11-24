@@ -223,14 +223,14 @@ fetch_pinned_archive() {
     local expected_sha="$3"
     local archive="$4"
 
-    local curl_auth=()
     # Anonymous GitHub requests from shared CI runners are rate-limited (401);
-    # authenticate when a token is available (GITHUB_TOKEN in CI).
+    # authenticate when a token is available (GITHUB_TOKEN in CI). Keep the
+    # array non-empty: expanding an empty array aborts under set -u on bash 3.2.
+    local curl_args=(--fail --location --retry 4 --retry-all-errors --connect-timeout 20 --max-time 240)
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-        curl_auth=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+        curl_args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
     fi
-    if ! curl --fail --location --retry 4 --retry-all-errors \
-        --connect-timeout 20 --max-time 240 "${curl_auth[@]}" "$url" --output "$archive"; then
+    if ! curl "${curl_args[@]}" "$url" --output "$archive"; then
         report FAIL "$name" "download failed"
         failures=$((failures + 1))
         return 1

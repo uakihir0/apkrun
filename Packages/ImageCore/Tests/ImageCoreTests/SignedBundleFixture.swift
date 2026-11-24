@@ -126,7 +126,8 @@ enum SignedBundleFixture {
         try handle.truncate(atOffset: UInt64(fixture.size))
         for (lba, base64) in fixture.sectors {
             let sector = try #require(Data(base64Encoded: base64))
-            try handle.write(toOffset: UInt64(lba)! * 512, contentsOf: sector)
+            try handle.seek(toOffset: UInt64(lba)! * 512)
+            try handle.write(contentsOf: sector)
         }
     }
 

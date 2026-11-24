@@ -11,8 +11,9 @@ trap 'rm -rf "$temporary_root"' EXIT
 # Checks that need an artifact or a specific test stage, rather than running in
 # generic lint. check-sepolicy.sh requires compiled AOSP policy and is invoked
 # by scripts/aosp/build-product.sh. check-compile-fail.sh is the manual T1
-# compiler-failure check of build-system.md §12.
-manual_checks=(check-compile-fail.sh check-sepolicy.sh)
+# compiler-failure check of build-system.md §12. check-launcher.sh requires the
+# APKRun product and runs in the build job.
+manual_checks=(check-compile-fail.sh check-sepolicy.sh check-launcher.sh)
 
 # unregistered_checks <root>: prints each scripts/check-*.sh that the runner in
 # <root> does not register and that is not a manual check.
@@ -41,6 +42,12 @@ if [[ -n "$missing" ]]; then
     exit 1
 fi
 printf 'PASS run-checks coverage: every scripts/check-*.sh is registered\n'
+
+if ! grep -Fq -- "scripts/check-launcher.sh" "$repo_root/.github/workflows/ci.yml"; then
+    printf 'FAIL launcher check coverage: check-launcher.sh is not called in CI\n' >&2
+    exit 1
+fi
+printf 'PASS launcher check coverage: check-launcher.sh runs in CI\n'
 
 fixture="$temporary_root/fixture"
 mkdir -p "$fixture/scripts/ci"

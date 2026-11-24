@@ -22,41 +22,50 @@ public enum GuestBulkFileReceiveFailure: Error, Equatable, Sendable {
     case checksumMismatch
     /// The bulk connection ended before the transfer completed.
     case disconnected
+    /// The transfer did not finish before the receive deadline.
+    case timedOut
     /// The caller cancelled the receive operation.
     case cancelled
-    /// The temporary destination could not be created, written, synchronized, or removed.
+    /// The destination could not be opened, written, synchronized, or removed.
     case destinationFailure
     /// The prepared receiver has already been used.
     case alreadyConsumed
 }
 
-/// Receives one offer-bound guest file into a new temporary file.
+/// Receives one offer-bound guest file into a temporary file or a caller-owned destination.
 ///
 /// The caller prepares this receiver before accepting the export, binds the returned transfer ID, and then calls
-/// ``receive()``. Inbound frames are buffered with backpressure while the accept response is in flight. The file is
-/// retained at `temporaryFileURL` only after the full byte count and SHA-256 have been verified.
+/// ``receive()`` or ``receiveToDestination()``. Inbound frames are buffered with backpressure while the accept
+/// response is in flight. The receiver reports success only after the full byte count and SHA-256 have been verified.
 public actor GuestBulkFileReceiver {
     /// The protocol's maximum file size.
     public static let maximumTransferSize: UInt64 = 2_147_483_648
     /// The protocol's maximum chunk size.
     public static let maximumChunkSize = 1_048_576
+    /// Maximum time allowed for one bulk transfer to finish.
+    public static let defaultReceiveTimeout: Duration = .seconds(3_600)
 
     private weak var connection: GuestConnection?
     private let receiveID: UUID
     private let expectedSize: UInt64
-    private let temporaryFileURL: URL
+    private let receiveTimeout: Duration
+    private let temporaryFileURL: URL?
+    private let writesToCallerHandle: Bool
     private let inbox: GuestBulkFrameInbox
     private var fileHandle: FileHandle?
     private var transferID: UInt64?
     private var isConsumed = false
     private var isFinished = false
+    private var acknowledgementDelivered = false
+    private var didTimeOut = false
 
     init(
         connection: GuestConnection,
         inbox: GuestBulkFrameInbox,
         receiveID: UUID,
         expectedSize: UInt64,
-        temporaryFileURL: URL
+        temporaryFileURL: URL,
+        receiveTimeout: Duration
     ) throws(GuestBulkFileReceiveFailure) {
         guard expectedSize <= Self.maximumTransferSize else {
             throw .invalidOffer
@@ -71,8 +80,43 @@ public actor GuestBulkFileReceiver {
         self.inbox = inbox
         self.receiveID = receiveID
         self.expectedSize = expectedSize
+        self.receiveTimeout = receiveTimeout
         self.temporaryFileURL = temporaryFileURL
+        writesToCallerHandle = false
         fileHandle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    }
+
+    init(
+        connection: GuestConnection,
+        inbox: GuestBulkFrameInbox,
+        receiveID: UUID,
+        expectedSize: UInt64,
+        destination: FileHandle,
+        receiveTimeout: Duration
+    ) throws(GuestBulkFileReceiveFailure) {
+        guard expectedSize <= Self.maximumTransferSize else {
+            throw .invalidOffer
+        }
+        var status = stat()
+        let fileDescriptor = destination.fileDescriptor
+        let flags = fcntl(fileDescriptor, F_GETFL)
+        guard fstat(fileDescriptor, &status) == 0,
+            status.st_mode & S_IFMT == S_IFREG,
+            flags >= 0,
+            flags & O_ACCMODE != O_RDONLY,
+            ftruncate(fileDescriptor, 0) == 0,
+            lseek(fileDescriptor, 0, SEEK_SET) >= 0
+        else {
+            throw .destinationFailure
+        }
+        self.connection = connection
+        self.inbox = inbox
+        self.receiveID = receiveID
+        self.expectedSize = expectedSize
+        self.receiveTimeout = receiveTimeout
+        temporaryFileURL = nil
+        writesToCallerHandle = true
+        fileHandle = destination
     }
 
     /// Binds the ID returned by the accepted export. The receive queue is already armed, so the guest may start
@@ -123,6 +167,26 @@ public actor GuestBulkFileReceiver {
     /// Every failure truncates and removes the temporary file. The receiver sends a `BulkAck` only after it has
     /// validated the terminal size and digest.
     public func receive() async throws(GuestBulkFileReceiveFailure) -> URL {
+        guard !writesToCallerHandle else {
+            throw .invalidOffer
+        }
+        guard let temporaryFileURL else {
+            throw .invalidOffer
+        }
+        return try await consume() ?? temporaryFileURL
+    }
+
+    /// Consumes and verifies an export written directly to the caller's file handle.
+    ///
+    /// On failure the handle is truncated; the caller owns removal of the selected destination.
+    public func receiveToDestination() async throws(GuestBulkFileReceiveFailure) {
+        guard writesToCallerHandle, temporaryFileURL == nil else {
+            throw .invalidOffer
+        }
+        _ = try await consume()
+    }
+
+    private func consume() async throws(GuestBulkFileReceiveFailure) -> URL? {
         guard transferID != nil else {
             cleanupDestination()
             isFinished = true
@@ -133,6 +197,16 @@ public actor GuestBulkFileReceiver {
             throw .alreadyConsumed
         }
         isConsumed = true
+
+        let timeoutTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: receiveTimeout)
+            } catch {
+                return
+            }
+            await self?.expireReceive()
+        }
+        defer { timeoutTask.cancel() }
 
         do {
             let result = try await withTaskCancellationHandler {
@@ -148,6 +222,8 @@ public actor GuestBulkFileReceiver {
             isFinished = true
             if failure == .malformedFrame || failure == .sizeMismatch {
                 await connection?.failBulkFileReceive(receiveID: receiveID, reason: .malformedFrame)
+            } else if failure == .timedOut {
+                await connection?.failBulkFileReceive(receiveID: receiveID, reason: .disconnected)
             } else if failure == .destinationFailure {
                 await connection?.failBulkFileReceive(receiveID: receiveID, reason: .disconnected)
             } else {
@@ -162,7 +238,7 @@ public actor GuestBulkFileReceiver {
         }
     }
 
-    private func receiveFrames() async throws(GuestBulkFileReceiveFailure) -> URL {
+    private func receiveFrames() async throws(GuestBulkFileReceiveFailure) -> URL? {
         guard let transferID else {
             throw .invalidOffer
         }
@@ -238,13 +314,13 @@ public actor GuestBulkFileReceiver {
                 }
                 do {
                     try fileHandle?.synchronize()
-                    try fileHandle?.close()
-                    fileHandle = nil
                 } catch {
                     throw .destinationFailure
                 }
                 isFinished = true
                 try await sendAcknowledgement(.ok)
+                try fileHandle?.close()
+                fileHandle = nil
                 return temporaryFileURL
             case .abort:
                 throw .aborted
@@ -253,6 +329,9 @@ public actor GuestBulkFileReceiver {
             }
         }
 
+        if didTimeOut {
+            throw .timedOut
+        }
         if Task.isCancelled {
             throw .cancelled
         }
@@ -275,12 +354,28 @@ public actor GuestBulkFileReceiver {
         do throws(GuestProtocolFailure) {
             try await connection.sendBulkFrame(frame)
         } catch {
+            if didTimeOut {
+                throw .timedOut
+            }
             throw .disconnected
         }
+        acknowledgementDelivered = true
     }
 
     private func cancelReceive() async {
         await cancel()
+    }
+
+    private func expireReceive() async {
+        guard !acknowledgementDelivered else {
+            return
+        }
+        didTimeOut = true
+        if isFinished {
+            await connection?.failBulkFileReceive(receiveID: receiveID, reason: .disconnected)
+        } else {
+            await cancel()
+        }
     }
 
     private func cleanupDestination() {
@@ -289,7 +384,9 @@ public actor GuestBulkFileReceiver {
             try? fileHandle.close()
             self.fileHandle = nil
         }
-        try? FileManager.default.removeItem(at: temporaryFileURL)
+        if let temporaryFileURL {
+            try? FileManager.default.removeItem(at: temporaryFileURL)
+        }
     }
 }
 

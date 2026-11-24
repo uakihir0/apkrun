@@ -1,6 +1,29 @@
 @preconcurrency import Foundation
+import IOSurface
 import RuntimeAPI
 import Security
+
+/// The descriptor and direct XPC capabilities returned when opening an app session.
+public struct RuntimeSessionBootstrap: @unchecked Sendable {
+    /// The session identity, window preferences, and first surface-pool metadata.
+    public let descriptor: SessionDescriptor
+    /// The first three scanout surfaces, in buffer order.
+    public let surfaces: [IOSurface]
+    /// The private endpoint bound to this app session.
+    public let session: RuntimeSessionClient
+
+    init(descriptor: SessionDescriptor, surfaces: [IOSurface], session: RuntimeSessionClient) {
+        self.descriptor = descriptor
+        self.surfaces = surfaces
+        self.session = session
+    }
+}
+
+struct RuntimeOpenSessionXPCReply: @unchecked Sendable {
+    let data: Data
+    let surfaces: [IOSurface]?
+    let endpoint: NSXPCListenerEndpoint?
+}
 
 /// Errors returned by the first RuntimeAPI control client.
 public enum RuntimeControlClientError: Error, Equatable, Sendable {
@@ -214,6 +237,46 @@ public actor RuntimeControlClient {
         } catch {
             invalidateAfterTransportFailure(opened.channel, error: error)
             throw error
+        }
+    }
+
+    /// Opens the app's window session and attaches its private session endpoint.
+    ///
+    /// This operation is never retried after a transport failure because the daemon may already
+    /// have attached a display and launched the Android task.
+    public func openSession(_ request: OpenSessionRequest) async throws(RuntimeControlClientError)
+        -> RuntimeSessionBootstrap
+    {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeOpenSessionControlRequest(
+                header: makeHeader(),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.openSession(data)
+            let (descriptor, surfaces) = try Self.decodeOpenSessionReply(from: response)
+            guard let endpoint = response.endpoint else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            let session = try RuntimeSessionClient(
+                endpoint: endpoint,
+                clientKind: configuration.clientKind
+            )
+            return RuntimeSessionBootstrap(
+                descriptor: descriptor,
+                surfaces: surfaces,
+                session: session
+            )
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            switch clientError {
+            case .transportFailure, .requestTimedOut, .requestCancelled, .invalidRemoteProxy:
+                throw .operationResultUnknown(operation: "openSession")
+            default:
+                throw clientError
+            }
         }
     }
 
@@ -1046,6 +1109,31 @@ public actor RuntimeControlClient {
         return status
     }
 
+    private static func decodeOpenSessionReply(
+        from response: RuntimeOpenSessionXPCReply
+    ) throws(RuntimeControlClientError) -> (SessionDescriptor, [IOSurface]) {
+        let reply = try Self.decode(RuntimeOpenSessionControlReply.self, from: response.data)
+        guard (reply.result != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message)
+        }
+        guard let descriptor = reply.result,
+            let surfaces = response.surfaces,
+            surfaces.count == SurfaceSet.surfaceCount,
+            descriptor.surfaces.pixelSize.width > 0,
+            descriptor.surfaces.pixelSize.height > 0,
+            surfaces.allSatisfy({
+                IOSurfaceGetWidth($0) == descriptor.surfaces.pixelSize.width
+                    && IOSurfaceGetHeight($0) == descriptor.surfaces.pixelSize.height
+            })
+        else {
+            throw .malformedReply
+        }
+        return (descriptor, surfaces)
+    }
+
     private static func decodeImportPackageReply(from data: Data) throws(RuntimeControlClientError)
         -> RuntimeImportPreview
     {
@@ -1516,12 +1604,16 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func subscribe(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func unsubscribe(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func openSession(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeOpenSessionXPCReply
     func terminate(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
 
 extension RuntimeControlChannel {
+    func openSession(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeOpenSessionXPCReply {
+        throw .invalidRemoteProxy
+    }
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void) {}
     func invalidate() {}
 }
@@ -1600,7 +1692,11 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
 
     private func controlInterface() throws(RuntimeControlClientError) -> NSXPCInterface {
         let interface = NSXPCInterface(with: RuntimeControlXPC.self)
-        guard let fileClasses = NSSet(array: [NSArray.self, FileHandle.self]) as? Set<AnyHashable> else {
+        guard
+            let fileClasses = NSSet(array: [NSArray.self, FileHandle.self]) as? Set<AnyHashable>,
+            let openSessionSurfaceClasses = NSSet(array: [NSArray.self, IOSurface.self]) as? Set<AnyHashable>,
+            let endpointClasses = NSSet(object: NSXPCListenerEndpoint.self) as? Set<AnyHashable>
+        else {
             throw .invalidXPCInterface
         }
         interface.setClasses(
@@ -1608,6 +1704,18 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
             for: #selector(RuntimeControlXPC.importPackage(_:files:reply:)),
             argumentIndex: 1,
             ofReply: false
+        )
+        interface.setClasses(
+            openSessionSurfaceClasses,
+            for: #selector(RuntimeControlXPC.openSession(_:reply:)),
+            argumentIndex: 1,
+            ofReply: true
+        )
+        interface.setClasses(
+            endpointClasses,
+            for: #selector(RuntimeControlXPC.openSession(_:reply:)),
+            argumentIndex: 2,
+            ofReply: true
         )
         return interface
     }
@@ -1984,6 +2092,30 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.launch(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func openSession(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeOpenSessionXPCReply {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.openSession(request) { data, surfaces, endpoint in
+                finish(
+                    .success(
+                        RuntimeOpenSessionXPCReply(
+                            data: data,
+                            surfaces: surfaces,
+                            endpoint: endpoint
+                        )
+                    )
+                )
+            }
         }
     }
 

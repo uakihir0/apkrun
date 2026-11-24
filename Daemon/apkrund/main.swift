@@ -1,5 +1,4 @@
 import Darwin
-import DiagnosticsCore
 import Dispatch
 import Foundation
 import RuntimeHost

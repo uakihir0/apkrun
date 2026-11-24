@@ -1,14 +1,16 @@
 import Foundation
 import GuestProtocol
-import IntegrationCore
 import Testing
 
-@testable import RuntimeHost
+@testable import IntegrationCore
 
 @Test func sharedFolderRequestAdapterRoutesAllFileOperations() async throws {
     let fixture = try SharedFolderFixture()
     defer { Task { await fixture.stop() } }
-    let handler = SharedFolderRequestAdapter(service: fixture.service).makeHandler()
+    let handler = SharedFolderRequestAdapter(
+        service: fixture.service,
+        refreshPackageAccess: { _ in }
+    ).makeHandler()
 
     try Data("hello".utf8).write(to: fixture.root.appendingPathComponent("source.txt"))
 
@@ -231,7 +233,10 @@ import Testing
     let fixture = try SharedFolderFixture()
     defer { Task { await fixture.stop() } }
     try Data("read-only".utf8).write(to: fixture.root.appendingPathComponent("source.txt"))
-    let handler = SharedFolderRequestAdapter(service: fixture.service).makeHandler()
+    let handler = SharedFolderRequestAdapter(
+        service: fixture.service,
+        refreshPackageAccess: { _ in }
+    ).makeHandler()
 
     let unspecifiedModeResponse = await handler(
         request {
@@ -322,11 +327,103 @@ import Testing
     #expect(guestErrorCode(missingOperationResponse) == .invalidArgument)
 }
 
+@Test func sharedFolderRequestAdapterRefreshesPolicyBeforeRangeRequests() async throws {
+    let fixture = try SharedFolderFixture()
+    defer { Task { await fixture.stop() } }
+    try Data("private".utf8).write(to: fixture.root.appendingPathComponent("source.txt"))
+    let policy = SharedFolderPolicyRefresh()
+    let service = fixture.service
+    let adapter = SharedFolderRequestAdapter(
+        service: service,
+        refreshPackageAccess: { (packageID: String?) async throws(IntegrationFailure) -> Void in
+            guard let packageID else { return }
+            try await service.replacePackageAccess(
+                await policy.access(for: packageID),
+                for: packageID
+            )
+        }
+    )
+    let handler = adapter.makeHandler()
+    let openResponse = await handler(openRequest(package: "org.example.app"))
+    guard case .hostOpenFile(let opened)? = openResponse.result else {
+        Issue.record("The initial package grant should permit opening the file.")
+        return
+    }
+
+    await policy.setEnabled(false)
+    let readResponse = await handler(readRequest(handle: opened.handle))
+    #expect(guestErrorCode(readResponse) == .permissionDenied)
+    await adapter.closeConnection()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func sharedFolderRequestAdapterClosesHandlesWhenOrdinaryQueueIsFull() async throws {
+    let fixture = try SharedFolderFixture()
+    defer { Task { await fixture.stop() } }
+    try Data("private".utf8).write(to: fixture.root.appendingPathComponent("source.txt"))
+    let service = fixture.service
+    let adapter = SharedFolderRequestAdapter(
+        service: service,
+        refreshPackageAccess: { _ in }
+    )
+    let handler = adapter.makeHandler()
+    let openedResponse = await handler(openRequest(package: "org.example.app"))
+    guard case .hostOpenFile(let firstOpened)? = openedResponse.result else {
+        Issue.record("The fixture package should be able to open its shared file.")
+        return
+    }
+
+    let explicitCloseBlocker = blockSharedFolderIOQueue(service)
+    defer { explicitCloseBlocker.signal() }
+    let firstRequests = startSaturatedSharedFolderRequests(service)
+    try await waitForInFlightRequests(SharedFolderService.maximumInFlightRequests, service: service)
+    let explicitClose = Task { await handler(closeRequest(handle: firstOpened.handle)) }
+    try await waitForInFlightRequests(SharedFolderService.maximumInFlightRequests + 1, service: service)
+    explicitCloseBlocker.signal()
+    let closeResponse = await explicitClose.value
+    #expect(isEmptyResult(closeResponse, expected: .hostCloseFile))
+    for request in firstRequests {
+        _ = try await request.value
+    }
+
+    let secondOpenedResponse = await handler(openRequest(package: "org.example.app"))
+    guard case .hostOpenFile(let secondOpened)? = secondOpenedResponse.result else {
+        Issue.record("The fixture package should be able to reopen its shared file.")
+        return
+    }
+    let teardownBlocker = blockSharedFolderIOQueue(service)
+    defer { teardownBlocker.signal() }
+    let secondRequests = startSaturatedSharedFolderRequests(service)
+    try await waitForInFlightRequests(SharedFolderService.maximumInFlightRequests, service: service)
+    let teardown = Task { await adapter.closeConnection() }
+    try await waitForInFlightRequests(SharedFolderService.maximumInFlightRequests + 1, service: service)
+    teardownBlocker.signal()
+    await teardown.value
+    for request in secondRequests {
+        _ = try await request.value
+    }
+
+    do {
+        _ = try await service.readRange(
+            packageID: "org.example.app",
+            handle: secondOpened.handle,
+            offset: 0,
+            length: 1
+        )
+        Issue.record("Connection teardown should revoke every handle.")
+    } catch let failure {
+        #expect(failure == .packageAccessDenied)
+    }
+}
+
 @Test func sharedFolderRequestAdapterLimitsHandlesAndClosesThemWithConnection() async throws {
     let fixture = try SharedFolderFixture()
     defer { Task { await fixture.stop() } }
     try Data("handle".utf8).write(to: fixture.root.appendingPathComponent("source.txt"))
-    let adapter = SharedFolderRequestAdapter(service: fixture.service)
+    let adapter = SharedFolderRequestAdapter(
+        service: fixture.service,
+        refreshPackageAccess: { _ in }
+    )
     let handler = adapter.makeHandler()
 
     var handles: [UInt64] = []
@@ -343,7 +440,10 @@ import Testing
     let overflowResponse = await handler(openRequest(package: "org.example.app"))
     #expect(guestErrorCode(overflowResponse) == .resourceExhausted)
 
-    let otherConnection = SharedFolderRequestAdapter(service: fixture.service)
+    let otherConnection = SharedFolderRequestAdapter(
+        service: fixture.service,
+        refreshPackageAccess: { _ in }
+    )
     let foreignHandleResponse = await otherConnection.handle(readRequest(handle: handles[0]))
     #expect(guestErrorCode(foreignHandleResponse) == .permissionDenied)
 
@@ -385,6 +485,18 @@ private struct SharedFolderFixture {
     }
 }
 
+private actor SharedFolderPolicyRefresh {
+    private var isEnabled = true
+
+    func setEnabled(_ isEnabled: Bool) {
+        self.isEnabled = isEnabled
+    }
+
+    func access(for _: String) -> [String: SharedFolderAccess] {
+        isEnabled ? ["shared": .readWrite] : [:]
+    }
+}
+
 private func request(_ operation: () -> GPRequest.OneOf_Op) -> GPRequest {
     var result = GPRequest()
     result.op = operation()
@@ -418,6 +530,44 @@ private func closeRequest(handle: UInt64) -> GPRequest {
         return .hostCloseFile(operation)
     }
 }
+
+private func blockSharedFolderIOQueue(_ service: SharedFolderService) -> DispatchSemaphore {
+    let started = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    service.ioQueue.async {
+        started.signal()
+        release.wait()
+    }
+    started.wait()
+    return release
+}
+
+private func startSaturatedSharedFolderRequests(
+    _ service: SharedFolderService
+) -> [Task<SharedFolderPage, any Error>] {
+    (0..<SharedFolderService.maximumInFlightRequests).map { _ in
+        Task {
+            try await service.queryChildren(
+                packageID: "org.example.app",
+                rootID: "shared",
+                path: ""
+            )
+        }
+    }
+}
+
+private func waitForInFlightRequests(
+    _ minimum: Int,
+    service: SharedFolderService
+) async throws {
+    for _ in 0..<100_000 {
+        if await service.inFlightRequestCount >= minimum { return }
+        await Task.yield()
+    }
+    throw SharedFolderTestTimeout()
+}
+
+private struct SharedFolderTestTimeout: Error {}
 
 private func guestErrorCode(_ response: GPResponse) -> GPGuestErrorCode? {
     guard case .error(let error)? = response.result else { return nil }

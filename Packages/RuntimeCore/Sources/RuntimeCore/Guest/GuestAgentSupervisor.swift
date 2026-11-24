@@ -410,6 +410,27 @@ public actor GuestAgentSupervisor {
         }
     }
 
+    /// Sends one operation only on the ready control session identified by `sessionToken`.
+    ///
+    /// Unlike ``send(_:timeout:)``, this method never waits for a reconnect. It pins the request to the connection
+    /// that owns the token, so an operation associated with an earlier guest event cannot be replayed on a replacement
+    /// session.
+    public func send<Operation: GuestOperation>(
+        _ operation: Operation,
+        requiringSessionToken sessionToken: Data,
+        timeout: Duration? = nil
+    ) async throws(GuestProtocolFailure) -> Operation.Result {
+        let started = generation
+        guard state == .ready, session?.sessionToken == sessionToken, let current = connection,
+            await current.isUsable,
+            !Task.isCancelled, generation == started, state == .ready,
+            session?.sessionToken == sessionToken, connection === current
+        else {
+            throw .agentUnavailable(kind: .guestAgent)
+        }
+        return try await current.send(operation, timeout: timeout)
+    }
+
     /// A state transition wakes queued requests so they can send, fail terminally, or keep waiting.
     private func updateState(_ newState: State) {
         guard state != newState else {

@@ -1,6 +1,5 @@
 import DiagnosticsCore
 import Foundation
-import GuestProtocol
 import ImageCore
 import IntegrationCore
 import RuntimeAPI
@@ -524,7 +523,12 @@ public struct DevBoot: Sendable {
         if let sharedFolderControl {
             let fileService = sharedFolderControl.fileService
             hostRequestSessionFactory = {
-                let adapter = SharedFolderRequestAdapter(service: fileService)
+                let adapter = SharedFolderRequestAdapter(
+                    service: fileService,
+                    refreshPackageAccess: { packageID in
+                        try await sharedFolderControl.refreshPackageAccess(for: packageID)
+                    }
+                )
                 return GuestHostRequestSession(
                     handle: adapter.makeHandler(),
                     close: { await adapter.closeConnection() }
@@ -821,7 +825,7 @@ public struct DevBoot: Sendable {
                 if mayLaunch, windowDisplay != nil {
                     let displayName: String
                     do {
-                        let packageInfo = try await agent.queryPackage(package)
+                        let packageInfo = try await agent.queryPackageMetadata(package)
                         let label = packageInfo?.label.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                         displayName = label.isEmpty ? package : label
                     } catch {
@@ -917,7 +921,7 @@ public struct DevBoot: Sendable {
                         }
                     }
                     do {
-                        let packageInfo = try await agent.queryPackage(launch.packageID)
+                        let packageInfo = try await agent.queryPackageMetadata(launch.packageID)
                         let label = packageInfo?.label.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                         onEvent(
                             .appWindowTitle(

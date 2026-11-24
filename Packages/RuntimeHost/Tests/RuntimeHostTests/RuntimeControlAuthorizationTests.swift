@@ -38,6 +38,10 @@ import Testing
     #expect(fullControlClients.allSatisfy { RuntimeControlOperation.beginUninstallPackage.allows($0) })
     #expect(RuntimeControlOperation.subscribe.allows(.launcher))
     #expect(RuntimeControlOperation.unsubscribe.allows(.launcher))
+    #expect(RuntimeControlOperation.openSession.allows(.launcher))
+    #expect(!RuntimeControlOperation.openSession.allows(.app))
+    #expect(!RuntimeControlOperation.openSession.allows(.menuBar))
+    #expect(!RuntimeControlOperation.openSession.allows(.cli))
 
     #expect(launcherOperations.allSatisfy { $0.allows(.launcher) })
     #expect(launcherPackageOperations.allSatisfy { $0.allows(.launcher) })

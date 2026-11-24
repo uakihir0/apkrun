@@ -323,6 +323,44 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
     harness.device.deviceWillStop()
 }
 
+@Test func aFrameDisplayedFromAnOldGenerationDoesNotReleaseCurrentBuffers() async throws {
+    let harness = try PresenterHarness()
+    let oldPresenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
+    harness.device.deviceDidStart(context: harness.context, negotiatedFeatures: 0)
+    let first = harness.send(
+        bindAndFlush(resource: 3, rect: fullRect) + [flushRequest(resource: 3, rect: fullRect)]
+    )
+    try await eventually { first.completionCounts == [1, 1, 1] && oldPresenter.statistics.framesPresented == 1 }
+
+    let mode = DisplayMode(widthPixels: 800, heightPixels: 600, refreshHz: 60, dotsPerInch: 160)
+    let presenter = try harness.device.reconfigurePresenter(
+        scanoutZero, mode: mode, width: mode.widthPixels, height: mode.heightPixels)
+    var frames = presenter.frames.makeAsyncIterator()
+    #expect(presenter.generation == 2)
+
+    for index in 0..<3 {
+        let sequence = UInt64(index + 2)
+        let flush = harness.send([flushRequest(resource: 3, rect: fullRect)])
+        try await eventually {
+            flush.completionCounts == [1] && presenter.statistics.framesPresented == UInt64(index + 1)
+        }
+        #expect(await frames.next() == .frameReady(generation: 2, bufferIndex: index, sequence: sequence))
+    }
+
+    let held = harness.send([flushRequest(resource: 3, rect: fullRect)])
+    try await eventually { held.completionCounts == [1] }
+    #expect(blitCalls(harness.engine).count == 4)
+
+    // A stale acknowledgment from generation 1 cannot release buffers in generation 2.
+    harness.device.frameDisplayed(scanout: scanoutZero, generation: 1, sequence: 4)
+    #expect(blitCalls(harness.engine).count == 4)
+
+    harness.device.frameDisplayed(scanout: scanoutZero, generation: 2, sequence: 4)
+    try await eventually { presenter.statistics.framesPresented == 4 }
+    #expect(await frames.next() == .frameReady(generation: 2, bufferIndex: 0, sequence: 5))
+    harness.device.deviceWillStop()
+}
+
 @Test func livePresenterReplacementWaitsForTheOldScanoutFence() async throws {
     let harness = try PresenterHarness()
     let oldPresenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)

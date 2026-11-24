@@ -107,6 +107,126 @@ func bulkFileReceiverPreservesAFrameThatArrivesImmediatelyAfterAccept() async th
 }
 
 @Test(.timeLimit(.minutes(1)))
+func bulkFileReceiverWritesVerifiedBytesToTheSelectedDestination() async throws {
+    let (connection, agent) = try await bulkFileReceiverConnection()
+    let payload = Data("save directly to the selected file".utf8)
+    let destinationURL = bulkTemporaryURL()
+    #expect(FileManager.default.createFile(atPath: destinationURL.path, contents: Data("old".utf8)))
+    let destination = try FileHandle(forUpdating: destinationURL)
+    let receiver = try await connection.prepareBulkFileReceive(
+        expectedSize: UInt64(payload.count),
+        destination: destination
+    )
+    try await receiver.bind(transferID: 41)
+    agent.sendBulkFrame(exportBegin(transferID: 41, size: UInt64(payload.count)))
+    agent.sendBulkFrame(exportChunk(transferID: 41, bytes: payload))
+    agent.sendBulkFrame(exportEnd(transferID: 41, digest: Data(SHA256.hash(data: payload))))
+
+    try await receiver.receiveToDestination()
+
+    #expect(try Data(contentsOf: destinationURL) == payload)
+    #expect(ackStatus(agent, transferID: 41) == .ok)
+    await connection.close()
+    try? FileManager.default.removeItem(at: destinationURL)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func bulkFileReceiverTruncatesTheSelectedDestinationOnChecksumMismatch() async throws {
+    let (connection, agent) = try await bulkFileReceiverConnection()
+    let payload = Data("offered bytes".utf8)
+    let destinationURL = bulkTemporaryURL()
+    #expect(FileManager.default.createFile(atPath: destinationURL.path, contents: Data("previous contents".utf8)))
+    let destination = try FileHandle(forUpdating: destinationURL)
+    let receiver = try await connection.prepareBulkFileReceive(
+        expectedSize: UInt64(payload.count),
+        destination: destination
+    )
+    try await receiver.bind(transferID: 43)
+    agent.sendBulkFrame(exportBegin(transferID: 43, size: UInt64(payload.count)))
+    agent.sendBulkFrame(exportChunk(transferID: 43, bytes: payload))
+    agent.sendBulkFrame(exportEnd(transferID: 43, digest: Data(repeating: 0, count: 32)))
+
+    do {
+        try await receiver.receiveToDestination()
+        Issue.record("a destination file with a mismatched digest was accepted")
+    } catch let failure as GuestBulkFileReceiveFailure {
+        #expect(failure == .checksumMismatch)
+    }
+
+    #expect(try Data(contentsOf: destinationURL).isEmpty)
+    #expect(ackStatus(agent, transferID: 43) == .hashMismatch)
+    await connection.close()
+    try? FileManager.default.removeItem(at: destinationURL)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func bulkFileReceiverTruncatesAndClosesAStalledSelectedDestination() async throws {
+    let (connection, _) = try await bulkFileReceiverConnection()
+    let destinationURL = bulkTemporaryURL()
+    #expect(FileManager.default.createFile(atPath: destinationURL.path, contents: Data("previous contents".utf8)))
+    let destination = try FileHandle(forUpdating: destinationURL)
+    let receiver = try await connection.prepareBulkFileReceive(
+        expectedSize: 4,
+        destination: destination,
+        receiveTimeout: .milliseconds(20)
+    )
+    try await receiver.bind(transferID: 45)
+
+    do {
+        try await receiver.receiveToDestination()
+        Issue.record("a stalled bulk transfer must time out")
+    } catch let failure as GuestBulkFileReceiveFailure {
+        #expect(failure == .timedOut)
+    }
+
+    #expect(try Data(contentsOf: destinationURL).isEmpty)
+    #expect(await connection.closeReason == .disconnected)
+    await connection.close()
+    try? FileManager.default.removeItem(at: destinationURL)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func bulkFileReceiverTimesOutWhileSendingTheFinalAcknowledgement() async throws {
+    let (connection, agent) = try await bulkFileReceiverConnection()
+    try await eventually {
+        agent.envelopes.contains {
+            if case .helloAck? = $0.body { return true }
+            return false
+        }
+    }
+    let gate = agent.blockNextHostWrite()
+    let payload = Data("verified, awaiting acknowledgement".utf8)
+    let destinationURL = bulkTemporaryURL()
+    #expect(FileManager.default.createFile(atPath: destinationURL.path, contents: Data("previous contents".utf8)))
+    let destination = try FileHandle(forUpdating: destinationURL)
+    let receiver = try await connection.prepareBulkFileReceive(
+        expectedSize: UInt64(payload.count),
+        destination: destination,
+        receiveTimeout: .milliseconds(20)
+    )
+    try await receiver.bind(transferID: 47)
+    agent.sendBulkFrame(exportBegin(transferID: 47, size: UInt64(payload.count)))
+    agent.sendBulkFrame(exportChunk(transferID: 47, bytes: payload))
+    agent.sendBulkFrame(exportEnd(transferID: 47, digest: Data(SHA256.hash(data: payload))))
+
+    let task = Task { try await receiver.receiveToDestination() }
+    await gate.waitUntilBlocked()
+
+    do {
+        try await task.value
+        Issue.record("a stalled final acknowledgement must time out")
+    } catch let failure as GuestBulkFileReceiveFailure {
+        #expect(failure == .timedOut)
+    }
+    gate.release()
+
+    #expect(try Data(contentsOf: destinationURL).isEmpty)
+    #expect(await connection.closeReason == .disconnected)
+    await connection.close()
+    try? FileManager.default.removeItem(at: destinationURL)
+}
+
+@Test(.timeLimit(.minutes(1)))
 func bulkFileReceiverCancellationAfterEndDoesNotUndoAnAcknowledgedTransfer() async throws {
     let (connection, agent) = try await bulkFileReceiverConnection()
     try await eventually {

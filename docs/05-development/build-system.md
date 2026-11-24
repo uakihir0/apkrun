@@ -120,7 +120,7 @@ Most checks run without arguments. `scripts/ci/run-checks.sh`, run by the `lint`
 | `scripts/check-protos.sh` | `buf lint` on `Packages/GuestProtocol` | #34 | yes |
 | `scripts/tests/run.sh` | self-tests of `scripts/` | #63 | yes |
 | `scripts/check-raw-adb.sh` | no `adb shell` or `pm ` outside the allowlist: `ADBStoreAgentChannel.swift`, `AdbClient.swift`, tests, `scripts/dev/`, `Tests/Compatibility/`, `Experiments/`, `Images/tools/reference/`, generated protobuf ([test-strategy.md](../04-plan/test-strategy.md) §3.3) | #28 | yes |
-| `scripts/check-launcher.sh` | built APKRunLauncher: `otool -L` lists only `/System/Library` and `/usr/lib`; `lipo -archs` is `arm64`; minimum OS 27.0 | #69 (planned) | no |
+| `scripts/check-launcher.sh` | built APKRunLauncher: `otool -L` lists only `/System/Library` and `/usr/lib`; `lipo -archs` is `arm64`; minimum OS 27.0 | #69 | no |
 | `scripts/check-sepolicy.sh` | compiled policy: userdebug contains the two #36 agent domains as permissive; `user` contains none (R-13) | #36 | no (AOSP build) |
 | `scripts/check-fixtures.sh` | APKs in `Tests/Fixtures/apks/` are newer than their sources; no committed fixture over 10 MiB (§8) | #42 (planned) | no |
 | `scripts/check-compatibility-db.sh` | `compatibility.json` against `compatibility.schema.json` ([diagnostics.md](../02-design/diagnostics.md) §10) | #91 (planned) | no |
@@ -604,7 +604,7 @@ WrapperCore signs each local wrapper at run time, not at build time ([wrapper.md
 ```
 
 - No `--deep`. Signing is the last write to the bundle. The cdhash goes into the wrapper registry.
-- The launcher must be re-signable this way: system frameworks only, arm64 only, no nested code. `scripts/check-launcher.sh` enforces it (planned, #69).
+- The launcher must be re-signable this way: system frameworks only, arm64 only, no nested code. `scripts/check-launcher.sh` enforces it (#69).
 - `scripts/dev/make-wrapper.sh <package> <out-dir>` (planned, #46) builds a wrapper by hand with the same command and registers it with `apkrun wrapper approve`.
 
 ### 12.6 Notarization (planned)

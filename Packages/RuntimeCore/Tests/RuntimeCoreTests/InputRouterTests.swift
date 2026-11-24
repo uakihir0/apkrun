@@ -865,3 +865,25 @@ func acknowledgementHistoryDiscardsOldRecordsAtItsBound() async throws {
     #expect(history.records.allSatisfy { $0.rejectedEvents == 0 })
     #expect(history.discardedRecords == 44)
 }
+
+@Test(.timeLimit(.minutes(1)))
+func unregisterReleasesTheDisplayAndDropsLateWindowInput() async {
+    let channel = RecordingInputChannel()
+    let router = InputRouter(channel: channel)
+    let closedSession = SessionID.app(UUID())
+    let replacementSession = SessionID.app(UUID())
+
+    #expect(await router.register(session: closedSession, displayID: display, state: .running) == nil)
+    await router.focusChanged(closedSession, focused: true)
+    await router.unregister(closedSession)
+
+    #expect(await router.register(session: replacementSession, displayID: display, state: .running) == nil)
+    await router.focusChanged(replacementSession, focused: true)
+    await router.route([touch(.down)], from: replacementSession)
+    await router.route([touch(.down, 20)], from: closedSession)
+
+    let batches = await channel.batches
+    #expect(batches.count == 2)
+    #expect(kinds(batches[0]) == [.cancelAll])
+    #expect(kinds(batches[1]) == [.touch])
+}

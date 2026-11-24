@@ -1,4 +1,5 @@
 @preconcurrency import Foundation
+import IOSurface
 
 /// The major and minor version used by RuntimeAPI compatibility checks.
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
@@ -9,8 +10,9 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// and a pollable operation registry; 1.9 adds topic subscriptions and batched event delivery;
     /// 1.10 adds package install change events; 1.11 adds tracked package uninstalls and request fingerprints;
     /// 1.12 adds package-scoped file transfer; 1.13 adds shared-folder root management;
-    /// 1.14 adds integration status queries; 1.15 adds Android-to-Mac session file export.
-    public static let current = APIVersion(major: 1, minor: 15)
+    /// 1.14 adds integration status queries; 1.15 adds Android-to-Mac session file export;
+    /// 1.16 adds session windows and IOSurface frame delivery.
+    public static let current = APIVersion(major: 1, minor: 16)
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -613,6 +615,11 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func installImported(_ request: Data, reply: @escaping (Data) -> Void)
     /// Launches an installed package session.
     func launch(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Opens the session's private endpoint and sends descriptor data, its three IOSurfaces, and endpoint directly over XPC.
+    func openSession(
+        _ request: Data,
+        reply: @escaping (Data, [IOSurface]?, NSXPCListenerEndpoint?) -> Void
+    )
     /// Terminates an installed package session.
     func terminate(_ request: Data, reply: @escaping (Data) -> Void)
 }
@@ -623,6 +630,24 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func importFiles(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
     /// Accepts or cancels an Android file offer for the session captured by this endpoint.
     func acceptExport(_ request: Data, file: FileHandle?, reply: @escaping (Data) -> Void)
+    /// Sends a bounded batch of input events to the session captured by this endpoint.
+    func sendInput(_ batch: Data)
+    /// Reports whether the session window is key.
+    func focusChanged(_ focused: Bool)
+    /// Closes the session captured by this endpoint.
+    func closeSession(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Reports that Core Animation has committed the specified frame.
+    func frameDisplayed(_ request: Data)
+    /// Reports whether the session window is visible.
+    func visibilityChanged(_ request: Data)
+}
+
+/// Client-exported callbacks for frames and surface-pool replacement on one session connection.
+@objc public protocol RuntimeSessionEventSink {
+    /// Delivers frame metadata. The IOSurface is indexed in the currently active pool.
+    func frameReady(_ frame: Data)
+    /// Replaces the active pool using metadata and IOSurfaces supplied as separate XPC parameters.
+    func surfacesReplaced(_ replacement: Data, surfaces: [IOSurface])
 }
 
 /// Client-exported receiver for file offers from the authenticated session endpoint.
@@ -630,6 +655,9 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     /// Delivers one serialized export offer; replies false when the offer is invalid or unhandled.
     func exportOffered(_ offer: Data, reply: @escaping (Bool) -> Void)
 }
+
+/// Combined client callbacks on the session's authenticated XPC connection.
+@objc public protocol RuntimeSessionClientSink: RuntimeSessionEventSink, RuntimeSessionExportSink {}
 
 /// Client-exported callback for event batches from the authenticated control endpoint.
 @objc public protocol RuntimeEventSink {

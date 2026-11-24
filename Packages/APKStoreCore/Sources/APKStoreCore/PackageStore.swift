@@ -2222,7 +2222,8 @@ public actor PackageStore {
         return leaf.isEmpty || leaf == "." || leaf == ".." ? "package.apk" : leaf
     }
 
-    private static func packageID(fromDirectoryName name: String) -> PackageID? {
+    /// Resolves a package ID from its directory name, including the suffix used for case collisions.
+    public nonisolated static func packageID(fromDirectoryName name: String) -> PackageID? {
         if let packageID = PackageID(rawValue: name) {
             return packageID
         }

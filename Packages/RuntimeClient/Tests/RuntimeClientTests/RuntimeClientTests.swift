@@ -773,6 +773,60 @@ import Testing
     client.invalidate()
 }
 
+@Test func launcherSessionClientSendsInputAndLifecycleMessages() async throws {
+    let channel = try MockRuntimeSessionChannel(exportReply: RuntimeAcceptExportSessionReply())
+    let client = RuntimeSessionClient(clientKind: .launcher, channel: channel)
+    let batch = InputBatch(events: [.cancelAll(InputTimestamp(hostNanos: 123))])
+    let displayed = FrameDisplayedMessage(generation: 4, frameSeq: 81)
+    let visibility = VisibilityChangedMessage(visible: false)
+
+    client.sendInput(batch)
+    client.focusChanged(true)
+    client.frameDisplayed(displayed)
+    client.visibilityChanged(visibility)
+    try await client.closeSession(policy: .stop)
+
+    let snapshot = channel.snapshot()
+    #expect(snapshot.inputBatches.count == 1)
+    #expect(try JSONDecoder().decode(InputBatch.self, from: snapshot.inputBatches[0]) == batch)
+    #expect(snapshot.focusChanges == [true])
+    #expect(
+        try JSONDecoder().decode(FrameDisplayedMessage.self, from: snapshot.frameDisplayedRequests[0]) == displayed
+    )
+    #expect(
+        try JSONDecoder().decode(VisibilityChangedMessage.self, from: snapshot.visibilityChangedRequests[0])
+            == visibility
+    )
+    let closeRequest = try JSONDecoder().decode(RuntimeCloseSessionRequest.self, from: snapshot.closeRequests[0])
+    #expect(closeRequest.header.apiVersion == APIVersion.current)
+    #expect(closeRequest.header.clientKind == .launcher)
+    #expect(closeRequest.request.policy == .stop)
+    client.invalidate()
+}
+
+@Test func launcherSessionClientStreamsFramesAndRemoteInvalidation() async throws {
+    let channel = try MockRuntimeSessionChannel(exportReply: RuntimeAcceptExportSessionReply())
+    let client = RuntimeSessionClient(clientKind: .launcher, channel: channel)
+    let receiver = try #require(channel.snapshot().exportOfferReceiver)
+    let frame = FrameReadyMessage(generation: 2, surfaceIndex: 1, frameSeq: 42, presentationTime: 123)
+    var events = client.events.makeAsyncIterator()
+
+    receiver.frameReady(try JSONEncoder().encode(frame))
+    if case .frameReady(let received)? = await events.next() {
+        #expect(received == frame)
+    } else {
+        Issue.record("Expected a frame-ready event.")
+    }
+
+    channel.invalidateRemote()
+    if case .invalidated? = await events.next() {
+        #expect(true)
+    } else {
+        Issue.record("Expected a remote invalidation event.")
+    }
+    client.invalidate()
+}
+
 @Test func sessionClientDeliversValidatedExportOffersFromItsSessionChannel() throws {
     let channel = try MockRuntimeSessionChannel(exportReply: RuntimeAcceptExportSessionReply())
     let capture = ExportOfferCapture()
@@ -839,21 +893,30 @@ private final class MockRuntimeSessionChannel: RuntimeSessionChannel, @unchecked
     private let lock = NSLock()
     private let replyData: Data
     private let exportReplyData: Data
+    private let closeReplyData: Data
     private var requestsValue: [Data] = []
     private var fileHandleIDsValue: [[ObjectIdentifier]] = []
     private var exportRequestsValue: [Data] = []
     private var exportFileHandleIDsValue: [ObjectIdentifier?] = []
+    private var inputBatchesValue: [Data] = []
+    private var focusChangesValue: [Bool] = []
+    private var closeRequestsValue: [Data] = []
+    private var frameDisplayedRequestsValue: [Data] = []
+    private var visibilityChangedRequestsValue: [Data] = []
     private var exportOfferReceiverValue: RuntimeSessionExportReceiver?
     private var invalidationsValue = 0
+    private var invalidationHandlerValue: (@Sendable () -> Void)?
 
     init(reply: RuntimeImportFilesSessionReply) throws {
         replyData = try JSONEncoder().encode(reply)
         exportReplyData = Data()
+        closeReplyData = try JSONEncoder().encode(RuntimeCloseSessionReply())
     }
 
     init(exportReply: RuntimeAcceptExportSessionReply) throws {
         replyData = Data()
         exportReplyData = try JSONEncoder().encode(exportReply)
+        closeReplyData = try JSONEncoder().encode(RuntimeCloseSessionReply())
     }
 
     func importFiles(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data {
@@ -872,12 +935,42 @@ private final class MockRuntimeSessionChannel: RuntimeSessionChannel, @unchecked
         return exportReplyData
     }
 
+    func sendInput(_ batch: Data) {
+        lock.withLock { inputBatchesValue.append(batch) }
+    }
+
+    func focusChanged(_ focused: Bool) {
+        lock.withLock { focusChangesValue.append(focused) }
+    }
+
+    func closeSession(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { closeRequestsValue.append(request) }
+        return closeReplyData
+    }
+
+    func frameDisplayed(_ request: Data) {
+        lock.withLock { frameDisplayedRequestsValue.append(request) }
+    }
+
+    func visibilityChanged(_ request: Data) {
+        lock.withLock { visibilityChangedRequestsValue.append(request) }
+    }
+
     func installExportOfferReceiver(_ receiver: RuntimeSessionExportReceiver) {
         lock.withLock { exportOfferReceiverValue = receiver }
     }
 
+    func setInvalidationHandler(_ handler: @escaping @Sendable () -> Void) {
+        lock.withLock { invalidationHandlerValue = handler }
+    }
+
     func invalidate() {
         lock.withLock { invalidationsValue += 1 }
+    }
+
+    func invalidateRemote() {
+        let handler = lock.withLock { invalidationHandlerValue }
+        handler?()
     }
 
     var invalidations: Int {
@@ -889,7 +982,12 @@ private final class MockRuntimeSessionChannel: RuntimeSessionChannel, @unchecked
         fileHandleIDs: [[ObjectIdentifier]],
         exportRequests: [Data],
         exportFileHandleIDs: [ObjectIdentifier?],
-        exportOfferReceiver: RuntimeSessionExportReceiver?
+        exportOfferReceiver: RuntimeSessionExportReceiver?,
+        inputBatches: [Data],
+        focusChanges: [Bool],
+        closeRequests: [Data],
+        frameDisplayedRequests: [Data],
+        visibilityChangedRequests: [Data]
     ) {
         lock.withLock {
             (
@@ -897,7 +995,12 @@ private final class MockRuntimeSessionChannel: RuntimeSessionChannel, @unchecked
                 fileHandleIDsValue,
                 exportRequestsValue,
                 exportFileHandleIDsValue,
-                exportOfferReceiverValue
+                exportOfferReceiverValue,
+                inputBatchesValue,
+                focusChangesValue,
+                closeRequestsValue,
+                frameDisplayedRequestsValue,
+                visibilityChangedRequestsValue
             )
         }
     }

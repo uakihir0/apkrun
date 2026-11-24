@@ -66,6 +66,7 @@ public struct ImportFilesRequest: Codable, Equatable, Sendable {
         case target
     }
 
+    /// Decodes an unbound request and replaces any client-supplied session identity with a placeholder.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         sessionID = UUID()
@@ -73,12 +74,14 @@ public struct ImportFilesRequest: Codable, Equatable, Sendable {
         target = try container.decode(ImportTarget.self, forKey: .target)
     }
 
+    /// Encodes the requested files without exposing the daemon-bound session identity.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(files, forKey: .files)
         try container.encode(target, forKey: .target)
     }
 
+    /// Compares transfer metadata; session identity is bound by the authenticated endpoint.
     public static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.files == rhs.files && lhs.target == rhs.target
     }

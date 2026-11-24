@@ -1,5 +1,7 @@
 import DiagnosticsCore
 @preconcurrency import Foundation
+import IOSurface
+import Darwin
 @_spi(APKRunSessionBinding) import RuntimeAPI
 import RuntimeCore
 
@@ -9,6 +11,49 @@ import RuntimeCore
 
 private let runtimeAPIVersion = APIVersion.current
 
+/// Owns the live, one-session XPC endpoints while their Android app windows are open.
+final class RuntimeSessionListenerRegistry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var listeners: [UUID: RuntimeSessionXPCListener] = [:]
+
+    func install(_ listener: RuntimeSessionXPCListener, for sessionID: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard listeners[sessionID] == nil else { return false }
+        listeners[sessionID] = listener
+        return true
+    }
+
+    func remove(sessionID: UUID) {
+        lock.lock()
+        let listener = listeners.removeValue(forKey: sessionID)
+        lock.unlock()
+        listener?.invalidate()
+    }
+
+    func invalidateAll() {
+        lock.lock()
+        let current = Array(listeners.values)
+        listeners.removeAll()
+        lock.unlock()
+        for listener in current {
+            listener.invalidate()
+        }
+    }
+
+    func deliverExportOffer(sessionID: UUID, offer: ExportOffer) async -> Bool {
+        lock.lock()
+        let listener = listeners[sessionID]
+        lock.unlock()
+        guard let listener else { return false }
+        return await withCheckedContinuation { continuation in
+            listener.deliverExportOffer(offer) { accepted in
+                continuation.resume(returning: accepted)
+            }
+        }
+    }
+}
+
 /// Owns one daemon-created session channel and the session binding used by its requests.
 ///
 /// The session bootstrap must keep this value for the full app-window lifetime and expose its
@@ -17,16 +62,30 @@ final class RuntimeSessionXPCListener: @unchecked Sendable {
     let listener: NSXPCListener
     let endpointService: RuntimeSessionEndpointService
     private let delegate: SessionListenerDelegate
+    private let pool: ScanoutPoolHandle
+    private let frameTaskLock = NSLock()
+    private var frameTask: Task<Void, Never>?
 
     init(
         sessionID: UUID,
         service: any RuntimeSessionService,
-        wrapperCodeSigningRequirement: String
+        windowOperations: any RuntimeSessionWindowOperations,
+        pool: ScanoutPoolHandle,
+        codeSigningRequirement: String,
+        onClose: @escaping @Sendable () -> Void
     ) {
-        endpointService = RuntimeSessionEndpointService(sessionID: sessionID, service: service)
-        delegate = SessionListenerDelegate(endpointService: endpointService)
+        endpointService = RuntimeSessionEndpointService(
+            sessionID: sessionID,
+            service: service,
+            windowOperations: windowOperations,
+            onClose: onClose
+        )
+        self.pool = pool
+        delegate = SessionListenerDelegate(endpointService: endpointService) { [weak self] in
+            self?.startFrameDelivery()
+        }
         listener = NSXPCListener.anonymous()
-        listener.setConnectionCodeSigningRequirement(wrapperCodeSigningRequirement)
+        listener.setConnectionCodeSigningRequirement(codeSigningRequirement)
         listener.delegate = delegate
         listener.resume()
     }
@@ -36,7 +95,12 @@ final class RuntimeSessionXPCListener: @unchecked Sendable {
     }
 
     func invalidate() {
-        endpointService.invalidateExportOfferDelivery()
+        frameTaskLock.lock()
+        let task = frameTask
+        frameTask = nil
+        frameTaskLock.unlock()
+        task?.cancel()
+        endpointService.invalidateClientDelivery()
         listener.invalidate()
     }
 
@@ -47,19 +111,58 @@ final class RuntimeSessionXPCListener: @unchecked Sendable {
     func deliverExportOffer(_ offer: ExportOffer, reply: @escaping @Sendable (Bool) -> Void) {
         endpointService.deliverExportOffer(offer, reply: reply)
     }
+
+    private func startFrameDelivery() {
+        frameTaskLock.lock()
+        guard frameTask == nil else {
+            frameTaskLock.unlock()
+            return
+        }
+        let frames = pool.frames
+        let endpointService = self.endpointService
+        frameTask = Task {
+            for await frame in frames {
+                guard !Task.isCancelled else { return }
+                guard case .frameReady(let generation, let bufferIndex, let sequence) = frame,
+                    let wireGeneration = UInt32(exactly: generation)
+                else {
+                    continue
+                }
+                endpointService.deliverFrameReady(
+                    FrameReadyMessage(
+                        generation: wireGeneration,
+                        surfaceIndex: bufferIndex,
+                        frameSeq: sequence,
+                        presentationTime: mach_absolute_time()
+                    )
+                )
+            }
+        }
+        frameTaskLock.unlock()
+    }
 }
 
 /// The narrow implementation behind an authenticated, session-bound endpoint.
 final class RuntimeSessionEndpointService: NSObject, RuntimeSessionXPC, @unchecked Sendable {
     private let sessionID: UUID
     private let service: any RuntimeSessionService
+    private let windowOperations: any RuntimeSessionWindowOperations
+    private let onClose: @Sendable () -> Void
     private let exportOfferLock = NSLock()
-    private var exportOfferSenderID: UUID?
-    private var exportOfferSender: (any RuntimeSessionExportOfferSender)?
+    private var clientSenderID: UUID?
+    private var clientSender: (any RuntimeSessionClientSender)?
+    private var closeRequestStarted = false
 
-    init(sessionID: UUID, service: any RuntimeSessionService) {
+    init(
+        sessionID: UUID,
+        service: any RuntimeSessionService,
+        windowOperations: any RuntimeSessionWindowOperations,
+        onClose: @escaping @Sendable () -> Void
+    ) {
         self.sessionID = sessionID
         self.service = service
+        self.windowOperations = windowOperations
+        self.onClose = onClose
     }
 
     func importFiles(_ requestData: Data, files: [FileHandle], reply: @escaping (Data) -> Void) {
@@ -71,7 +174,7 @@ final class RuntimeSessionEndpointService: NSObject, RuntimeSessionXPC, @uncheck
             response.send(Self.encode(RuntimeImportFilesSessionReply(error: Self.malformedRequestError)))
             return
         }
-        guard request.header.clientKind == .wrapper else {
+        guard Self.supportsSessionClient(request.header.clientKind) else {
             response.send(Self.encode(RuntimeImportFilesSessionReply(error: Self.notAuthorizedError)))
             return
         }
@@ -105,7 +208,7 @@ final class RuntimeSessionEndpointService: NSObject, RuntimeSessionXPC, @uncheck
             response.send(Self.encode(RuntimeAcceptExportSessionReply(error: Self.malformedRequestError)))
             return
         }
-        guard request.header.clientKind == .wrapper else {
+        guard Self.supportsSessionClient(request.header.clientKind) else {
             response.send(Self.encode(RuntimeAcceptExportSessionReply(error: Self.notAuthorizedError)))
             return
         }
@@ -130,45 +233,53 @@ final class RuntimeSessionEndpointService: NSObject, RuntimeSessionXPC, @uncheck
         }
     }
 
-    /// Registers the reverse XPC route for this session's connected wrapper.
+    /// Registers the reverse XPC route for this session's connected launcher.
     ///
     /// A session has one wrapper window, so a second connection is not allowed to replace
     /// an existing receiver before it disconnects.
     @discardableResult
-    func installExportOfferSender(
-        _ sender: any RuntimeSessionExportOfferSender,
+    func installClientSender(
+        _ sender: any RuntimeSessionClientSender,
         connectionID: UUID
     ) -> Bool {
         exportOfferLock.lock()
         defer { exportOfferLock.unlock() }
-        guard exportOfferSender == nil else {
+        guard clientSender == nil else {
             return false
         }
-        exportOfferSenderID = connectionID
-        exportOfferSender = sender
+        clientSenderID = connectionID
+        clientSender = sender
         return true
     }
 
     /// Removes the reverse route only when the invalidated connection still owns it.
-    func removeExportOfferSender(connectionID: UUID) {
+    func removeClientSender(connectionID: UUID) {
         exportOfferLock.lock()
-        guard exportOfferSenderID == connectionID else {
+        guard clientSenderID == connectionID else {
             exportOfferLock.unlock()
             return
         }
-        let sender = exportOfferSender
-        exportOfferSenderID = nil
-        exportOfferSender = nil
+        let sender = clientSender
+        clientSenderID = nil
+        clientSender = nil
         exportOfferLock.unlock()
         sender?.invalidate()
+
+        let shouldStopSession = markCloseRequestStarted()
+        onClose()
+        if shouldStopSession {
+            Task { [windowOperations, sessionID] in
+                try? await windowOperations.closeSession(sessionID: sessionID, policy: .stop)
+            }
+        }
     }
 
     /// Tears down the session's reverse route while the daemon is stopping.
-    func invalidateExportOfferDelivery() {
+    func invalidateClientDelivery() {
         exportOfferLock.lock()
-        let sender = exportOfferSender
-        exportOfferSenderID = nil
-        exportOfferSender = nil
+        let sender = clientSender
+        clientSenderID = nil
+        clientSender = nil
         exportOfferLock.unlock()
         sender?.invalidate()
     }
@@ -185,7 +296,7 @@ final class RuntimeSessionEndpointService: NSObject, RuntimeSessionXPC, @uncheck
         }
 
         exportOfferLock.lock()
-        let sender = exportOfferSender
+        let sender = clientSender
         exportOfferLock.unlock()
         guard let sender else {
             response.send(false)
@@ -196,8 +307,134 @@ final class RuntimeSessionEndpointService: NSObject, RuntimeSessionXPC, @uncheck
         }
     }
 
+    func sendInput(_ batchData: Data) {
+        guard batchData.count <= Self.maximumInputBatchSize,
+            let batch = try? JSONDecoder().decode(InputBatch.self, from: batchData),
+            (1...Self.maximumInputEvents).contains(batch.events.count)
+        else {
+            return
+        }
+        Task { [windowOperations, sessionID] in
+            await windowOperations.sendInput(sessionID: sessionID, batch: batch)
+        }
+    }
+
+    func focusChanged(_ focused: Bool) {
+        Task { [windowOperations, sessionID] in
+            await windowOperations.focusChanged(sessionID: sessionID, focused: focused)
+        }
+    }
+
+    func frameDisplayed(_ requestData: Data) {
+        guard requestData.count <= Self.maximumRequestSize,
+            let request = try? JSONDecoder().decode(FrameDisplayedMessage.self, from: requestData)
+        else {
+            return
+        }
+        Task { [windowOperations, sessionID] in
+            await windowOperations.frameDisplayed(sessionID: sessionID, message: request)
+        }
+    }
+
+    func visibilityChanged(_ requestData: Data) {
+        guard requestData.count <= Self.maximumRequestSize,
+            let request = try? JSONDecoder().decode(VisibilityChangedMessage.self, from: requestData)
+        else {
+            return
+        }
+        Task { [windowOperations, sessionID] in
+            await windowOperations.visibilityChanged(sessionID: sessionID, visible: request.visible)
+        }
+    }
+
+    func closeSession(_ requestData: Data, reply: @escaping (Data) -> Void) {
+        let response = RuntimeSessionDataReply(reply)
+        guard requestData.count <= Self.maximumRequestSize,
+            let request = try? JSONDecoder().decode(RuntimeCloseSessionRequest.self, from: requestData),
+            Self.isSupported(request.header.apiVersion)
+        else {
+            response.send(Self.encode(RuntimeCloseSessionReply(error: Self.malformedRequestError)))
+            return
+        }
+        guard Self.supportsSessionClient(request.header.clientKind) else {
+            response.send(Self.encode(RuntimeCloseSessionReply(error: Self.notAuthorizedError)))
+            return
+        }
+        guard markCloseRequestStarted() else {
+            response.send(Self.encode(RuntimeCloseSessionReply()))
+            return
+        }
+
+        Task { [windowOperations, sessionID, onClose] in
+            do {
+                try await windowOperations.closeSession(sessionID: sessionID, policy: request.request.policy)
+                response.send(Self.encode(RuntimeCloseSessionReply()))
+                onClose()
+            } catch {
+                response.send(
+                    Self.encode(
+                        RuntimeCloseSessionReply(error: error as? RuntimeWireError ?? Self.internalError)
+                    )
+                )
+                if resetCloseRequestAfterFailure() {
+                    try? await windowOperations.closeSession(sessionID: sessionID, policy: .stop)
+                    onClose()
+                }
+            }
+        }
+    }
+
+    func deliverFrameReady(_ message: FrameReadyMessage) {
+        guard let data = try? JSONEncoder().encode(message),
+            data.count <= Self.maximumEventSize
+        else {
+            return
+        }
+        exportOfferLock.lock()
+        let sender = clientSender
+        exportOfferLock.unlock()
+        sender?.frameReady(data)
+    }
+
+    func deliverSurfacesReplaced(_ message: SurfacesReplacedMessage, surfaces: [IOSurface]) {
+        guard surfaces.count == SurfaceSet.surfaceCount,
+            let data = try? JSONEncoder().encode(message),
+            data.count <= Self.maximumEventSize
+        else {
+            return
+        }
+        exportOfferLock.lock()
+        let sender = clientSender
+        exportOfferLock.unlock()
+        sender?.surfacesReplaced(data, surfaces: surfaces)
+    }
+
+    private func markCloseRequestStarted() -> Bool {
+        exportOfferLock.lock()
+        defer { exportOfferLock.unlock() }
+        guard !closeRequestStarted else { return false }
+        closeRequestStarted = true
+        return true
+    }
+
+    private func resetCloseRequestAfterFailure() -> Bool {
+        exportOfferLock.lock()
+        defer { exportOfferLock.unlock() }
+        closeRequestStarted = false
+        guard clientSender == nil else { return false }
+        closeRequestStarted = true
+        return true
+    }
+
+    private static func supportsSessionClient(_ clientKind: RuntimeClientKind) -> Bool {
+        clientKind == .launcher || clientKind == .wrapper
+    }
+
     private static let maximumRequestSize = 16 * 1024
     private static let maximumExportOfferSize = 4 * 1024
+    private static let maximumInputBatchSize = 64 * 1024
+    private static let maximumInputEvents = 512
+    private static let maximumEventSize = 16 * 1024
     private static let maximumFiles = 20
 
     private static func isValid(_ offer: ExportOffer) -> Bool {
@@ -250,6 +487,10 @@ final class RuntimeSessionEndpointService: NSObject, RuntimeSessionXPC, @uncheck
         "internal",
         message: safeMessage(for: "runtime.internal")
     )
+    private static let malformedRequestError = RuntimeWireError.runtime(
+        "malformedRequest",
+        message: safeMessage(for: "runtime.malformedRequest")
+    )
 
     private static func isSupported(_ version: APIVersion) -> Bool {
         version.major == runtimeAPIVersion.major
@@ -267,7 +508,12 @@ protocol RuntimeSessionExportOfferSender: Sendable {
     func invalidate()
 }
 
-private final class RuntimeSessionXPCExportOfferSender: RuntimeSessionExportOfferSender, @unchecked Sendable {
+protocol RuntimeSessionClientSender: RuntimeSessionExportOfferSender {
+    func frameReady(_ frame: Data)
+    func surfacesReplaced(_ replacement: Data, surfaces: [IOSurface])
+}
+
+private final class RuntimeSessionXPCClientSender: RuntimeSessionClientSender, @unchecked Sendable {
     private let lock = NSLock()
     private weak var connection: NSXPCConnection?
 
@@ -288,7 +534,7 @@ private final class RuntimeSessionXPCExportOfferSender: RuntimeSessionExportOffe
         let proxy =
             connection.remoteObjectProxyWithErrorHandler { _ in
                 response.send(false)
-            } as? any RuntimeSessionExportSink
+            } as? any RuntimeSessionClientSink
         guard let proxy else {
             response.send(false)
             return
@@ -296,6 +542,31 @@ private final class RuntimeSessionXPCExportOfferSender: RuntimeSessionExportOffe
         proxy.exportOffered(offer) { accepted in
             response.send(accepted)
         }
+    }
+
+    func frameReady(_ frame: Data) {
+        guard let connection = liveConnection(),
+            let proxy = connection.remoteObjectProxyWithErrorHandler({ _ in }) as? any RuntimeSessionClientSink
+        else {
+            return
+        }
+        proxy.frameReady(frame)
+    }
+
+    func surfacesReplaced(_ replacement: Data, surfaces: [IOSurface]) {
+        guard let connection = liveConnection(),
+            let proxy = connection.remoteObjectProxyWithErrorHandler({ _ in }) as? any RuntimeSessionClientSink
+        else {
+            return
+        }
+        proxy.surfacesReplaced(replacement, surfaces: surfaces)
+    }
+
+    private func liveConnection() -> NSXPCConnection? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let connection, connection.isValid else { return nil }
+        return connection
     }
 
     func invalidate() {
@@ -336,11 +607,33 @@ private final class RuntimeSessionDataReply: @unchecked Sendable {
     }
 }
 
+private final class RuntimeOpenSessionDataReply: @unchecked Sendable {
+    private let lock = NSLock()
+    private var callback: ((Data, [IOSurface]?, NSXPCListenerEndpoint?) -> Void)?
+
+    init(_ callback: @escaping (Data, [IOSurface]?, NSXPCListenerEndpoint?) -> Void) {
+        self.callback = callback
+    }
+
+    func send(_ data: Data, surfaces: [IOSurface]?, endpoint: NSXPCListenerEndpoint?) {
+        lock.lock()
+        let callback = callback
+        self.callback = nil
+        lock.unlock()
+        callback?(data, surfaces, endpoint)
+    }
+}
+
 private final class SessionListenerDelegate: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
     private let endpointService: RuntimeSessionEndpointService
+    private let onConnected: @Sendable () -> Void
 
-    init(endpointService: RuntimeSessionEndpointService) {
+    init(
+        endpointService: RuntimeSessionEndpointService,
+        onConnected: @escaping @Sendable () -> Void
+    ) {
         self.endpointService = endpointService
+        self.onConnected = onConnected
     }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
@@ -360,25 +653,35 @@ private final class SessionListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             argumentIndex: 1,
             ofReply: false
         )
+        guard let surfaceClasses = NSSet(array: [NSArray.self, IOSurface.self]) as? Set<AnyHashable> else {
+            return false
+        }
         connection.exportedInterface = interface
+        connection.remoteObjectInterface = NSXPCInterface(with: RuntimeSessionClientSink.self)
+        connection.remoteObjectInterface?.setClasses(
+            surfaceClasses,
+            for: #selector(RuntimeSessionEventSink.surfacesReplaced(_:surfaces:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
         connection.exportedObject = endpointService
-        connection.remoteObjectInterface = NSXPCInterface(with: RuntimeSessionExportSink.self)
         let connectionID = UUID()
         guard
-            endpointService.installExportOfferSender(
-                RuntimeSessionXPCExportOfferSender(connection: connection),
+            endpointService.installClientSender(
+                RuntimeSessionXPCClientSender(connection: connection),
                 connectionID: connectionID
             )
         else {
             return false
         }
         connection.invalidationHandler = { [weak endpointService] in
-            endpointService?.removeExportOfferSender(connectionID: connectionID)
+            endpointService?.removeClientSender(connectionID: connectionID)
         }
         connection.interruptionHandler = { [weak endpointService] in
-            endpointService?.removeExportOfferSender(connectionID: connectionID)
+            endpointService?.removeClientSender(connectionID: connectionID)
         }
         connection.resume()
+        onConnected()
         return true
     }
 }
@@ -587,6 +890,7 @@ private final class RuntimeXPCControlListener: @unchecked Sendable {
         delegate = ControlListenerDelegate(
             host: host,
             clientKind: clientKind,
+            clientCodeSigningRequirement: requirement,
             reservationID: reservationID,
             connectionRegistry: connectionRegistry
         )
@@ -1376,17 +1680,20 @@ private struct BrokerErrorReply: Codable {
 private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
     private let host: RuntimeHost
     private let clientKind: RuntimeClientKind
+    private let clientCodeSigningRequirement: String
     private let reservationID: UUID
     private let connectionRegistry: RuntimeXPCConnectionRegistry
 
     init(
         host: RuntimeHost,
         clientKind: RuntimeClientKind,
+        clientCodeSigningRequirement: String,
         reservationID: UUID,
         connectionRegistry: RuntimeXPCConnectionRegistry
     ) {
         self.host = host
         self.clientKind = clientKind
+        self.clientCodeSigningRequirement = clientCodeSigningRequirement
         self.reservationID = reservationID
         self.connectionRegistry = connectionRegistry
     }
@@ -1415,6 +1722,25 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             argumentIndex: 1,
             ofReply: false
         )
+        guard
+            let sessionSurfaceClasses = NSSet(array: [NSArray.self, IOSurface.self]) as? Set<AnyHashable>,
+            let endpointClasses = NSSet(object: NSXPCListenerEndpoint.self) as? Set<AnyHashable>
+        else {
+            listener.invalidate()
+            return false
+        }
+        controlInterface.setClasses(
+            sessionSurfaceClasses,
+            for: #selector(RuntimeControlXPC.openSession(_:reply:)),
+            argumentIndex: 1,
+            ofReply: true
+        )
+        controlInterface.setClasses(
+            endpointClasses,
+            for: #selector(RuntimeControlXPC.openSession(_:reply:)),
+            argumentIndex: 2,
+            ofReply: true
+        )
         connection.remoteObjectInterface = NSXPCInterface(with: RuntimeEventSink.self)
         let eventHub = host.eventHub
         let remoteSink =
@@ -1425,6 +1751,7 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
         connection.exportedObject = ControlService(
             host: host,
             clientKind: clientKind,
+            clientCodeSigningRequirement: clientCodeSigningRequirement,
             connectionRegistry: connectionRegistry,
             connectionID: connectionID,
             eventSink: remoteSink.map(RuntimeEventSinkReference.init(value:))
@@ -1452,6 +1779,7 @@ extension RuntimeAddSharedFolderControlRequest: VersionedControlRequest {}
 extension RuntimeRemoveSharedFolderControlRequest: VersionedControlRequest {}
 extension RuntimeSetSharedFolderAccessControlRequest: VersionedControlRequest {}
 extension RuntimeLaunchControlRequest: VersionedControlRequest {}
+extension RuntimeOpenSessionControlRequest: VersionedControlRequest {}
 extension RuntimeTerminateControlRequest: VersionedControlRequest {}
 extension RuntimeImportPackageControlRequest: VersionedControlRequest {}
 extension RuntimeInstallImportedControlRequest: VersionedControlRequest {}
@@ -1477,6 +1805,7 @@ enum RuntimeControlOperation {
     case removeSharedFolder
     case setSharedFolderAccess
     case launch
+    case openSession
     case terminate
     case importPackage
     case installImported
@@ -1535,6 +1864,13 @@ enum RuntimeControlOperation {
             case .wrapper:
                 false
             }
+        case .openSession:
+            switch clientKind {
+            case .launcher:
+                true
+            case .app, .menuBar, .cli, .wrapper:
+                false
+            }
         case .launch, .terminate:
             switch clientKind {
             case .app, .menuBar, .cli:
@@ -1549,6 +1885,7 @@ enum RuntimeControlOperation {
 private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Sendable {
     private let host: RuntimeHost
     private let clientKind: RuntimeClientKind
+    private let clientCodeSigningRequirement: String
     private let connectionRegistry: RuntimeXPCConnectionRegistry
     private let connectionID: ObjectIdentifier
     private let eventSink: RuntimeEventSinkReference?
@@ -1557,12 +1894,14 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     init(
         host: RuntimeHost,
         clientKind: RuntimeClientKind,
+        clientCodeSigningRequirement: String,
         connectionRegistry: RuntimeXPCConnectionRegistry,
         connectionID: ObjectIdentifier,
         eventSink: RuntimeEventSinkReference?
     ) {
         self.host = host
         self.clientKind = clientKind
+        self.clientCodeSigningRequirement = clientCodeSigningRequirement
         self.connectionRegistry = connectionRegistry
         self.connectionID = connectionID
         self.eventSink = eventSink
@@ -2446,6 +2785,138 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         }
     }
 
+    func openSession(
+        _ request: Data,
+        reply: @escaping (Data, [IOSurface]?, NSXPCListenerEndpoint?) -> Void
+    ) {
+        let response = RuntimeOpenSessionDataReply(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(RuntimeOpenSessionControlReply(error: Self.rejection(for: admission).wireError)),
+                surfaces: nil,
+                endpoint: nil
+            )
+            return
+        }
+        Task { [host, clientKind, clientCodeSigningRequirement, connectionRegistry, connectionID] in
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .openSession,
+                as: RuntimeOpenSessionControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeOpenSessionControlReply(error: Self.wireError(for: failure))),
+                    surfaces: nil,
+                    endpoint: nil
+                )
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeOpenSessionControlRequest.self, from: request) else {
+                response.send(
+                    Self.encode(RuntimeOpenSessionControlReply(error: Self.malformedWireError)),
+                    surfaces: nil,
+                    endpoint: nil
+                )
+                return
+            }
+
+            do {
+                let context = try await host.openWindowSession(decoded.request)
+                guard connectionRegistry.isRegistered(connectionID) else {
+                    if case .app(let sessionID) = context.opened.session.id {
+                        try? await context.service.closeSession(sessionID: sessionID, policy: .stop)
+                    }
+                    return
+                }
+
+                guard
+                    case .app(let sessionID) = context.opened.session.id,
+                    let displayID = DisplayID(rawValue: context.opened.lease.leaseID.uuidString.lowercased()),
+                    let generation = UInt32(exactly: context.opened.lease.pool.generation),
+                    context.opened.lease.pool.surfaces.count == SurfaceSet.surfaceCount,
+                    context.opened.session.state == .running
+                else {
+                    if case .app(let sessionID) = context.opened.session.id {
+                        try? await context.service.closeSession(sessionID: sessionID, policy: .stop)
+                    }
+                    response.send(
+                        Self.encode(RuntimeOpenSessionControlReply(error: Self.internalWireError)),
+                        surfaces: nil,
+                        endpoint: nil
+                    )
+                    return
+                }
+
+                let descriptor = SessionDescriptor(
+                    sessionID: sessionID,
+                    displayID: displayID,
+                    windowPrefs: WindowPrefs(
+                        resizable: false,
+                        alwaysOnTop: false,
+                        zoom: context.opened.lease.mode.zoom
+                    ),
+                    inputPrefs: InputPrefs(
+                        escapeKey: .back,
+                        secondaryClick: .mouseSecondary,
+                        scrollMode: .scroll,
+                        hover: true,
+                        sendCommandKey: false
+                    ),
+                    windowMode: .secondaryDisplay,
+                    state: .running,
+                    surfaces: SurfaceSet(
+                        generation: generation,
+                        pixelSize: SessionPixelSize(
+                            width: context.opened.lease.mode.pixelSize.width,
+                            height: context.opened.lease.mode.pixelSize.height
+                        ),
+                        densityDpi: context.opened.lease.mode.densityDpi
+                    )
+                )
+                let listener = RuntimeSessionXPCListener(
+                    sessionID: sessionID,
+                    service: context.service,
+                    windowOperations: context.service,
+                    pool: context.opened.lease.pool,
+                    codeSigningRequirement: clientCodeSigningRequirement,
+                    onClose: { [weak host] in
+                        host?.sessionListenerRegistry.remove(sessionID: sessionID)
+                    }
+                )
+                guard host.sessionListenerRegistry.install(listener, for: sessionID) else {
+                    listener.invalidate()
+                    try? await context.service.closeSession(sessionID: sessionID, policy: .stop)
+                    response.send(
+                        Self.encode(RuntimeOpenSessionControlReply(error: Self.busyWireError)),
+                        surfaces: nil,
+                        endpoint: nil
+                    )
+                    return
+                }
+                guard connectionRegistry.isRegistered(connectionID) else {
+                    host.sessionListenerRegistry.remove(sessionID: sessionID)
+                    try? await context.service.closeSession(sessionID: sessionID, policy: .stop)
+                    return
+                }
+                response.send(
+                    Self.encode(RuntimeOpenSessionControlReply(result: descriptor)),
+                    surfaces: context.opened.lease.pool.surfaces,
+                    endpoint: listener.endpoint
+                )
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(
+                    Self.encode(RuntimeOpenSessionControlReply(error: wireError)),
+                    surfaces: nil,
+                    endpoint: nil
+                )
+            }
+        }
+    }
+
     func terminate(_ request: Data, reply: @escaping (Data) -> Void) {
         let response = makeReplyHandler(reply)
         let admission = connectionRegistry.beginRequest(on: connectionID)
@@ -2531,6 +3002,11 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
     private static let internalWireError = RuntimeWireError.runtime(
         "internal",
         message: safeMessage(for: "runtime.internal")
+    )
+    private static let busyWireError = RuntimeWireError.runtime(
+        "busy",
+        message: safeMessage(for: "runtime.busy"),
+        remediation: "Try again when the other requests have finished."
     )
 
     private static func rejection(for admission: RuntimeXPCRequestAdmission) -> RuntimeXPCRequestRejection {

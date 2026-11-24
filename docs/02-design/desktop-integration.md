@@ -341,16 +341,20 @@ Android app shares (ACTION_SEND / SEND_MULTIPLE) → chooser → "Save to Mac" (
    or the app creates a document in the Mac provider (ACTION_CREATE_DOCUMENT, §6.4, readWrite roots only)
 SaveToMacActivity: reads name, MIME type, size from the content URIs (at most 20 items)
   ExportFileOffered(offer_id, name, mime_type, size, source_package, display_id)
-apkrund: policy .files for source_package; the offer goes to the window of the session on display_id
-  (no such window → ResolveExport(offer_id, DECLINE))
-  event exportOffered(ExportOffer{offerID, name, size, type})
+apkrund: policy .files for source_package; the offer goes through that session's authenticated
+  RuntimeSessionExportSink callback (no such window or handler → ResolveExport(offer_id, DECLINE))
+  exportOffered(ExportOffer{offerID, name, size, type})
 wrapper window: NSSavePanel as a sheet (default folder ~/Downloads, the name from Android, sanitized)
   save → acceptExport(offerID, FileHandle opened for writing); cancel → acceptExport(offerID, nil)
-apkrund: ResolveExport(offer_id, ACCEPT) → the agent sends the bytes on the bulk stream
-  apkrund writes them to the handle, checks size and SHA-256 from BulkEnd
+apkrund: prepares a destination receiver, sends ResolveExport(offer_id, ACCEPT), then checks the
+  byte count and SHA-256 from BulkEnd while writing directly to the selected handle
 wrapper: sets com.apple.quarantine on the saved file; on failure deletes the partial file
 ```
 
+- RuntimeCore gives host clients a fresh opaque `offerID` for each offer. It keeps the guest's numeric ID and control
+  session token private, and refuses a response after that session reconnects.
+- `exportOffered` uses the session XPC connection's reverse sink rather than the global event stream, so file names and
+  metadata are delivered only to the owning window.
 - Name sanitizing is the same as for wrapper file names ([wrapper.md](wrapper.md) §4.3), plus an extension from the MIME type when the name has none.
 - Each item opens its own panel. A folder chooser for many items is post-v1.
 
@@ -382,6 +386,7 @@ A subfolder of the home folder, such as `~/Documents` or `~/Downloads`, can be a
 4. limits: 4096 entries per listing page, 1 MiB per read or write, 64 open handles per package, and handles closed when the runtime stops.
 
 - `com.android.documentsui` may list root and child metadata for roots granted to at least one package. This picker context exposes names and basic metadata only. Content operations use the package that owns the granted document URI, and the host checks that package against its own settings again for each open, read, and write.
+- Before each guest host request, apkrund refreshes the relevant package's global and per-package policy from settings. The document picker refreshes the aggregate package policy for metadata browsing. Package settings are resolved through the exact package-store directory entry, including its validated case-collision suffix. If settings cannot be read, the affected policy is revoked and the request fails closed. A changed package policy drains in-flight operations and closes that package's open handles. Close requests bypass the ordinary 16-request cap so cleanup cannot be rejected under load; they still count toward the drain.
 - Files created or written by Android get `com.apple.quarantine` (§6.1).
 - Folders inside Desktop, Documents, Downloads, iCloud Drive, or on network or removable volumes are protected by macOS privacy controls. apkrund asks for access on first use, and macOS attributes the prompt to APKRun. If access is denied, the root is shown as unavailable in the picker and in Settings, with the steps to allow it. R-22.
 - The root list and each root's access are stored in the app configuration with bookmarks (`sharedFolders.roots`), so renamed or moved folders are followed.

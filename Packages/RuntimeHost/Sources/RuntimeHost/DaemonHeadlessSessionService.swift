@@ -3,8 +3,7 @@ import CryptoKit
 import Darwin
 import DiagnosticsCore
 import Foundation
-import GraphicsCore
-import GuestProtocol
+import InputCore
 import IntegrationCore
 import RuntimeAPI
 import RuntimeCore
@@ -26,20 +25,52 @@ private struct UnhashedFileImport {
     let size: UInt64
 }
 
+private struct PendingFileExport {
+    let guestOffer: DevelopmentGuestExportOffer
+    let sessionID: UUID
+    let createdAt: ContinuousClock.Instant
+}
+
+struct DaemonOpenedWindowSession: @unchecked Sendable {
+    let session: AppSessionSnapshot
+    let lease: DisplayLease
+}
+
+struct RuntimeWindowSessionContext: Sendable {
+    let opened: DaemonOpenedWindowSession
+    let service: DaemonHeadlessSessionService
+}
+
+protocol RuntimeSessionWindowOperations: Sendable {
+    func frameDisplayed(sessionID: UUID, message: FrameDisplayedMessage) async
+    func visibilityChanged(sessionID: UUID, visible: Bool) async
+    func focusChanged(sessionID: UUID, focused: Bool) async
+    func sendInput(sessionID: UUID, batch: InputBatch) async
+    func closeSession(sessionID: UUID, policy: SessionClosePolicy?) async throws(RuntimeWireError)
+}
+
 /// Launches CLI-owned sessions on secondary displays before the daemon has a window client (#33).
 ///
 /// This service owns no window. It drains each lease's frame stream and acknowledges frames as discarded, then marks
 /// the session running as soon as Android confirms the launch operation.
-public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutationSessionHandling {
+public actor DaemonHeadlessSessionService:
+    RuntimeSessionService,
+    RuntimeSessionWindowOperations,
+    PackageMutationSessionHandling
+{
     private let guestAgent: any DaemonHeadlessGuestAgent
     private let displayPool: DisplayPool
     private let registry: SessionRegistry
     private let displayConfiguration: DisplayConfiguration
     private let fileIntegrationEnabled: @Sendable (RuntimePackageID) async throws(RuntimeWireError) -> Bool
+    private let exportOfferDelivery: @Sendable (UUID, ExportOffer) async -> Bool
     private var sessionsByPackage: [String: SessionID] = [:]
+    private var pendingFileExports: [UUID: PendingFileExport] = [:]
     private var frameDrainers: [SessionID: Task<Void, Never>] = [:]
+    private var inputRouter: InputRouter?
     private var taskEventMonitor: Task<Void, Never>?
     private var guestResynchronizationHandlerID: UUID?
+    private var hasExportOfferHandler = false
     private var reconciliationTasks: [UUID: Task<Void, Never>] = [:]
     private var operationInFlight = false
     private var operationWaiters: [CheckedContinuation<Void, Never>] = []
@@ -57,11 +88,13 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         fileIntegrationEnabled: @escaping @Sendable (RuntimePackageID) async throws(RuntimeWireError) -> Bool = { _ in
             false
         },
+        exportOfferDelivery: @escaping @Sendable (UUID, ExportOffer) async -> Bool = { _, _ in false },
         logSink: (any LogSink)? = nil
     ) {
         self.guestAgent = guestAgent
         self.displayPool = displayPool
         self.fileIntegrationEnabled = fileIntegrationEnabled
+        self.exportOfferDelivery = exportOfferDelivery
         registry = SessionRegistry(logSink: logSink)
         displayConfiguration = Self.defaultDisplayConfiguration
     }
@@ -73,13 +106,15 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         displayConfiguration: DisplayConfiguration,
         fileIntegrationEnabled: @escaping @Sendable (RuntimePackageID) async throws(RuntimeWireError) -> Bool = { _ in
             false
-        }
+        },
+        exportOfferDelivery: @escaping @Sendable (UUID, ExportOffer) async -> Bool = { _, _ in false }
     ) {
         self.guestAgent = guestAgent
         self.displayPool = displayPool
         self.registry = registry
         self.displayConfiguration = displayConfiguration
         self.fileIntegrationEnabled = fileIntegrationEnabled
+        self.exportOfferDelivery = exportOfferDelivery
     }
 
     /// Stops background observers before Android is shut down by the daemon.
@@ -94,6 +129,15 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             return
         }
         isShuttingDown = true
+        if hasExportOfferHandler {
+            hasExportOfferHandler = false
+            await guestAgent.setExportOfferHandler(nil)
+        }
+        let pendingOffers = pendingFileExports.values.map(\.guestOffer)
+        pendingFileExports.removeAll()
+        for offer in pendingOffers {
+            _ = try? await guestAgent.resolveExport(offerID: offer.offerID, decision: .decline)
+        }
         if let handlerID = guestResynchronizationHandlerID {
             guestResynchronizationHandlerID = nil
             await guestAgent.removeResynchronizationHandler(handlerID)
@@ -130,6 +174,55 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
 
     /// Starts a package on a leased secondary display and returns after Android confirms the launch.
     public func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeWireError) -> RuntimeLaunchResult {
+        try await launch(request, displayConfiguration: displayConfiguration, drainsFrames: true)
+    }
+
+    /// Opens a window-backed app session with the requested native geometry and leaves frame ownership to its
+    /// authenticated session endpoint.
+    func openWindowSession(_ request: OpenSessionRequest) async throws(RuntimeWireError) -> DaemonOpenedWindowSession {
+        let configuration = DisplayConfiguration(
+            geometry: DisplayGeometry(
+                pointSize: CGSize(
+                    width: request.geometry.pointSize.width,
+                    height: request.geometry.pointSize.height
+                ),
+                backingScale: request.geometry.backingScale,
+                zoom: request.geometry.zoom
+            )
+        )
+        let launchRequest = RuntimeLaunchRequest(packageID: request.packageID)
+        _ = try await launch(launchRequest, displayConfiguration: configuration, drainsFrames: false)
+
+        guard let session = await registry.session(packageID: request.packageID.rawValue),
+            let lease = await registry.displayLease(session.id)
+        else {
+            throw .runtime(
+                "sessionNotFound",
+                message: "The Android app started without an active display session.",
+                remediation: "Close the app window and launch it again."
+            )
+        }
+
+        await stopDrainingFrames(for: session.id)
+        guard case .app(let sessionID) = session.id else {
+            throw .runtime("internal", message: "The window session has an unsupported session identity.")
+        }
+        do {
+            try await registerWindowInput(for: session)
+        } catch {
+            try? await closeSession(sessionID: sessionID, policy: .stop)
+            throw error
+        }
+        await visibilityChanged(sessionID: sessionID, visible: true)
+        let visibleSession = await registry.session(session.id) ?? session
+        return DaemonOpenedWindowSession(session: visibleSession, lease: lease)
+    }
+
+    private func launch(
+        _ request: RuntimeLaunchRequest,
+        displayConfiguration: DisplayConfiguration,
+        drainsFrames: Bool
+    ) async throws(RuntimeWireError) -> RuntimeLaunchResult {
         guard await acquireOperation() else {
             throw Self.shuttingDownError
         }
@@ -142,7 +235,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         let packageID = request.packageID.rawValue
         if let existing = await registry.session(packageID: packageID) {
             sessionsByPackage[packageID] = existing.id
-            return try await launchExisting(existing)
+            return try await launchExisting(existing, drainsFrames: drainsFrames)
         }
 
         let isInstalled: Bool
@@ -173,9 +266,11 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         guard session.state == .acquiringDisplay,
             let lease = await registry.displayLease(session.id)
         else {
-            return try await launchExisting(session)
+            return try await launchExisting(session, drainsFrames: drainsFrames)
         }
-        startDrainingFrames(from: lease)
+        if drainsFrames {
+            startDrainingFrames(from: lease)
+        }
 
         let launching: AppSessionSnapshot
         do throws(SessionRegistryFailure) {
@@ -339,7 +434,7 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 ]
             )
         }
-        var guestFiles: [GPFileRef] = []
+        var guestFiles: [GuestFileReference] = []
         guestFiles.reserveCapacity(prepared.count)
         for item in prepared {
             do {
@@ -355,12 +450,14 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 throw Self.wireError(for: error)
             }
             transferredBytes += item.size
-            var guestFile = GPFileRef()
-            guestFile.transferID = item.transferID
-            guestFile.name = item.name
-            guestFile.mimeType = item.mimeType
-            guestFile.size = item.size
-            guestFiles.append(guestFile)
+            guestFiles.append(
+                GuestFileReference(
+                    transferID: item.transferID,
+                    name: item.name,
+                    mimeType: item.mimeType,
+                    size: item.size
+                )
+            )
         }
 
         do {
@@ -383,18 +480,114 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
                 uriPathPrefix = "/external/downloads/"
             default: throw Self.integrationWireError(.transferFailed)
             }
-            guard result.contentUri.count == guestFiles.count,
-                result.contentUri.allSatisfy({
+            guard result.contentURIs.count == guestFiles.count,
+                result.contentURIs.allSatisfy({
                     Self.isValidContentURI($0, authority: uriAuthority, pathPrefix: uriPathPrefix)
                 })
             else {
                 throw Self.integrationWireError(.transferFailed)
             }
-            return ImportResult(contentURIs: result.contentUri, disposition: disposition)
+            return ImportResult(contentURIs: result.contentURIs, disposition: disposition)
         } catch let error as RuntimeWireError {
             throw error
         } catch {
             throw Self.wireError(for: error)
+        }
+    }
+
+    /// Accepts or declines a guest file offer bound to the exact session captured by the XPC endpoint.
+    public func acceptExport(
+        _ request: AcceptExportRequest,
+        file: FileHandle?
+    ) async throws(RuntimeWireError) {
+        guard await acquireOperation() else {
+            throw Self.shuttingDownError
+        }
+        defer { releaseOperation() }
+        guard !isShuttingDown else { throw Self.shuttingDownError }
+
+        pruneExpiredExportOffers()
+        guard let pending = pendingFileExports[request.offerID],
+            pending.sessionID == request.sessionID
+        else {
+            throw Self.integrationWireError(.transferFailed)
+        }
+        pendingFileExports[request.offerID] = nil
+
+        guard let file else {
+            do {
+                _ = try await guestAgent.resolveExport(
+                    offerID: pending.guestOffer.offerID,
+                    decision: .decline
+                )
+            } catch {
+                throw Self.wireError(for: error)
+            }
+            return
+        }
+
+        guard let session = await registry.session(SessionID.app(request.sessionID)),
+            session.state == .running || session.state == .backgrounded,
+            session.packageID == pending.guestOffer.sourcePackage,
+            session.displayID == pending.guestOffer.displayID,
+            let packageID = RuntimePackageID(rawValue: session.packageID)
+        else {
+            _ = try? await guestAgent.resolveExport(
+                offerID: pending.guestOffer.offerID,
+                decision: .decline
+            )
+            throw Self.integrationWireError(.transferFailed)
+        }
+
+        do {
+            guard try await fileIntegrationEnabled(packageID) else {
+                throw Self.integrationWireError(.filesDisabled)
+            }
+        } catch let error as RuntimeWireError {
+            _ = try? await guestAgent.resolveExport(
+                offerID: pending.guestOffer.offerID,
+                decision: .decline
+            )
+            throw error
+        } catch {
+            _ = try? await guestAgent.resolveExport(
+                offerID: pending.guestOffer.offerID,
+                decision: .decline
+            )
+            throw Self.integrationWireError(.transferFailed)
+        }
+
+        let receiver: GuestBulkFileReceiver
+        do {
+            receiver = try await guestAgent.prepareExportFileReceive(
+                expectedSize: pending.guestOffer.size,
+                destination: file
+            )
+        } catch {
+            _ = try? await guestAgent.resolveExport(
+                offerID: pending.guestOffer.offerID,
+                decision: .decline
+            )
+            throw Self.wireError(for: error)
+        }
+
+        do {
+            let started = try await guestAgent.resolveExport(
+                offerID: pending.guestOffer.offerID,
+                decision: .accept
+            )
+            guard let transferID = started.transferID else {
+                await receiver.cancel()
+                throw Self.integrationWireError(.transferFailed)
+            }
+            try await receiver.bind(transferID: transferID)
+            try await receiver.receiveToDestination()
+        } catch let error as RuntimeWireError {
+            await receiver.cancel()
+            throw error
+        } catch {
+            await receiver.cancel()
+            throw Self.integrationWireError(.transferFailed)
         }
     }
 
@@ -467,15 +660,18 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         return RuntimeTerminateResult(packageID: request.packageID, hadSession: false)
     }
 
-    private func launchExisting(_ session: AppSessionSnapshot) async throws(RuntimeWireError) -> RuntimeLaunchResult {
+    private func launchExisting(
+        _ session: AppSessionSnapshot,
+        drainsFrames: Bool
+    ) async throws(RuntimeWireError) -> RuntimeLaunchResult {
         switch session.state {
         case .running, .backgrounded:
-            if let lease = await registry.displayLease(session.id) {
+            if drainsFrames, let lease = await registry.displayLease(session.id) {
                 startDrainingFrames(from: lease)
             }
             return try Self.launchResult(for: session)
         case .launching:
-            if let lease = await registry.displayLease(session.id) {
+            if drainsFrames, let lease = await registry.displayLease(session.id) {
                 startDrainingFrames(from: lease)
             }
             if let taskID = session.taskIDs.sorted().first {
@@ -503,6 +699,151 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             return try await launchExistingPendingSession(session)
         case .requested, .waitingForRuntime, .acquiringDisplay, .closing, .ended:
             throw Self.wireError(for: .sessionAlreadyExists(packageID: session.packageID))
+        }
+    }
+
+    func frameDisplayed(sessionID: UUID, message: FrameDisplayedMessage) async {
+        guard let lease = await registry.displayLease(.app(sessionID)),
+            let generation = UInt32(exactly: lease.pool.generation),
+            generation == message.generation
+        else {
+            return
+        }
+        lease.pool.frameDisplayed(sequence: message.frameSeq)
+    }
+
+    func visibilityChanged(sessionID: UUID, visible: Bool) async {
+        let id = SessionID.app(sessionID)
+        guard let session = await registry.session(id),
+            let lease = await registry.displayLease(id)
+        else {
+            return
+        }
+        lease.pool.visibilityChanged(isVisible: visible)
+
+        let nextState: AppSessionState = visible ? .running : .backgrounded
+        let updated: AppSessionSnapshot
+        if session.state == nextState {
+            updated = session
+        } else {
+            do throws(SessionRegistryFailure) {
+                updated = try await registry.transition(id, to: nextState)
+            } catch {
+                return
+            }
+        }
+        await inputRouter?.setState(updated.state, for: id)
+        if !visible {
+            await inputRouter?.focusChanged(id, focused: false)
+        }
+    }
+
+    func focusChanged(sessionID: UUID, focused: Bool) async {
+        guard let inputRouter else {
+            return
+        }
+        await inputRouter.focusChanged(.app(sessionID), focused: focused)
+    }
+
+    func sendInput(sessionID: UUID, batch: InputBatch) async {
+        guard !batch.events.isEmpty,
+            batch.events.count <= 512,
+            let inputRouter
+        else {
+            return
+        }
+        await inputRouter.route(WireInputConversion.events(batch.events), from: .app(sessionID))
+    }
+
+    func closeSession(sessionID: UUID, policy: SessionClosePolicy?) async throws(RuntimeWireError) {
+        let id = SessionID.app(sessionID)
+        guard let session = await registry.session(id) else {
+            throw .runtime(
+                "sessionNotFound",
+                message: "This app window no longer has an active Android session.",
+                remediation: "Open the app again from Finder or the APKRun command line."
+            )
+        }
+
+        if policy == .keepRunning {
+            await visibilityChanged(sessionID: sessionID, visible: false)
+            await inputRouter?.unregister(id)
+            return
+        }
+
+        guard await acquireOperation() else {
+            throw Self.shuttingDownError
+        }
+        defer { releaseOperation() }
+        await ensureGuestObservation()
+        guard !isShuttingDown else {
+            throw Self.shuttingDownError
+        }
+
+        let current = await registry.session(id) ?? session
+        guard !Self.isEnded(current.state) else {
+            await stopDrainingFrames(for: id)
+            await inputRouter?.unregister(id)
+            return
+        }
+        do throws(SessionRegistryFailure) {
+            if current.state != .closing {
+                _ = try await registry.transition(id, to: .closing)
+            }
+        } catch {
+            throw Self.wireError(for: error)
+        }
+
+        let stopped: Bool
+        do throws(GuestAgentFailure) {
+            stopped = try await guestAgent.forceStopApplication(package: current.packageID)
+        } catch {
+            _ = await registry.stopFailed(packageID: current.packageID)
+            throw Self.wireError(for: error)
+        }
+        guard stopped else {
+            _ = await registry.stopFailed(packageID: current.packageID)
+            throw Self.guestTasksStillRunningError
+        }
+
+        await stopDrainingFrames(for: id)
+        await inputRouter?.focusChanged(id, focused: false)
+        await inputRouter?.unregister(id)
+        _ = await registry.stopCompleted(sessionID: id, endReason: .userClosed)
+        forgetSession(packageID: current.packageID, sessionID: id)
+    }
+
+    private func registerWindowInput(for session: AppSessionSnapshot) async throws(RuntimeWireError) {
+        let router: InputRouter
+        if let inputRouter {
+            router = inputRouter
+        } else {
+            let channel: any InputChannel
+            do throws(GuestAgentFailure) {
+                channel = try await guestAgent.openInputChannel()
+            } catch {
+                throw Self.wireError(for: error)
+            }
+            let guestAgent = self.guestAgent
+            router = InputRouter(
+                channel: channel,
+                focusDisplay: { displayID in
+                    try await guestAgent.focusDisplay(displayID: displayID)
+                }
+            )
+            inputRouter = router
+        }
+
+        if let failure = await router.register(
+            session: session.id,
+            displayID: session.displayID,
+            state: session.state
+        ) {
+            throw .runtime(
+                "internal",
+                message: "The Android display could not be registered for window input (\(failure)).",
+                remediation: "Restart Android, then open the app again."
+            )
         }
     }
 
@@ -553,6 +894,12 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
         guard !isShuttingDown else {
             return
         }
+        if !hasExportOfferHandler {
+            await guestAgent.setExportOfferHandler { [weak self] offer in
+                await self?.receiveExportOffer(offer)
+            }
+            hasExportOfferHandler = true
+        }
         if taskEventMonitor == nil {
             let events = await guestAgent.taskEventStream()
             guard !isShuttingDown, taskEventMonitor == nil else {
@@ -578,6 +925,67 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             await guestAgent.removeResynchronizationHandler(handlerID)
         } else {
             guestResynchronizationHandlerID = handlerID
+        }
+    }
+
+    private func receiveExportOffer(_ offer: DevelopmentGuestExportOffer) async {
+        guard !isShuttingDown,
+            offer.size <= GuestBulkFileReceiver.maximumTransferSize,
+            Self.isValidExportMIMEType(offer.mimeType),
+            let session = await registry.session(packageID: offer.sourcePackage),
+            session.state == .running || session.state == .backgrounded,
+            session.displayID == offer.displayID,
+            case .app(let sessionID) = session.id,
+            let packageID = RuntimePackageID(rawValue: session.packageID)
+        else {
+            _ = try? await guestAgent.resolveExport(offerID: offer.offerID, decision: .decline)
+            return
+        }
+
+        let filesEnabled: Bool
+        do {
+            filesEnabled = try await fileIntegrationEnabled(packageID)
+        } catch {
+            _ = try? await guestAgent.resolveExport(offerID: offer.offerID, decision: .decline)
+            return
+        }
+        guard filesEnabled, !isShuttingDown else {
+            _ = try? await guestAgent.resolveExport(offerID: offer.offerID, decision: .decline)
+            return
+        }
+
+        pruneExpiredExportOffers()
+        guard pendingFileExports.count < DevelopmentGuestAgent.maximumPendingExportOffers else {
+            _ = try? await guestAgent.resolveExport(offerID: offer.offerID, decision: .decline)
+            return
+        }
+
+        let hostOfferID = UUID()
+        let safeName = FileNameSanitizer.sanitize(offer.name, packageID: session.packageID)
+        let exportOffer = ExportOffer(
+            offerID: hostOfferID,
+            name: safeName,
+            size: Int64(offer.size),
+            type: offer.mimeType
+        )
+        pendingFileExports[hostOfferID] = PendingFileExport(
+            guestOffer: offer,
+            sessionID: sessionID,
+            createdAt: .now
+        )
+        let delivered = await exportOfferDelivery(sessionID, exportOffer)
+        guard !delivered,
+            pendingFileExports.removeValue(forKey: hostOfferID) != nil
+        else {
+            return
+        }
+        _ = try? await guestAgent.resolveExport(offerID: offer.offerID, decision: .decline)
+    }
+
+    private func pruneExpiredExportOffers(now: ContinuousClock.Instant = .now) {
+        let expiration = DevelopmentGuestAgent.defaultExportOfferLifetime
+        pendingFileExports = pendingFileExports.filter { _, pending in
+            pending.createdAt.duration(to: now) < expiration
         }
     }
 
@@ -1070,6 +1478,17 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             && pathComponents[2].allSatisfy(\.isNumber)
     }
 
+    private static func isValidExportMIMEType(_ value: String) -> Bool {
+        let components = value.split(separator: "/", omittingEmptySubsequences: false)
+        return value.utf8.count <= 255
+            && components.count == 2
+            && components.allSatisfy { !$0.isEmpty }
+            && !value.unicodeScalars.contains {
+                CharacterSet.whitespacesAndNewlines.contains($0)
+                    || CharacterSet.controlCharacters.contains($0)
+            }
+    }
+
     private static func integrationWireError(_ failure: IntegrationFailure) -> RuntimeWireError {
         let message: String
         let remediation: String?
@@ -1257,10 +1676,31 @@ public actor DaemonHeadlessSessionService: RuntimeSessionService, PackageMutatio
             )
         }
     }
+
+    private static func wireError(for failure: DevelopmentGuestExportReceiveFailure) -> RuntimeWireError {
+        switch failure {
+        case .guestAgent(let failure):
+            wireError(for: failure)
+        case .fileTransfer:
+            integrationWireError(.transferFailed)
+        }
+    }
 }
 
 protocol DaemonHeadlessGuestAgent: EmbeddedSessionGuestAgent {
+    func openInputChannel() async throws(GuestAgentFailure) -> any InputChannel
     func taskEventStream() async -> AsyncStream<DevelopmentGuestTaskEvent>
+    func setExportOfferHandler(
+        _ handler: (@Sendable (DevelopmentGuestExportOffer) async -> Void)?
+    ) async
+    func resolveExport(
+        offerID: UUID,
+        decision: GuestExportDecision
+    ) async throws(GuestAgentFailure) -> GuestExportStart
+    func prepareExportFileReceive(
+        expectedSize: UInt64,
+        destination: FileHandle
+    ) async throws(DevelopmentGuestExportReceiveFailure) -> GuestBulkFileReceiver
     func transferFile(
         _ fileHandle: FileHandle,
         transferID: UInt64,
@@ -1272,11 +1712,21 @@ protocol DaemonHeadlessGuestAgent: EmbeddedSessionGuestAgent {
     func importFiles(
         package: String,
         displayID: Int32,
-        files: [GPFileRef]
-    ) async throws(GuestAgentFailure) -> GPImportResult
+        files: [GuestFileReference]
+    ) async throws(GuestAgentFailure) -> GuestFileImportResult
+}
+
+extension DaemonHeadlessGuestAgent {
+    func openInputChannel() async throws(GuestAgentFailure) -> any InputChannel {
+        throw .operationFailed(reason: "agentUnavailable.input")
+    }
 }
 
 extension DevelopmentGuestAgent: DaemonHeadlessGuestAgent {
+    func openInputChannel() async throws(GuestAgentFailure) -> any InputChannel {
+        try await inputChannel()
+    }
+
     func taskEventStream() async -> AsyncStream<DevelopmentGuestTaskEvent> {
         taskEvents
     }

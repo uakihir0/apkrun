@@ -500,6 +500,7 @@ message BulkFrame {
 
 - A transfer is announced on the control channel. For example, `ImportFiles` lists transfer IDs, and `CollectDiagnostics` returns them. The data then flows on the bulk stream in either direction. At most 4 transfers are interleaved per stream, chunk by chunk.
 - Limit: 2 GiB per transfer. The receiver writes to a temporary file: on the host under `~/Library/Caches/io.apkrun.APKRun/transfers/`, on the guest in the agent's cache directory or directly into a `PackageInstaller` session for install artifacts (§11.3). Incomplete transfers are deleted when the stream closes.
+- A host receive has a one-hour deadline. If it expires, the receiver closes the stream and removes or truncates the incomplete destination.
 - Flow control is the stream's own (vsock or TCP back-pressure). Senders do not read whole files into memory.
 - The artifact stream (6111) uses the same messages with the Store Agent. Its kinds are `INSTALL_ARTIFACT` (host → guest) and `ICON_LAYER` (guest → host).
 

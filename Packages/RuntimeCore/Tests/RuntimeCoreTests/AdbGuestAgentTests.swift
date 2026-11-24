@@ -1,5 +1,6 @@
 import DiagnosticsCore
 import Foundation
+import GuestProtocol
 import Testing
 
 @testable import RuntimeCore
@@ -129,6 +130,228 @@ private func bundle(version: Int) -> GuestAgentBundle {
         packageName: "io.apkrun.guest",
         versionCode: version,
         versionName: "test"
+    )
+}
+
+@Test(.timeLimit(.minutes(1)))
+func developmentGuestAgentRelaysAndResolvesSaveToMacOffers() async throws {
+    let fake = try FakeGuestADB()
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello(capabilities: GuestCapability.allCases.map(\.rawValue))
+        agent.answer = { request in
+            switch request.op {
+            case .getSnapshot?:
+                .getSnapshot(GPSnapshot())
+            case .resolveExport(let operation)?:
+                #expect(operation.decision == .decline)
+                var result = GPExportStart()
+                result.transferID = 41
+                return .resolveExport(result)
+            default:
+                nil
+            }
+        }
+    }
+    let guest = DevelopmentGuestAgent(
+        adb: AdbClient(executable: fake.executable),
+        bundle: bundle(version: 1000),
+        transport: transport
+    )
+    try await guest.start(connectTimeout: .seconds(5))
+
+    var offered = GPExportFileOffered()
+    offered.offerID = 7
+    offered.name = "report.pdf"
+    offered.mimeType = "application/pdf"
+    offered.size = 4096
+    offered.sourcePackage = "io.apkrun.fixture.reader"
+    offered.displayID = 3
+    transport.agents[0].sendEvent(.exportFileOffered(offered))
+
+    var iterator = guest.exportOffers.makeAsyncIterator()
+    let received = try #require(await iterator.next())
+    #expect(received.name == "report.pdf")
+    #expect(received.mimeType == "application/pdf")
+    #expect(received.size == 4096)
+    #expect(received.sourcePackage == "io.apkrun.fixture.reader")
+    #expect(received.displayID == 3)
+
+    try await waitForDeclinedExport(offerID: 7, agent: transport.agents[0])
+    await guest.stop()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func staleExportOfferCannotResolveAReusedGuestIDAfterReconnect() async throws {
+    let fake = try FakeGuestADB()
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello(capabilities: GuestCapability.allCases.map(\.rawValue))
+        agent.answer = { request in
+            switch request.op {
+            case .getSnapshot?:
+                .getSnapshot(GPSnapshot())
+            case .resolveExport(let operation)?:
+                guard operation.decision == .accept else { return nil }
+                var result = GPExportStart()
+                result.transferID = 41
+                return .resolveExport(result)
+            default:
+                nil
+            }
+        }
+    }
+    let guest = DevelopmentGuestAgent(
+        adb: AdbClient(executable: fake.executable),
+        bundle: bundle(version: 1000),
+        transport: transport
+    )
+    await guest.setExportOfferHandler { _ in }
+    try await guest.start(connectTimeout: .seconds(5))
+
+    var iterator = guest.exportOffers.makeAsyncIterator()
+    transport.agents[0].sendEvent(.exportFileOffered(exportOffer(offerID: 7)))
+    let staleOffer = try #require(await iterator.next())
+
+    await guest.supervisor.stop()
+    try await guest.start(connectTimeout: .seconds(5))
+    transport.agents[1].sendEvent(.exportFileOffered(exportOffer(offerID: 7)))
+    let currentOffer = try #require(await iterator.next())
+    #expect(staleOffer.offerID != currentOffer.offerID)
+
+    do {
+        _ = try await guest.resolveExport(offerID: staleOffer.offerID, decision: .accept)
+        Issue.record("An offer from an earlier connection resolved on the replacement session.")
+    } catch {
+        // The stale opaque handle must not be replayed against a replacement session.
+    }
+    #expect(
+        !transport.agents[1].requests.contains { request in
+            guard case .resolveExport(let operation)? = request.op else { return false }
+            return operation.offerID == 7
+        })
+
+    let result = try await guest.resolveExport(offerID: currentOffer.offerID, decision: .accept)
+    #expect(result.transferID == 41)
+    #expect(
+        transport.agents[1].requests.contains { request in
+            guard case .resolveExport(let operation)? = request.op else { return false }
+            return operation.offerID == 7 && operation.decision == .accept
+        })
+    await guest.stop()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func developmentGuestAgentDeclinesExportOffersPastThePendingLimit() async throws {
+    let fake = try FakeGuestADB()
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello(capabilities: GuestCapability.allCases.map(\.rawValue))
+        agent.answer = { request in
+            switch request.op {
+            case .getSnapshot?:
+                .getSnapshot(GPSnapshot())
+            case .resolveExport?:
+                .resolveExport(GPExportStart())
+            default:
+                nil
+            }
+        }
+    }
+    let guest = DevelopmentGuestAgent(
+        adb: AdbClient(executable: fake.executable),
+        bundle: bundle(version: 1000),
+        transport: transport
+    )
+    await guest.setExportOfferHandler { _ in }
+    try await guest.start(connectTimeout: .seconds(5))
+
+    var iterator = guest.exportOffers.makeAsyncIterator()
+    for offerID in UInt64(1)...UInt64(DevelopmentGuestAgent.maximumPendingExportOffers) {
+        transport.agents[0].sendEvent(.exportFileOffered(exportOffer(offerID: offerID)))
+        #expect(await iterator.next() != nil)
+    }
+
+    let overflowOfferID = UInt64(DevelopmentGuestAgent.maximumPendingExportOffers + 1)
+    transport.agents[0].sendEvent(.exportFileOffered(exportOffer(offerID: overflowOfferID)))
+    try await waitForDeclinedExport(offerID: overflowOfferID, agent: transport.agents[0])
+    #expect(
+        transport.agents[0].requests.filter { request in
+            guard case .resolveExport(let operation)? = request.op else { return false }
+            return operation.decision == .decline
+        }.count == 1
+    )
+
+    await guest.stop()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func developmentGuestAgentExpiresAndDeclinesUnresolvedExportOffers() async throws {
+    let fake = try FakeGuestADB()
+    let transport = InMemoryTransport { _, agent, _ in
+        agent.sendHello(capabilities: GuestCapability.allCases.map(\.rawValue))
+        agent.answer = { request in
+            switch request.op {
+            case .getSnapshot?:
+                .getSnapshot(GPSnapshot())
+            case .resolveExport?:
+                .resolveExport(GPExportStart())
+            default:
+                nil
+            }
+        }
+    }
+    let guest = DevelopmentGuestAgent(
+        adb: AdbClient(executable: fake.executable),
+        bundle: bundle(version: 1000),
+        transport: transport,
+        exportOfferLifetime: .milliseconds(25)
+    )
+    await guest.setExportOfferHandler { _ in }
+    try await guest.start(connectTimeout: .seconds(5))
+
+    var iterator = guest.exportOffers.makeAsyncIterator()
+    let guestOfferID: UInt64 = 41
+    transport.agents[0].sendEvent(.exportFileOffered(exportOffer(offerID: guestOfferID)))
+    let offered = try #require(await iterator.next())
+    try await waitForDeclinedExport(offerID: guestOfferID, agent: transport.agents[0])
+
+    do {
+        _ = try await guest.resolveExport(offerID: offered.offerID, decision: .accept)
+        Issue.record("An expired export offer remained acceptable.")
+    } catch {
+        // Expired opaque handles are no longer resolvable.
+    }
+    #expect(
+        !transport.agents[0].requests.contains { request in
+            guard case .resolveExport(let operation)? = request.op else { return false }
+            return operation.offerID == guestOfferID && operation.decision == .accept
+        })
+
+    await guest.stop()
+}
+
+private func exportOffer(offerID: UInt64) -> GPExportFileOffered {
+    var offer = GPExportFileOffered()
+    offer.offerID = offerID
+    offer.name = "report.pdf"
+    offer.mimeType = "application/pdf"
+    offer.size = 4096
+    offer.sourcePackage = "io.apkrun.fixture.reader"
+    offer.displayID = 3
+    return offer
+}
+
+private func waitForDeclinedExport(offerID: UInt64, agent: InMemoryAgent) async throws {
+    let deadline = ContinuousClock.now + .seconds(5)
+    while !agent.requests.contains(where: { request in
+        guard case .resolveExport(let operation)? = request.op else { return false }
+        return operation.offerID == offerID && operation.decision == .decline
+    }), ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(
+        agent.requests.contains { request in
+            guard case .resolveExport(let operation)? = request.op else { return false }
+            return operation.offerID == offerID && operation.decision == .decline
+        }
     )
 }
 

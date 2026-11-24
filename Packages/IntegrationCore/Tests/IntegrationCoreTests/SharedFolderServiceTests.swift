@@ -195,6 +195,44 @@ private let readOnlyTestPackage = "io.apkrun.fixture.hellofilesreadonly"
     try await service.closeFile(packageID: readOnlyTestPackage, handle: opened.handle)
 }
 
+@Test func sharedFolderServiceInvalidatesHandlesWhenPackageAccessChanges() async throws {
+    let temporary = try makeTemporaryFolder()
+    defer { try? FileManager.default.removeItem(at: temporary.parent) }
+    try FileManager.default.createDirectory(at: temporary.root, withIntermediateDirectories: true)
+    try Data("private".utf8).write(to: temporary.root.appendingPathComponent("document.txt"))
+    let service = try makeService(root: temporary.root)
+    defer { Task { await service.runtimeDidStop() } }
+
+    try await service.replacePackageAccess([
+        sharedFolderTestPackage: ["documents": .readWrite]
+    ])
+    let opened = try await service.openFile(
+        packageID: sharedFolderTestPackage,
+        rootID: "documents",
+        path: "document.txt",
+        mode: .read
+    )
+
+    try await service.replacePackageAccess([:], for: sharedFolderTestPackage)
+
+    await expectIntegrationFailure(.packageAccessDenied) {
+        _ = try await service.readRange(
+            packageID: sharedFolderTestPackage,
+            handle: opened.handle,
+            offset: 0,
+            length: 7
+        )
+    }
+    await expectIntegrationFailure(.packageAccessDenied) {
+        _ = try await service.openFile(
+            packageID: sharedFolderTestPackage,
+            rootID: "documents",
+            path: "document.txt",
+            mode: .read
+        )
+    }
+}
+
 @Test func documentPickerCanBrowseMetadataButPackageContentNeedsAnAccessGrant() async throws {
     let temporary = try makeTemporaryFolder()
     defer { try? FileManager.default.removeItem(at: temporary.parent) }

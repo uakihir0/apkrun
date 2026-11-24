@@ -182,7 +182,6 @@ let package = Package(
                 "UpdateCore",
                 "WrapperCore",
                 "IntegrationCore",
-                "GuestProtocol",
                 "ImageCore",
                 "InputCore",
                 "RuntimeAPI",
@@ -376,7 +375,7 @@ let package = Package(
         ),
         .testTarget(
             name: "IntegrationCoreTests",
-            dependencies: ["IntegrationCore", "DiagnosticsCore"],
+            dependencies: ["IntegrationCore", "DiagnosticsCore", "GuestProtocol"],
             path: "Packages/IntegrationCore/Tests/IntegrationCoreTests"
         ),
         // The per-run resources of the VM tests (test-strategy §3.10). The same helper is compiled into the

@@ -1,10 +1,11 @@
+import APKStoreCore
 import CoreFoundation
 import Darwin
 import DiagnosticsCore
 import Foundation
-import GuestProtocol
 import IntegrationCore
 import RuntimeAPI
+import RuntimeCore
 
 /// Owns persisted shared-folder bookmarks, security scopes, package policy, and the filesystem service.
 actor SharedFolderConfigurationService {
@@ -25,6 +26,185 @@ actor SharedFolderConfigurationService {
         let availability: SharedFolderAvailability
     }
 
+    private struct PackageDirectoryEntry {
+        let packageID: String
+        let directoryName: String
+    }
+
+    private struct PackageDirectoryFingerprint: Equatable {
+        let device: UInt64
+        let inode: UInt64
+        let modifiedSeconds: Int64
+        let modifiedNanoseconds: Int64
+        let changedSeconds: Int64
+        let changedNanoseconds: Int64
+
+        init(_ info: stat) {
+            device = UInt64(info.st_dev)
+            inode = UInt64(info.st_ino)
+            modifiedSeconds = Int64(info.st_mtimespec.tv_sec)
+            modifiedNanoseconds = Int64(info.st_mtimespec.tv_nsec)
+            changedSeconds = Int64(info.st_ctimespec.tv_sec)
+            changedNanoseconds = Int64(info.st_ctimespec.tv_nsec)
+        }
+    }
+
+    private struct PackageDirectoryIndexSnapshot {
+        let fingerprint: PackageDirectoryFingerprint
+        let entries: [PackageDirectoryEntry]
+        let directoryNamesByPackageID: [String: String]
+
+        init(fingerprint: PackageDirectoryFingerprint, entries: [PackageDirectoryEntry]) {
+            self.fingerprint = fingerprint
+            self.entries = entries
+            var directoryNamesByPackageID: [String: String] = [:]
+            for entry in entries where directoryNamesByPackageID[entry.packageID] == nil {
+                directoryNamesByPackageID[entry.packageID] = entry.directoryName
+            }
+            self.directoryNamesByPackageID = directoryNamesByPackageID
+        }
+    }
+
+    /// Caches only package IDs and their directory names. Directory metadata invalidates the
+    /// index after PackageStore creates, removes, or renames a package directory; settings are
+    /// still read from disk for each policy refresh.
+    private struct PackageDirectoryNameIndex {
+        private var snapshot: PackageDirectoryIndexSnapshot?
+
+        mutating func entries(at directory: URL) throws(IntegrationFailure) -> [PackageDirectoryEntry] {
+            guard let currentFingerprint = try Self.fingerprint(at: directory) else {
+                invalidate()
+                return []
+            }
+            if let snapshot, snapshot.fingerprint == currentFingerprint {
+                return snapshot.entries
+            }
+
+            invalidate()
+            for _ in 0..<3 {
+                guard let rebuilt = try Self.scan(at: directory) else { return [] }
+                guard rebuilt.fingerprint == (try Self.fingerprint(at: directory)) else {
+                    continue
+                }
+                snapshot = rebuilt
+                return rebuilt.entries
+            }
+            throw .settingsUnreadable
+        }
+
+        mutating func directoryName(
+            for packageID: String,
+            at directory: URL
+        ) throws(IntegrationFailure) -> String? {
+            for _ in 0..<2 {
+                _ = try entries(at: directory)
+                guard let directoryName = snapshot?.directoryNamesByPackageID[packageID] else {
+                    return nil
+                }
+                if Self.isDirectory(directoryName, in: directory) {
+                    return directoryName
+                }
+                invalidate()
+            }
+            return nil
+        }
+
+        private mutating func invalidate() {
+            snapshot = nil
+        }
+
+        private static func openDirectory(at directory: URL) throws(IntegrationFailure) -> Int32? {
+            let descriptor = directory.path.withCString {
+                Darwin.open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+            }
+            guard descriptor >= 0 else {
+                if errno == ENOENT { return nil }
+                throw .settingsUnreadable
+            }
+            return descriptor
+        }
+
+        private static func fingerprint(at directory: URL) throws(IntegrationFailure)
+            -> PackageDirectoryFingerprint?
+        {
+            guard let descriptor = try openDirectory(at: directory) else { return nil }
+            defer { _ = Darwin.close(descriptor) }
+            return try fingerprint(of: descriptor)
+        }
+
+        private static func fingerprint(of descriptor: Int32) throws(IntegrationFailure)
+            -> PackageDirectoryFingerprint
+        {
+            var info = stat()
+            guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else {
+                throw .settingsUnreadable
+            }
+            return PackageDirectoryFingerprint(info)
+        }
+
+        private static func scan(at directory: URL) throws(IntegrationFailure)
+            -> PackageDirectoryIndexSnapshot?
+        {
+            for _ in 0..<3 {
+                guard let descriptor = try openDirectory(at: directory) else { return nil }
+                defer { _ = Darwin.close(descriptor) }
+                let before = try fingerprint(of: descriptor)
+                let duplicate = dup(descriptor)
+                guard duplicate >= 0 else { throw .settingsUnreadable }
+                guard let stream = fdopendir(duplicate) else {
+                    _ = Darwin.close(duplicate)
+                    throw .settingsUnreadable
+                }
+                defer { closedir(stream) }
+
+                var entries: [PackageDirectoryEntry] = []
+                while let rawEntry = readdir(stream) {
+                    var entry = rawEntry.pointee
+                    let name = withUnsafePointer(to: &entry.d_name) { pointer in
+                        pointer.withMemoryRebound(to: CChar.self, capacity: Int(NAME_MAX) + 1) {
+                            String(cString: $0)
+                        }
+                    }
+                    guard name != ".", name != "..", !name.hasPrefix("."),
+                        let packageID = PackageStore.packageID(fromDirectoryName: name)
+                    else {
+                        continue
+                    }
+                    var info = stat()
+                    guard
+                        name.withCString({
+                            fstatat(descriptor, $0, &info, AT_SYMLINK_NOFOLLOW)
+                        }) == 0, (info.st_mode & S_IFMT) == S_IFDIR
+                    else {
+                        continue
+                    }
+                    entries.append(
+                        PackageDirectoryEntry(packageID: packageID.rawValue, directoryName: name)
+                    )
+                }
+
+                let after = try fingerprint(of: descriptor)
+                guard before == after else { continue }
+                return PackageDirectoryIndexSnapshot(
+                    fingerprint: after,
+                    entries: entries.sorted { $0.packageID < $1.packageID }
+                )
+            }
+            throw .settingsUnreadable
+        }
+
+        private static func isDirectory(_ name: String, in directory: URL) -> Bool {
+            guard let descriptor = try? openDirectory(at: directory) else {
+                return false
+            }
+            defer { _ = Darwin.close(descriptor) }
+            var info = stat()
+            return name.withCString({
+                fstatat(descriptor, $0, &info, AT_SYMLINK_NOFOLLOW)
+            }) == 0 && (info.st_mode & S_IFMT) == S_IFDIR
+        }
+    }
+
     nonisolated let fileService: SharedFolderService
 
     private let paths: APKRunPaths
@@ -35,7 +215,10 @@ actor SharedFolderConfigurationService {
     private let stopSecurityScope: SecurityScopeStopper
     private var roots: [StoredRoot]
     private var resolvedRoots: [String: ResolvedRoot]
+    private var packageDirectoryIndex: PackageDirectoryNameIndex
     private var isClosed = false
+    private var isUpdatingFileService = false
+    private var fileServiceUpdateWaiters: [CheckedContinuation<Void, Never>] = []
 
     private init(
         paths: APKRunPaths,
@@ -46,6 +229,7 @@ actor SharedFolderConfigurationService {
         stopSecurityScope: @escaping SecurityScopeStopper,
         roots: [StoredRoot],
         resolvedRoots: [String: ResolvedRoot],
+        packageDirectoryIndex: PackageDirectoryNameIndex,
         fileService: SharedFolderService
     ) {
         self.paths = paths
@@ -56,6 +240,7 @@ actor SharedFolderConfigurationService {
         self.stopSecurityScope = stopSecurityScope
         self.roots = roots
         self.resolvedRoots = resolvedRoots
+        self.packageDirectoryIndex = packageDirectoryIndex
         self.fileService = fileService
     }
 
@@ -106,7 +291,13 @@ actor SharedFolderConfigurationService {
             )
         }
 
-        let packageAccess = try readPackageAccess(paths: paths, document: document)
+        var packageDirectoryIndex = PackageDirectoryNameIndex()
+        let packageEntries = try packageDirectoryIndex.entries(at: paths.packagesDirectory)
+        let packageAccess = try readPackageAccess(
+            paths: paths,
+            document: document,
+            packageEntries: packageEntries
+        )
         let definitions = rootDefinitions(
             sharedURL: paths.sharedDirectory,
             roots: roots,
@@ -122,13 +313,29 @@ actor SharedFolderConfigurationService {
             stopSecurityScope: stopSecurityScope,
             roots: roots,
             resolvedRoots: resolvedRoots,
+            packageDirectoryIndex: packageDirectoryIndex,
             fileService: service
         )
     }
 
     /// Lists the configured roots, including roots that are temporarily unavailable.
-    func listFolders() throws(RuntimeWireError) -> [SharedFolder] {
+    func listFolders() async throws(RuntimeWireError) -> [SharedFolder] {
         try requireOpen()
+        do {
+            try await beginFileServiceUpdate()
+        } catch let failure as IntegrationFailure {
+            throw Self.wireError(for: failure)
+        } catch {
+            throw Self.settingsUnreadableError
+        }
+        defer { finishFileServiceUpdate() }
+        do {
+            try await fileService.refreshChangedRootDescriptors()
+        } catch let failure as IntegrationFailure {
+            throw Self.wireError(for: failure)
+        } catch {
+            throw Self.settingsUnreadableError
+        }
         let builtInAvailable = Self.availability(of: paths.sharedDirectory, scopeStarted: true)
         var result = [
             SharedFolder(
@@ -148,7 +355,7 @@ actor SharedFolderConfigurationService {
                 path: resolved.url.path,
                 access: root.access,
                 builtIn: false,
-                availability: resolved.availability
+                availability: Self.availability(of: resolved.url, scopeStarted: resolved.scopeStarted)
             )
         }
         return result
@@ -277,42 +484,94 @@ actor SharedFolderConfigurationService {
             path: resolved.url.path,
             access: request.access,
             builtIn: false,
-            availability: resolved.availability
+            availability: Self.availability(of: resolved.url, scopeStarted: resolved.scopeStarted)
         )
     }
 
     /// Builds the current package grant list for the guest document provider.
-    func guestPolicy() throws(RuntimeWireError) -> (roots: [GPSharedRoot], access: [GPPackageAccess]) {
+    func guestPolicy() throws(RuntimeWireError) -> (
+        roots: [GuestSharedFolderRoot],
+        access: [GuestPackageSharedFolderAccess]
+    ) {
         try requireOpen()
         do {
             let document = try Self.readSettingsDocument(at: paths.settingsFile)
-            let packageAccess = try Self.readPackageAccess(paths: paths, document: document)
+            let packageEntries = try packageDirectoryIndex.entries(at: paths.packagesDirectory)
+            let packageAccess = try Self.readPackageAccess(
+                paths: paths,
+                document: document,
+                packageEntries: packageEntries
+            )
             let definitions = Self.rootDefinitions(
                 sharedURL: paths.sharedDirectory,
                 roots: roots,
                 resolvedRoots: resolvedRoots
             )
-            let wireRoots = definitions.map { definition in
-                var root = GPSharedRoot()
-                root.rootID = definition.id
-                root.title = definition.title
-                root.maxAccess = definition.maximumAccess == .readWrite ? .readWrite : .readOnly
-                return root
+            let guestRoots = definitions.map { definition in
+                GuestSharedFolderRoot(
+                    id: definition.id,
+                    title: definition.title,
+                    access: definition.maximumAccess == .readWrite ? .readWrite : .readOnly
+                )
             }
-            let wireAccess = packageAccess.keys.sorted().compactMap { packageID -> GPPackageAccess? in
+            let guestAccess = packageAccess.keys.sorted().compactMap { packageID -> GuestPackageSharedFolderAccess? in
                 guard let byRoot = packageAccess[packageID],
                     let value = byRoot.values.first(where: { $0 != .off })
                 else { return nil }
-                var access = GPPackageAccess()
-                access.package = packageID
-                access.access = value == .readWrite ? .readWrite : .readOnly
-                return access
+                return GuestPackageSharedFolderAccess(
+                    packageID: packageID,
+                    access: value == .readWrite ? .readWrite : .readOnly
+                )
             }
-            return (wireRoots, wireAccess)
+            return (guestRoots, guestAccess)
         } catch let failure as IntegrationFailure {
             throw Self.wireError(for: failure)
         } catch {
             throw Self.settingsUnreadableError
+        }
+    }
+
+    /// Refreshes the host-side access decision from the settings on every guest request.
+    ///
+    /// Package requests load only that package's settings. The Android document picker is the
+    /// only caller that needs the aggregate policy for all packages.
+    func refreshPackageAccess(for packageID: String?) async throws(IntegrationFailure) {
+        try await beginFileServiceUpdate()
+        defer { finishFileServiceUpdate() }
+        do {
+            let document = try Self.readSettingsDocument(at: paths.settingsFile)
+            if let packageID {
+                let packageDirectoryName: String?
+                if RuntimePackageID(rawValue: packageID) != nil {
+                    packageDirectoryName = try packageDirectoryIndex.directoryName(
+                        for: packageID,
+                        at: paths.packagesDirectory
+                    )
+                } else {
+                    packageDirectoryName = nil
+                }
+                let access = try Self.readPackageAccess(
+                    paths: paths,
+                    document: document,
+                    packageID: packageID,
+                    packageDirectoryName: packageDirectoryName
+                )
+                try await fileService.replacePackageAccess(access, for: packageID)
+            } else {
+                let packageEntries = try packageDirectoryIndex.entries(at: paths.packagesDirectory)
+                let access = try Self.readPackageAccess(
+                    paths: paths,
+                    document: document,
+                    packageEntries: packageEntries
+                )
+                try await fileService.replacePackageAccess(access)
+            }
+        } catch let failure as IntegrationFailure {
+            await revokePackageAccess(for: packageID)
+            throw failure
+        } catch {
+            await revokePackageAccess(for: packageID)
+            throw IntegrationFailure.settingsUnreadable
         }
     }
 
@@ -323,7 +582,19 @@ actor SharedFolderConfigurationService {
             let document = try Self.readSettingsDocument(at: paths.settingsFile)
             let global = try Self.globalIntegrations(from: document)
             let defaults = try Self.integrationDefaults(from: document)
-            let settings = try Self.packageIntegrations(paths: paths, packageID: packageID.rawValue)
+            let packageDirectoryName = try packageDirectoryIndex.directoryName(
+                for: packageID.rawValue,
+                at: paths.packagesDirectory
+            )
+            let settings: [String: JSONValue]
+            if let packageDirectoryName {
+                settings = try Self.packageIntegrations(
+                    paths: paths,
+                    packageDirectoryName: packageDirectoryName
+                )
+            } else {
+                settings = [:]
+            }
             let items = IntegrationKind.allCases.map { kind -> IntegrationItemStatus in
                 let key = kind.rawValue
                 let defaultValue: JSONValue
@@ -368,13 +639,20 @@ actor SharedFolderConfigurationService {
 
     /// Closes open file descriptors after Android stops but preserves configured roots for restart.
     func runtimeDidStop() async {
+        try? await beginFileServiceUpdate(allowClosed: true)
+        defer { finishFileServiceUpdate() }
         await fileService.closeAllOpenFiles()
     }
 
     /// Stops root security scopes and releases the service at daemon shutdown.
     func shutdown() async {
-        guard !isClosed else { return }
+        try? await beginFileServiceUpdate(allowClosed: true)
+        guard !isClosed else {
+            finishFileServiceUpdate()
+            return
+        }
         isClosed = true
+        defer { finishFileServiceUpdate() }
         await fileService.runtimeDidStop()
         for root in resolvedRoots.values where root.scopeStarted {
             stopSecurityScope(root.url)
@@ -392,17 +670,32 @@ actor SharedFolderConfigurationService {
         } catch {
             throw .settingsUnreadable
         }
-        let packageAccess = try Self.readPackageAccess(paths: paths, document: document)
+        let packageEntries = try packageDirectoryIndex.entries(at: paths.packagesDirectory)
+        let packageAccess = try Self.readPackageAccess(
+            paths: paths,
+            document: document,
+            packageEntries: packageEntries
+        )
         try await fileService.replaceConfiguration(
             roots: Self.rootDefinitions(sharedURL: paths.sharedDirectory, roots: roots, resolvedRoots: resolved),
             packageAccess: packageAccess
         )
     }
 
+    private func revokePackageAccess(for packageID: String?) async {
+        if let packageID {
+            try? await fileService.replacePackageAccess([:], for: packageID)
+        } else {
+            try? await fileService.replacePackageAccess([:])
+        }
+    }
+
     private func persistAndReplaceService(
         roots candidateRoots: [StoredRoot],
         resolved candidateResolved: [String: ResolvedRoot]
     ) async throws(IntegrationFailure) {
+        try await beginFileServiceUpdate()
+        defer { finishFileServiceUpdate() }
         let originalDocument: [String: Any]
         do {
             originalDocument = try Self.readSettingsDocument(at: paths.settingsFile)
@@ -425,6 +718,28 @@ actor SharedFolderConfigurationService {
     private func requireOpen() throws(RuntimeWireError) {
         guard !isClosed else {
             throw .runtime("hostShuttingDown", message: "APKRun's background service is stopping.")
+        }
+    }
+
+    private func beginFileServiceUpdate(allowClosed: Bool = false) async throws(IntegrationFailure) {
+        while isUpdatingFileService {
+            await withCheckedContinuation { continuation in
+                fileServiceUpdateWaiters.append(continuation)
+            }
+        }
+        guard allowClosed || !isClosed else {
+            throw .transferFailed
+        }
+        isUpdatingFileService = true
+    }
+
+    private func finishFileServiceUpdate() {
+        guard isUpdatingFileService else { return }
+        isUpdatingFileService = false
+        let waiters = fileServiceUpdateWaiters
+        fileServiceUpdateWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 
@@ -649,15 +964,18 @@ actor SharedFolderConfigurationService {
 
     private static func readPackageAccess(
         paths: APKRunPaths,
-        document: [String: Any]
+        document: [String: Any],
+        packageEntries: [PackageDirectoryEntry]
     ) throws(IntegrationFailure) -> [String: [String: IntegrationCore.SharedFolderAccess]] {
         let global = try globalIntegrations(from: document)
         let defaults = try integrationDefaults(from: document)
         let globalEnabled = global["sharedFolders"] ?? true
-        let entries = try packageDirectoryNames(at: paths.packagesDirectory)
         var result: [String: [String: IntegrationCore.SharedFolderAccess]] = [:]
-        for packageID in entries {
-            let settings = try packageIntegrations(paths: paths, packageID: packageID)
+        for entry in packageEntries {
+            let settings = try packageIntegrations(
+                paths: paths,
+                packageDirectoryName: entry.directoryName
+            )
             let policy: IntegrationCore.SharedFolderAccess
             if !globalEnabled {
                 policy = .off
@@ -678,8 +996,42 @@ actor SharedFolderConfigurationService {
                 for rootID in try storedRoots(from: document).map(\.id) {
                     byRoot[rootID] = policy
                 }
-                result[packageID] = byRoot
+                result[entry.packageID] = byRoot
             }
+        }
+        return result
+    }
+
+    private static func readPackageAccess(
+        paths: APKRunPaths,
+        document: [String: Any],
+        packageID: String,
+        packageDirectoryName: String?
+    ) throws(IntegrationFailure) -> [String: IntegrationCore.SharedFolderAccess] {
+        guard RuntimePackageID(rawValue: packageID) != nil, let packageDirectoryName else {
+            return [:]
+        }
+
+        let global = try globalIntegrations(from: document)
+        guard global["sharedFolders"] ?? true else { return [:] }
+        let defaults = try integrationDefaults(from: document)
+        let settings = try packageIntegrations(paths: paths, packageDirectoryName: packageDirectoryName)
+        let policy: IntegrationCore.SharedFolderAccess
+        switch settings["sharedFolders"] ?? defaults["sharedFolders"] {
+        case nil, .string("off"):
+            policy = .off
+        case .string("readOnly"):
+            policy = .readOnly
+        case .string("readWrite"):
+            policy = .readWrite
+        default:
+            throw .settingsUnreadable
+        }
+        guard policy != .off else { return [:] }
+
+        var result: [String: IntegrationCore.SharedFolderAccess] = ["shared": policy]
+        for rootID in try storedRoots(from: document).map(\.id) {
+            result[rootID] = policy
         }
         return result
     }
@@ -713,9 +1065,10 @@ actor SharedFolderConfigurationService {
 
     private static func packageIntegrations(
         paths: APKRunPaths,
-        packageID: String
+        packageDirectoryName: String
     ) throws(IntegrationFailure) -> [String: JSONValue] {
-        let settingsURL = paths.packageSettingsFile(packageID: packageID)
+        let settingsURL = paths.packageDirectory(packageID: packageDirectoryName)
+            .appendingPathComponent("settings.json")
         guard let data = try readRegularFile(at: settingsURL, missingIsEmpty: true) else { return [:] }
         guard let document = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw .settingsUnreadable
@@ -756,41 +1109,6 @@ actor SharedFolderConfigurationService {
             guard valid else { throw .settingsUnreadable }
         }
         return values
-    }
-
-    private static func packageDirectoryNames(at directory: URL) throws(IntegrationFailure) -> [String] {
-        let descriptor = directory.path.withCString {
-            Darwin.open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
-        }
-        guard descriptor >= 0 else {
-            if errno == ENOENT { return [] }
-            throw .settingsUnreadable
-        }
-        defer { _ = Darwin.close(descriptor) }
-        guard let stream = fdopendir(dup(descriptor)) else { throw .settingsUnreadable }
-        defer { closedir(stream) }
-        var names: [String] = []
-        while let rawEntry = readdir(stream) {
-            var entry = rawEntry.pointee
-            let name = withUnsafePointer(to: &entry.d_name) { pointer in
-                pointer.withMemoryRebound(to: CChar.self, capacity: Int(NAME_MAX) + 1) {
-                    String(cString: $0)
-                }
-            }
-            guard name != ".", name != "..", !name.hasPrefix("."),
-                RuntimePackageID(rawValue: name) != nil
-            else {
-                continue
-            }
-            var info = stat()
-            guard name.withCString({ fstatat(descriptor, $0, &info, AT_SYMLINK_NOFOLLOW) }) == 0,
-                (info.st_mode & S_IFMT) == S_IFDIR
-            else {
-                continue
-            }
-            names.append(name)
-        }
-        return names.sorted()
     }
 
     private static func jsonValue(_ value: Any) throws -> JSONValue {

@@ -1,6 +1,5 @@
 import APKStoreCore
 import Foundation
-import GuestProtocol
 import RuntimeCore
 import Testing
 
@@ -192,41 +191,41 @@ func adbStoreChannelDoesNotPassUnsupportedDowngradeRequestsToAndroid() async thr
     #expect(await guest.installCalls.isEmpty)
 }
 
-private func packageInfo(package: String, versionCode: Int64) -> GPPackageInfo {
-    var info = GPPackageInfo()
-    info.package = package
-    info.versionCode = versionCode
-    info.versionName = "1.2.3"
-    info.label = "Hello Split"
-    info.enabled = true
-    info.launchableComponent = "\(package)/.MainActivity"
-    info.installerPackage = "io.apkrun.store"
-    info.firstInstallTimeMs = 1_700_000_000_000
-    info.lastUpdateTimeMs = 1_700_000_001_000
-    info.targetSdk = 35
-    info.minSdk = 23
-    info.signingSha256 = [Data(repeating: 0xAB, count: 32)]
-    return info
+private func packageInfo(package: String, versionCode: Int64) -> GuestPackageInfo {
+    GuestPackageInfo(
+        package: package,
+        versionCode: versionCode,
+        versionName: "1.2.3",
+        label: "Hello Split",
+        enabled: true,
+        launchableComponent: "\(package)/.MainActivity",
+        installerPackage: "io.apkrun.store",
+        firstInstallTimeMs: 1_700_000_000_000,
+        lastUpdateTimeMs: 1_700_000_001_000,
+        targetSdk: 35,
+        minSdk: 23,
+        signingSha256: [Data(repeating: 0xAB, count: 32)]
+    )
 }
 
-private func packageSummary(package: String, versionCode: Int64) -> GPPackageSummary {
-    var summary = GPPackageSummary()
-    summary.package = package
-    summary.label = "Hello Text"
-    summary.versionCode = versionCode
-    summary.launchable = true
-    summary.userInstalled = true
-    return summary
+private func packageSummary(package: String, versionCode: Int64) -> GuestPackageSummary {
+    GuestPackageSummary(
+        package: package,
+        label: "Hello Text",
+        versionCode: versionCode,
+        launchable: true,
+        userInstalled: true
+    )
 }
 
 private actor FakeStoreGuestAgent: ADBStoreGuestAgent {
-    private let info: GPPackageInfo?
-    private let summaries: [GPPackageSummary]
+    private let info: GuestPackageInfo?
+    private let summaries: [GuestPackageSummary]
     private(set) var installCalls: [([URL], Bool)] = []
     private(set) var queryPackages: [String] = []
-    private(set) var listFilters: [GPPackageFilter] = []
+    private(set) var listFilters: [GuestPackageFilter] = []
 
-    init(packageInfo: GPPackageInfo? = nil, summaries: [GPPackageSummary] = []) {
+    init(packageInfo: GuestPackageInfo? = nil, summaries: [GuestPackageSummary] = []) {
         info = packageInfo
         self.summaries = summaries
     }
@@ -235,12 +234,12 @@ private actor FakeStoreGuestAgent: ADBStoreGuestAgent {
         installCalls.append((apks, allowDowngrade))
     }
 
-    func queryPackage(_ package: String) async throws(GuestAgentFailure) -> GPPackageInfo? {
+    func queryPackage(_ package: String) async throws(GuestAgentFailure) -> GuestPackageInfo? {
         queryPackages.append(package)
         return info
     }
 
-    func listPackages(filter: GPPackageFilter) async throws(GuestAgentFailure) -> [GPPackageSummary] {
+    func listPackages(filter: GuestPackageFilter) async throws(GuestAgentFailure) -> [GuestPackageSummary] {
         listFilters.append(filter)
         return summaries
     }

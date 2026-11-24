@@ -46,11 +46,87 @@ public enum DevelopmentGuestTaskEvent: Equatable, Sendable {
     case vanished(packageID: String, taskID: Int32)
 }
 
+/// The host-side result of accepting a guest file offer.
+public struct GuestExportStart: Equatable, Sendable {
+    /// The bulk transfer identifier, or `nil` when the offer was declined.
+    public let transferID: UInt64?
+
+    /// Creates the result of resolving one guest file offer.
+    public init(transferID: UInt64?) {
+        self.transferID = transferID
+    }
+}
+
+/// Whether APKRun accepts a guest file offer.
+public enum GuestExportDecision: Equatable, Sendable {
+    /// Accept the file and start its bulk transfer.
+    case accept
+
+    /// Decline the file offer.
+    case decline
+}
+
+/// A failure while arming a verified receive for an Android file offer.
+public enum DevelopmentGuestExportReceiveFailure: Error, Equatable, Sendable {
+    /// The Guest Agent or its authenticated bulk connection was unavailable.
+    case guestAgent(GuestAgentFailure)
+    /// The caller's destination or the incoming offer could not be prepared.
+    case fileTransfer(GuestBulkFileReceiveFailure)
+}
+
+/// A file offered by an Android app for Save to Mac, scoped to its source package and display.
+public struct DevelopmentGuestExportOffer: Equatable, Sendable {
+    /// Opaque host identifier used to accept or decline this offer.
+    public let offerID: UUID
+    /// Display name selected by the guest app.
+    public let name: String
+    /// MIME type reported by the guest app.
+    public let mimeType: String
+    /// File size in bytes.
+    public let size: UInt64
+    /// Package that offered the file.
+    public let sourcePackage: String
+    /// Android display that owns the offering app session.
+    public let displayID: Int32
+
+    /// Creates a host-side copy of a guest offer.
+    public init(
+        offerID: UUID,
+        name: String,
+        mimeType: String,
+        size: UInt64,
+        sourcePackage: String,
+        displayID: Int32
+    ) {
+        self.offerID = offerID
+        self.name = name
+        self.mimeType = mimeType
+        self.size = size
+        self.sourcePackage = sourcePackage
+        self.displayID = displayID
+    }
+
+    fileprivate init(offerID: UUID, wireOffer offer: GPExportFileOffered) {
+        self.init(
+            offerID: offerID,
+            name: offer.name,
+            mimeType: offer.mimeType,
+            size: offer.size,
+            sourcePackage: offer.sourcePackage,
+            displayID: offer.displayID
+        )
+    }
+}
+
 /// The development Guest Agent of one boot (guest-components.md §3, §6.1): it installs and starts the agent, keeps
 /// the control connection, restarts a dead agent within the restart budget, and removes its forwards when it stops.
 public actor DevelopmentGuestAgent {
     /// The required-agent connection budget from runtime-daemon.md §3.2.
     public static let defaultConnectTimeout: Duration = .seconds(30)
+    /// SaveToMacActivity can offer at most twenty items in one batch.
+    public static let maximumPendingExportOffers = 20
+    /// Time allowed for the host to resolve one Save-to-Mac offer.
+    public static let defaultExportOfferLifetime: Duration = .minutes(5)
 
     /// The control connection, with its keepalive and resync.
     public nonisolated let supervisor: GuestAgentSupervisor
@@ -58,6 +134,8 @@ public actor DevelopmentGuestAgent {
     public nonisolated let taskEvents: AsyncStream<DevelopmentGuestTaskEvent>
     /// Display lifecycle changes from the same sequenced Guest Agent event relay.
     public nonisolated let displayEvents: AsyncStream<GuestDisplayEvent>
+    /// Guest app files offered for a host Save to Mac flow.
+    public nonisolated let exportOffers: AsyncStream<DevelopmentGuestExportOffer>
     /// Android reboot notifications inferred from consecutive supervisor snapshots.
     public nonisolated var androidRestartEvents: AsyncStream<GuestAndroidRestart> {
         supervisor.androidRestartEvents
@@ -73,6 +151,7 @@ public actor DevelopmentGuestAgent {
     private let hostRequestHandler: GuestHostRequestHandler?
     private let hostRequestSessionFactory: GuestHostRequestSessionFactory?
     private let logSink: (any LogSink)?
+    private let exportOfferLifetime: Duration
     private var budget = GuestAgentRestartBudget()
     private var restartsRefused = false
     /// Counts the stops, so that a start in flight can tell that the boot that asked for it has ended.
@@ -80,12 +159,23 @@ public actor DevelopmentGuestAgent {
     /// The input connection, and the control session token that it presents (input.md §8, decision D11).
     private var inputConnection: GuestConnection?
     private var inputConnectionToken: Data?
+    /// Offers are mapped to the guest ID and authenticated control session that emitted them.
+    private struct PendingExportOffer {
+        let guestOfferID: UInt64
+        let generation: UInt64
+        let sessionToken: Data
+    }
+
+    private var pendingExportOffers: [UUID: PendingExportOffer] = [:]
+    private var exportOfferTimeoutTasks: [UUID: Task<Void, Never>] = [:]
     /// The reusable bulk endpoint of the current control session.
     private var bulkConnection: GuestConnection?
     private var bulkConnectionToken: Data?
     private var bulkChannel: GuestBulkChannel?
     private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
     private let displayEventContinuation: AsyncStream<GuestDisplayEvent>.Continuation
+    private let exportOfferContinuation: AsyncStream<DevelopmentGuestExportOffer>.Continuation
+    private var exportOfferHandler: (@Sendable (DevelopmentGuestExportOffer) async -> Void)?
     private var taskEventRelay: Task<Void, Never>?
 
     /// Creates the coordinator for `bundle`; ADB installs and starts the agent, while the selected transport connects
@@ -98,10 +188,12 @@ public actor DevelopmentGuestAgent {
         hostRequestHandler: GuestHostRequestHandler? = nil,
         hostRequestSessionFactory: GuestHostRequestSessionFactory? = nil,
         logSink: (any LogSink)? = nil,
-        clock: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
+        clock: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now },
+        exportOfferLifetime: Duration = DevelopmentGuestAgent.defaultExportOfferLifetime
     ) {
         self.adb = adb
         self.clock = clock
+        self.exportOfferLifetime = exportOfferLifetime
         self.hostVersion = hostVersion
         self.hostRequestHandler = hostRequestHandler
         self.hostRequestSessionFactory = hostRequestSessionFactory
@@ -131,6 +223,12 @@ public actor DevelopmentGuestAgent {
         )
         self.displayEvents = displayEvents
         self.displayEventContinuation = displayEventContinuation
+        let (exportOffers, exportOfferContinuation) = AsyncStream.makeStream(
+            of: DevelopmentGuestExportOffer.self,
+            bufferingPolicy: .bufferingNewest(64)
+        )
+        self.exportOffers = exportOffers
+        self.exportOfferContinuation = exportOfferContinuation
         relay.set { [weak self] loss in
             guard let self else {
                 return false
@@ -251,11 +349,17 @@ public actor DevelopmentGuestAgent {
     /// process keeps running, because the next start replaces it, and the guest is not powered off.
     public func stop() async {
         generation += 1
+        pendingExportOffers.removeAll()
+        for timeoutTask in exportOfferTimeoutTasks.values {
+            timeoutTask.cancel()
+        }
+        exportOfferTimeoutTasks.removeAll()
         await supervisor.stop()
         taskEventRelay?.cancel()
         taskEventRelay = nil
         taskEventContinuation.finish()
         displayEventContinuation.finish()
+        exportOfferContinuation.finish()
         // The input connection belongs to the control session, so it ends with it.
         await inputConnection?.close()
         inputConnection = nil
@@ -347,26 +451,108 @@ public actor DevelopmentGuestAgent {
         )
     }
 
+    /// Arms a verified inbound file receiver before accepting a guest export offer.
+    public func prepareExportFileReceive(
+        expectedSize: UInt64,
+        destination: FileHandle
+    ) async throws(DevelopmentGuestExportReceiveFailure) -> GuestBulkFileReceiver {
+        let channel: GuestBulkChannel
+        do throws(GuestAgentFailure) {
+            channel = try await bulkTransferChannel()
+        } catch {
+            throw .guestAgent(error)
+        }
+        do throws(GuestBulkFileReceiveFailure) {
+            return try await channel.prepareFileReceive(
+                expectedSize: expectedSize,
+                destination: destination
+            )
+        } catch {
+            throw .fileTransfer(error)
+        }
+    }
+
     /// Announces files already received over the bulk endpoint to the package on the selected Android display.
     public func importFiles(
         package: String,
         displayID: Int32,
-        files: [GPFileRef]
-    ) async throws(GuestAgentFailure) -> GPImportResult {
+        files: [GuestFileReference]
+    ) async throws(GuestAgentFailure) -> GuestFileImportResult {
         try requireAvailable()
         do {
-            return try await supervisor.send(
-                GuestImportFilesOperation(package: package, displayID: displayID, files: files)
+            let wireFiles = files.map { file in
+                var reference = GPFileRef()
+                reference.transferID = file.transferID
+                reference.name = file.name
+                reference.mimeType = file.mimeType
+                reference.size = file.size
+                return reference
+            }
+            let result = try await supervisor.send(
+                GuestImportFilesOperation(package: package, displayID: displayID, files: wireFiles)
             )
+            let disposition: GuestFileImportDisposition
+            switch result.disposition {
+            case .shared:
+                disposition = .shared
+            case .savedToDownloads:
+                disposition = .savedToDownloads
+            default:
+                disposition = .unsupported
+            }
+            return GuestFileImportResult(contentURIs: result.contentUri, disposition: disposition)
         } catch {
             throw .operation(error)
         }
     }
 
+    /// Accepts or declines a guest file offer using the files-capability-gated protocol operation.
+    public func resolveExport(
+        offerID: UUID,
+        decision: GuestExportDecision
+    ) async throws(GuestAgentFailure) -> GuestExportStart {
+        try requireAvailable()
+        let started = generation
+        guard let pending = pendingExportOffers.removeValue(forKey: offerID) else {
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
+        exportOfferTimeoutTasks.removeValue(forKey: offerID)?.cancel()
+        guard pending.generation == started else {
+            throw .operationFailed(reason: GuestProtocolFailure.disconnected.catalogName)
+        }
+        let wireDecision: GPExportDecision =
+            switch decision {
+            case .accept: .accept
+            case .decline: .decline
+            }
+        let result: GPExportStart
+        do {
+            result = try await supervisor.send(
+                GuestResolveExportOperation(offerID: pending.guestOfferID, decision: wireDecision),
+                requiringSessionToken: pending.sessionToken
+            )
+        } catch {
+            throw .operation(error)
+        }
+        try requireStarted(started)
+        return GuestExportStart(transferID: result.hasTransferID ? result.transferID : nil)
+    }
+
+    /// Installs the daemon's session-bound handler for guest file offers.
+    ///
+    /// A handler must authorize the source package and display against a live session, check the
+    /// package's files policy, and prepare a receiver before accepting an offer. Without a handler,
+    /// offers are declined.
+    public func setExportOfferHandler(
+        _ handler: (@Sendable (DevelopmentGuestExportOffer) async -> Void)?
+    ) {
+        exportOfferHandler = handler
+    }
+
     /// Replaces the MacFilesProvider grants and opens the guest bulk channel for provider RPC.
     public func setSharedFolderAccess(
-        roots: [GPSharedRoot],
-        access: [GPPackageAccess]
+        roots: [GuestSharedFolderRoot],
+        access: [GuestPackageSharedFolderAccess]
     ) async throws(GuestAgentFailure) {
         try requireAvailable()
         guard await supervisor.statusSnapshot().state == .ready else {
@@ -374,7 +560,10 @@ public actor DevelopmentGuestAgent {
         }
         do throws(GuestProtocolFailure) {
             _ = try await supervisor.send(
-                GuestSetSharedFolderAccessOperation(roots: roots, access: access)
+                GuestSetSharedFolderAccessOperation(
+                    roots: Self.wireRoots(roots),
+                    access: Self.wireAccess(access)
+                )
             )
         } catch {
             throw .operation(error)
@@ -385,8 +574,8 @@ public actor DevelopmentGuestAgent {
     /// Applies shared-folder policy on the just-handshaken connection while its supervisor is still reconciling.
     /// This keeps guest filesystem access synchronized before queued host operations can run.
     public func setSharedFolderAccess(
-        roots: [GPSharedRoot],
-        access: [GPPackageAccess],
+        roots: [GuestSharedFolderRoot],
+        access: [GuestPackageSharedFolderAccess],
         on controlConnection: GuestConnection
     ) async throws(GuestAgentFailure) {
         try requireAvailable()
@@ -398,7 +587,10 @@ public actor DevelopmentGuestAgent {
         }
         do throws(GuestProtocolFailure) {
             _ = try await controlConnection.send(
-                GuestSetSharedFolderAccessOperation(roots: roots, access: access)
+                GuestSetSharedFolderAccessOperation(
+                    roots: Self.wireRoots(roots),
+                    access: Self.wireAccess(access)
+                )
             )
         } catch {
             throw .operation(error)
@@ -531,6 +723,7 @@ public actor DevelopmentGuestAgent {
         let updates = supervisor.updates
         let continuation = taskEventContinuation
         let displayContinuation = displayEventContinuation
+        let offerContinuation = exportOfferContinuation
         taskEventRelay = Task {
             for await event in updates {
                 guard let kind = event.kind else {
@@ -549,10 +742,114 @@ public actor DevelopmentGuestAgent {
                     displayContinuation.yield(.removed(displayID: display.displayID))
                 case .tasksCleared(let tasks):
                     displayContinuation.yield(.tasksCleared(displayID: tasks.displayID))
+                case .exportFileOffered(let wireOffer):
+                    Task { [weak self] in
+                        await self?.handleExportOffer(wireOffer)
+                    }
                 default:
                     break
                 }
             }
+        }
+    }
+
+    private func handleExportOffer(_ wireOffer: GPExportFileOffered) async {
+        let started = generation
+        let initialStatus = await supervisor.statusSnapshot()
+        guard initialStatus.state == .ready, let session = await supervisor.session else {
+            return
+        }
+        let currentStatus = await supervisor.statusSnapshot()
+        let currentSessionToken = await supervisor.session?.sessionToken
+        guard generation == started, currentStatus.state == .ready,
+            currentSessionToken == session.sessionToken
+        else {
+            return
+        }
+        discardExportOffers(fromOtherSessions: session.sessionToken)
+        guard pendingExportOffers.count < Self.maximumPendingExportOffers else {
+            await sendExportDecision(
+                offerID: wireOffer.offerID,
+                decision: .decline,
+                sessionToken: session.sessionToken
+            )
+            return
+        }
+        let offerID = UUID()
+        let offer = DevelopmentGuestExportOffer(offerID: offerID, wireOffer: wireOffer)
+        pendingExportOffers[offerID] = PendingExportOffer(
+            guestOfferID: wireOffer.offerID,
+            generation: started,
+            sessionToken: session.sessionToken
+        )
+        let lifetime = exportOfferLifetime
+        exportOfferTimeoutTasks[offerID] = Task { [weak self] in
+            do {
+                try await Task.sleep(for: lifetime)
+            } catch {
+                return
+            }
+            await self?.expireExportOffer(offerID)
+        }
+        exportOfferContinuation.yield(offer)
+        guard let exportOfferHandler else {
+            _ = try? await resolveExport(offerID: offer.offerID, decision: .decline)
+            return
+        }
+        await exportOfferHandler(offer)
+    }
+
+    private func discardExportOffers(fromOtherSessions sessionToken: Data) {
+        let staleIDs = pendingExportOffers.compactMap { offerID, pending in
+            pending.sessionToken == sessionToken ? nil : offerID
+        }
+        for offerID in staleIDs {
+            pendingExportOffers[offerID] = nil
+            exportOfferTimeoutTasks.removeValue(forKey: offerID)?.cancel()
+        }
+    }
+
+    private func expireExportOffer(_ offerID: UUID) async {
+        guard let pending = pendingExportOffers.removeValue(forKey: offerID) else {
+            exportOfferTimeoutTasks[offerID] = nil
+            return
+        }
+        exportOfferTimeoutTasks[offerID] = nil
+        guard pending.generation == generation else { return }
+        await sendExportDecision(
+            offerID: pending.guestOfferID,
+            decision: .decline,
+            sessionToken: pending.sessionToken
+        )
+    }
+
+    private func sendExportDecision(
+        offerID: UInt64,
+        decision: GPExportDecision,
+        sessionToken: Data
+    ) async {
+        _ = try? await supervisor.send(
+            GuestResolveExportOperation(offerID: offerID, decision: decision),
+            requiringSessionToken: sessionToken
+        )
+    }
+
+    private static func wireRoots(_ roots: [GuestSharedFolderRoot]) -> [GPSharedRoot] {
+        roots.map { configuredRoot in
+            var root = GPSharedRoot()
+            root.rootID = configuredRoot.id
+            root.title = configuredRoot.title
+            root.maxAccess = configuredRoot.access == .readWrite ? .readWrite : .readOnly
+            return root
+        }
+    }
+
+    private static func wireAccess(_ grants: [GuestPackageSharedFolderAccess]) -> [GPPackageAccess] {
+        grants.map { grant in
+            var access = GPPackageAccess()
+            access.package = grant.packageID
+            access.access = grant.access == .readWrite ? .readWrite : .readOnly
+            return access
         }
     }
 
@@ -721,6 +1018,25 @@ public actor DevelopmentGuestAgent {
         }
     }
 
+    /// Queries PackageManager and returns host-facing package metadata without exposing protocol DTOs.
+    public func queryPackageMetadata(_ package: String) async throws(GuestAgentFailure) -> GuestPackageInfo? {
+        guard let info = try await queryPackage(package) else { return nil }
+        return GuestPackageInfo(
+            package: info.package,
+            versionCode: info.versionCode,
+            versionName: info.versionName,
+            label: info.label,
+            enabled: info.enabled,
+            launchableComponent: info.launchableComponent,
+            installerPackage: info.installerPackage,
+            firstInstallTimeMs: info.firstInstallTimeMs,
+            lastUpdateTimeMs: info.lastUpdateTimeMs,
+            targetSdk: info.targetSdk,
+            minSdk: info.minSdk,
+            signingSha256: info.signingSha256
+        )
+    }
+
     /// Lists Android packages through Guest Agent operation 20.
     public func listPackages(
         filter: GPPackageFilter = .userInstalled
@@ -731,6 +1047,30 @@ public actor DevelopmentGuestAgent {
             return result.packages
         } catch {
             throw .operation(error)
+        }
+    }
+
+    /// Lists PackageManager metadata without exposing GuestProtocol types to runtime composition modules.
+    public func listPackageMetadata(
+        filter: GuestPackageFilter = .userInstalled
+    ) async throws(GuestAgentFailure) -> [GuestPackageSummary] {
+        let wireFilter: GPPackageFilter
+        switch filter {
+        case .launchable:
+            wireFilter = .launchable
+        case .userInstalled:
+            wireFilter = .userInstalled
+        case .all:
+            wireFilter = .all
+        }
+        return try await listPackages(filter: wireFilter).map { package in
+            GuestPackageSummary(
+                package: package.package,
+                label: package.label,
+                versionCode: package.versionCode,
+                launchable: package.launchable,
+                userInstalled: package.userInstalled
+            )
         }
     }
 

@@ -169,7 +169,7 @@ public actor SharedFolderService {
         let isWritable: Bool
     }
 
-    private nonisolated let ioQueue = DispatchQueue(label: "io.apkrun.integration.shared-folders")
+    nonisolated let ioQueue = DispatchQueue(label: "io.apkrun.integration.shared-folders")
     private var roots: [String: RootDescriptor]
     private var packageAccess: [String: [String: SharedFolderAccess]]
     private var handles: [UInt64: OpenHandle] = [:]
@@ -179,6 +179,8 @@ public actor SharedFolderService {
     private var isStopped = false
     private var isReconfiguring = false
     private var inFlightWaiters: [CheckedContinuation<Void, Never>] = []
+
+    var inFlightRequestCount: Int { inFlightRequests }
 
     /// Opens the configured roots and records their effective package access.
     ///
@@ -274,9 +276,28 @@ public actor SharedFolderService {
     }
 
     /// Replaces all package access after settings or the global shared-folder switch changes.
-    public func replacePackageAccess(_ newAccess: [String: [String: SharedFolderAccess]]) throws(IntegrationFailure) {
-        try ensureRunning()
-        packageAccess = newAccess
+    ///
+    /// Requests already in flight are allowed to finish before changed package handles are
+    /// closed. Handles for packages whose effective access changed are invalidated so a
+    /// previously granted file descriptor cannot survive revocation or a downgrade.
+    public func replacePackageAccess(
+        _ newAccess: [String: [String: SharedFolderAccess]]
+    ) async throws(IntegrationFailure) {
+        try await replacePackageAccess(newAccess, for: nil)
+    }
+
+    /// Replaces one package's access without rescanning the other package policies.
+    public func replacePackageAccess(
+        _ newAccess: [String: SharedFolderAccess],
+        for packageID: String
+    ) async throws(IntegrationFailure) {
+        var updated = packageAccess
+        if newAccess.isEmpty {
+            updated.removeValue(forKey: packageID)
+        } else {
+            updated[packageID] = newAccess
+        }
+        try await replacePackageAccess(updated, for: packageID)
     }
 
     /// Replaces the roots and package access after shared-folder settings change.
@@ -338,6 +359,115 @@ public actor SharedFolderService {
         await withCheckedContinuation { continuation in
             ioQueue.async {
                 for descriptor in oldDescriptors {
+                    _ = Darwin.close(descriptor)
+                }
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Reopens any root whose selected path no longer names the directory held by its descriptor.
+    ///
+    /// This keeps availability and file operations aligned when a folder is removed, replaced, or
+    /// restored at the same path. Requests pause while descriptors are checked and swapped.
+    public func refreshChangedRootDescriptors() async throws(IntegrationFailure) {
+        try ensureRunning()
+        isReconfiguring = true
+        defer { isReconfiguring = false }
+        while inFlightRequests > 0 {
+            await withCheckedContinuation { continuation in
+                inFlightWaiters.append(continuation)
+            }
+        }
+        guard !isStopped else {
+            throw .transferFailed
+        }
+        inFlightRequests += 1
+        defer { finishInFlightRequest() }
+
+        let currentRoots = roots
+        let refreshResult: (replacements: [String: RootDescriptor], changedRootIDs: Set<String>) =
+            await withCheckedContinuation { continuation in
+                ioQueue.async {
+                    var replacements: [String: RootDescriptor] = [:]
+                    var changedRootIDs = Set<String>()
+
+                    for root in currentRoots.values {
+                        let opened = root.definition.directoryURL.path.withCString {
+                            Darwin.open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+                        }
+                        let replacement: RootDescriptor
+                        if opened >= 0 {
+                            replacement = RootDescriptor(
+                                definition: root.definition,
+                                fileDescriptor: opened,
+                                unavailableProblem: nil
+                            )
+                        } else {
+                            let openError = errno
+                            replacement = RootDescriptor(
+                                definition: root.definition,
+                                fileDescriptor: -1,
+                                unavailableProblem: Self.folderProblem(for: openError)
+                            )
+                        }
+
+                        let matchesCurrentDescriptor: Bool
+                        if root.fileDescriptor < 0, replacement.fileDescriptor < 0 {
+                            matchesCurrentDescriptor = root.unavailableProblem == replacement.unavailableProblem
+                        } else if root.fileDescriptor >= 0, replacement.fileDescriptor >= 0 {
+                            matchesCurrentDescriptor = Self.sameDirectory(
+                                root.fileDescriptor,
+                                replacement.fileDescriptor
+                            )
+                        } else {
+                            matchesCurrentDescriptor = false
+                        }
+
+                        if matchesCurrentDescriptor {
+                            if replacement.fileDescriptor >= 0 {
+                                _ = Darwin.close(replacement.fileDescriptor)
+                            }
+                        } else {
+                            changedRootIDs.insert(root.definition.id)
+                            replacements[root.definition.id] = replacement
+                        }
+                    }
+
+                    continuation.resume(returning: (replacements, changedRootIDs))
+                }
+            }
+        let replacements = refreshResult.replacements
+        let changedRootIDs = refreshResult.changedRootIDs
+        guard !isStopped else {
+            let orphanedDescriptors = replacements.values
+                .map(\.fileDescriptor)
+                .filter { $0 >= 0 }
+            await withCheckedContinuation { continuation in
+                ioQueue.async {
+                    for descriptor in orphanedDescriptors {
+                        _ = Darwin.close(descriptor)
+                    }
+                    continuation.resume()
+                }
+            }
+            throw .transferFailed
+        }
+        guard !changedRootIDs.isEmpty else { return }
+
+        let affectedHandles = handles.filter { changedRootIDs.contains($0.value.rootID) }
+        let descriptorsToClose =
+            affectedHandles.values.map(\.fileDescriptor)
+            + changedRootIDs.compactMap { roots[$0]?.fileDescriptor }.filter { $0 >= 0 }
+        for handleID in affectedHandles.keys {
+            handles[handleID] = nil
+        }
+        reservedHandlesByPackage.removeAll()
+        roots.merge(replacements) { _, replacement in replacement }
+
+        await withCheckedContinuation { continuation in
+            ioQueue.async {
+                for descriptor in descriptorsToClose {
                     _ = Darwin.close(descriptor)
                 }
                 continuation.resume()
@@ -693,13 +823,13 @@ public actor SharedFolderService {
         handle handleID: UInt64,
         synchronize: Bool = false
     ) async throws(IntegrationFailure) {
-        try ensureRunning()
+        // Cleanup remains available after access revocation and while a policy update drains.
+        guard !isStopped else { throw .transferFailed }
         guard let handle = handles[handleID], handle.packageID == packageID else {
             throw .packageAccessDenied
         }
-        guard Self.hasInFlightCapacity(inFlightRequests) else {
-            throw .resourceExhausted
-        }
+        // Cleanup bypasses the normal request cap so a full read/write queue cannot strand a
+        // descriptor or make connection teardown forget an open handle.
         inFlightRequests += 1
         defer { finishInFlightRequest() }
         handles.removeValue(forKey: handleID)
@@ -1014,6 +1144,53 @@ public actor SharedFolderService {
         return handle
     }
 
+    private func replacePackageAccess(
+        _ newAccess: [String: [String: SharedFolderAccess]],
+        for packageID: String?
+    ) async throws(IntegrationFailure) {
+        try ensureRunning()
+
+        let changedPackages: Set<String>
+        if let packageID {
+            guard packageAccess[packageID] != newAccess[packageID] else { return }
+            changedPackages = [packageID]
+        } else {
+            changedPackages = Set(packageAccess.keys).union(newAccess.keys).filter {
+                packageAccess[$0] != newAccess[$0]
+            }
+            guard !changedPackages.isEmpty else { return }
+        }
+
+        isReconfiguring = true
+        defer { isReconfiguring = false }
+        while inFlightRequests > 0 {
+            await withCheckedContinuation { continuation in
+                inFlightWaiters.append(continuation)
+            }
+        }
+        guard !isStopped else { throw .transferFailed }
+
+        let revokedDescriptors = handles.values.compactMap { handle in
+            changedPackages.contains(handle.packageID) ? handle.fileDescriptor : nil
+        }
+        handles = handles.filter { !changedPackages.contains($0.value.packageID) }
+        for package in changedPackages {
+            packageAccess[package] = nil
+        }
+        for (package, access) in newAccess where packageID == nil || package == packageID {
+            packageAccess[package] = access
+        }
+
+        await withCheckedContinuation { continuation in
+            ioQueue.async {
+                for descriptor in revokedDescriptors {
+                    _ = Darwin.close(descriptor)
+                }
+                continuation.resume()
+            }
+        }
+    }
+
     private func allocateHandleID() -> UInt64? {
         guard nextHandle != 0 else { return nil }
         let allocated = nextHandle
@@ -1054,6 +1231,18 @@ public actor SharedFolderService {
                 continuation.resume()
             }
         }
+    }
+
+    private nonisolated static func sameDirectory(_ first: Int32, _ second: Int32) -> Bool {
+        var firstInfo = Darwin.stat()
+        var secondInfo = Darwin.stat()
+        guard fstat(first, &firstInfo) == 0, fstat(second, &secondInfo) == 0 else {
+            return false
+        }
+        return firstInfo.st_dev == secondInfo.st_dev
+            && firstInfo.st_ino == secondInfo.st_ino
+            && (firstInfo.st_mode & S_IFMT) == S_IFDIR
+            && (secondInfo.st_mode & S_IFMT) == S_IFDIR
     }
 
     // MARK: - Safe paths and metadata

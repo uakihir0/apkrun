@@ -1,6 +1,5 @@
 import DiagnosticsCore
 import Foundation
-import GuestProtocol
 import ImageCore
 import IntegrationCore
 import RuntimeAPI
@@ -42,12 +41,17 @@ private struct RuntimeTrackedOperation {
     var task: Task<Void, Never>?
 }
 
+private enum SharedFoldersHealthCheckError: Error, Sendable {
+    case unavailable
+}
+
 /// Composes the daemon's per-user runtime and owns it for the process lifetime.
 ///
 /// The host acquires the same instance lock used by `apkrun dev`, records its process state,
 /// opens the current image, and creates one RuntimeSupervisor. Runtime start remains on demand.
 public actor RuntimeHost {
     nonisolated let eventHub = RuntimeEventHub()
+    nonisolated let sessionListenerRegistry = RuntimeSessionListenerRegistry()
 
     private let paths: APKRunPaths
     private let buildInfo: BuildInfo
@@ -142,6 +146,18 @@ public actor RuntimeHost {
         self.diagnostics = diagnostics
         let logger = APKLogger(category: RuntimeLogCategory.host, sink: diagnostics.logSink)
         self.logger = logger
+        do {
+            try await diagnostics.healthChecks.register(
+                SharedFolderHealthCheck(sharedFolders: { [weak self] in
+                    guard let self else {
+                        throw SharedFoldersHealthCheckError.unavailable
+                    }
+                    return try await self.sharedFoldersForHealthCheck()
+                })
+            )
+        } catch {
+            logger.error("Shared-folder health check could not be registered")
+        }
         recordedBootOperationIDs = Set(
             BootRecordLog.read(from: paths.bootPerformanceFile).map(\.operationID)
         )
@@ -243,7 +259,12 @@ public actor RuntimeHost {
                 if let sharedFolderControl {
                     let fileService = sharedFolderControl.fileService
                     hostRequestSessionFactory = {
-                        let adapter = SharedFolderRequestAdapter(service: fileService)
+                        let adapter = SharedFolderRequestAdapter(
+                            service: fileService,
+                            refreshPackageAccess: { packageID in
+                                try await sharedFolderControl.refreshPackageAccess(for: packageID)
+                            }
+                        )
                         return GuestHostRequestSession(
                             handle: adapter.makeHandler(),
                             close: { await adapter.closeConnection() }
@@ -482,6 +503,7 @@ public actor RuntimeHost {
         if let service = headlessSessionService as? DaemonHeadlessSessionService {
             await service.shutdown()
         }
+        sessionListenerRegistry.invalidateAll()
         await supervisor?.stop(reason: reason)
         await sharedFolderControl?.runtimeDidStop()
         await packageQueryService?.detachRuntime()
@@ -533,17 +555,10 @@ public actor RuntimeHost {
         return await status()
     }
 
-    /// Launches an app through the daemon-owned Guest Agent session path.
-    ///
-    /// Until the native launcher endpoint is available, this operation is enabled only by the
-    /// Debug-only headless acceptance hook. The headless session owns a DisplayPool lease and
-    /// leaves frame surfaces unconsumed.
+    /// Launches an installed app through the daemon-owned Guest Agent session path.
     public func launch(_ request: RuntimeLaunchRequest) async throws(RuntimeWireError) -> RuntimeLaunchResult {
         try beginPackageLaunch(request.packageID)
         defer { finishPackageLaunch(request.packageID) }
-        guard headlessLaunchHookIsEnabled else {
-            throw Self.launchUnavailableError
-        }
         do {
             try await startRuntime(reason: .automatic)
         } catch {
@@ -553,6 +568,30 @@ public actor RuntimeHost {
         let service = try await makeHeadlessSessionService()
         try requirePackageLaunchAllowed(request.packageID)
         return try await service.launch(request)
+    }
+
+    /// Starts the runtime and opens one authenticated native-window session for the package.
+    func openWindowSession(_ request: OpenSessionRequest) async throws(RuntimeWireError)
+        -> RuntimeWindowSessionContext
+    {
+        try beginPackageLaunch(request.packageID)
+        defer { finishPackageLaunch(request.packageID) }
+        do {
+            try await startRuntime(reason: .automatic)
+        } catch {
+            throw Self.sessionWireError(for: error)
+        }
+        try requirePackageLaunchAllowed(request.packageID)
+        let sessionService = try await makeHeadlessSessionService()
+        guard let daemonSessionService = sessionService as? DaemonHeadlessSessionService else {
+            throw .runtime(
+                "integration.notSupported",
+                message: "This runtime can't open a native app window.",
+                remediation: "Start Android with a supported APKRun image, then try again."
+            )
+        }
+        let opened = try await daemonSessionService.openWindowSession(request)
+        return RuntimeWindowSessionContext(opened: opened, service: daemonSessionService)
     }
 
     /// Stops a package session through the daemon-owned Guest Agent.
@@ -582,6 +621,24 @@ public actor RuntimeHost {
         let service = packageQueryServiceInstance()
         try await service.open()
         return try await service.importPackage(request, files: files)
+    }
+
+    /// Transfers files to the live app session that owns the receiving window.
+    ///
+    /// This path never starts Android. The session service derives the package and display from the returned session
+    /// ID and checks the package's file-integration setting before opening the Guest Agent channels.
+    public func importFiles(
+        _ request: ImportFilesRequest,
+        files: [FileHandle]
+    ) async throws(RuntimeWireError) -> ImportResult {
+        guard let headlessSessionService, let supervisor, await supervisor.state == .ready else {
+            throw .runtime(
+                "guestAgentUnavailable",
+                message: "The Android app session isn't available for file sharing.",
+                remediation: "Open the app again, then retry the drop."
+            )
+        }
+        return try await headlessSessionService.importFiles(request, files: files)
     }
 
     /// Starts Android on demand, attaches its package channel, and installs an inspected import.
@@ -1539,6 +1596,7 @@ public actor RuntimeHost {
         if let service = headlessSessionService as? DaemonHeadlessSessionService {
             await service.shutdown()
         }
+        sessionListenerRegistry.invalidateAll()
         headlessSessionService = nil
         // Mark an in-flight VM start for cancellation before waiting for any storage work to finish.
         await supervisor?.stop(reason: .hostShutdown)
@@ -1769,14 +1827,6 @@ public actor RuntimeHost {
         }
     }
 
-    private var headlessLaunchHookIsEnabled: Bool {
-        #if DEBUG
-            buildInfo.configuration == .debug && environment["APKRUN_TEST_HEADLESS_LAUNCH"] == "1"
-        #else
-            false
-        #endif
-    }
-
     private func makeHeadlessSessionService() async throws(RuntimeWireError) -> any RuntimeSessionService {
         if let headlessSessionService {
             return headlessSessionService
@@ -1807,9 +1857,16 @@ public actor RuntimeHost {
         if let headlessSessionService {
             return headlessSessionService
         }
+        let packageService = packageQueryServiceInstance()
         let service = DaemonHeadlessSessionService(
             guestAgent: guestAgent,
             displayPool: displayPool,
+            fileIntegrationEnabled: { packageID in
+                try await packageService.filesIntegrationEnabled(packageID: packageID)
+            },
+            exportOfferDelivery: { [sessionListenerRegistry] sessionID, offer in
+                await sessionListenerRegistry.deliverExportOffer(sessionID: sessionID, offer: offer)
+            },
             logSink: diagnostics?.logSink
         )
         headlessSessionService = service
@@ -1823,6 +1880,13 @@ public actor RuntimeHost {
         let service = EmbeddedPackageService(paths: paths)
         packageQueryService = service
         return service
+    }
+
+    private func sharedFoldersForHealthCheck() async throws -> [SharedFolder] {
+        guard let sharedFolderControl else {
+            throw SharedFoldersHealthCheckError.unavailable
+        }
+        return try await sharedFolderControl.listFolders()
     }
 
     private func publishSharedFolderChanges() {
@@ -1888,11 +1952,6 @@ public actor RuntimeHost {
         )
     }
 
-    private static let launchUnavailableError = RuntimeWireError.runtime(
-        "windowUnavailable",
-        message: "APKRun can't open an Android app window in this build.",
-        remediation: "Use a Debug headless launch or update APKRun when native app windows are available."
-    )
     private static let guestAgentUnavailableError = RuntimeWireError.runtime(
         "guestAgentUnavailable",
         message: "The Android Guest Agent is unavailable.",

@@ -1,5 +1,16 @@
 @preconcurrency import Foundation
+import IOSurface
 import RuntimeAPI
+
+/// Events delivered by the private endpoint for one app session.
+public enum RuntimeSessionEvent: @unchecked Sendable {
+    /// One IOSurface in the current pool is ready to present.
+    case frameReady(FrameReadyMessage)
+    /// A complete new IOSurface pool replaced the prior generation.
+    case surfacesReplaced(SurfacesReplacedMessage, surfaces: [IOSurface])
+    /// The daemon invalidated the session endpoint.
+    case invalidated
+}
 
 /// Sends file drops over the authenticated XPC connection bound to one app session.
 ///
@@ -10,6 +21,10 @@ public final class RuntimeSessionClient: @unchecked Sendable {
     private let clientKind: RuntimeClientKind
     private let channel: any RuntimeSessionChannel
     private let exportOfferReceiver: RuntimeSessionExportReceiver
+    private let eventHub: RuntimeSessionEventHub
+
+    /// The single-consumer event stream for frame presentation and remote invalidation.
+    public let events: AsyncStream<RuntimeSessionEvent>
 
     /// Connects to a session endpoint using the current signed APKRun process identity.
     public init(
@@ -18,14 +33,15 @@ public final class RuntimeSessionClient: @unchecked Sendable {
         claimedIdentity: String? = nil,
         onExportOffer: (@Sendable (ExportOffer) -> Void)? = nil
     ) throws(RuntimeControlClientError) {
-        guard clientKind == .wrapper else {
+        guard clientKind == .wrapper || clientKind == .launcher else {
             throw .invalidClientIdentity
         }
         let configuration = try RuntimeControlClientConfiguration.current(
             clientKind: clientKind,
             claimedIdentity: claimedIdentity
         )
-        let exportOfferReceiver = RuntimeSessionExportReceiver(onOffer: onExportOffer)
+        let eventHub = RuntimeSessionEventHub()
+        let exportOfferReceiver = RuntimeSessionExportReceiver(onOffer: onExportOffer, eventHub: eventHub)
         let channel = try XPCSessionChannel(
             endpoint: endpoint,
             daemonSigningRequirement: configuration.daemonCodeSigningRequirement
@@ -33,6 +49,11 @@ public final class RuntimeSessionClient: @unchecked Sendable {
         self.clientKind = configuration.clientKind
         self.channel = channel
         self.exportOfferReceiver = exportOfferReceiver
+        self.eventHub = eventHub
+        events = eventHub.stream
+        channel.setInvalidationHandler { [weak exportOfferReceiver] in
+            exportOfferReceiver?.finish(notifyInvalidation: true)
+        }
         channel.installExportOfferReceiver(exportOfferReceiver)
     }
 
@@ -41,10 +62,16 @@ public final class RuntimeSessionClient: @unchecked Sendable {
         channel: any RuntimeSessionChannel,
         onExportOffer: (@Sendable (ExportOffer) -> Void)? = nil
     ) {
-        let exportOfferReceiver = RuntimeSessionExportReceiver(onOffer: onExportOffer)
+        let eventHub = RuntimeSessionEventHub()
+        let exportOfferReceiver = RuntimeSessionExportReceiver(onOffer: onExportOffer, eventHub: eventHub)
         self.clientKind = clientKind
         self.channel = channel
         self.exportOfferReceiver = exportOfferReceiver
+        self.eventHub = eventHub
+        events = eventHub.stream
+        channel.setInvalidationHandler { [weak exportOfferReceiver] in
+            exportOfferReceiver?.finish(notifyInvalidation: true)
+        }
         channel.installExportOfferReceiver(exportOfferReceiver)
     }
 
@@ -133,8 +160,74 @@ public final class RuntimeSessionClient: @unchecked Sendable {
         }
     }
 
+    /// Sends one ordered batch of translated window input to the guest.
+    public func sendInput(_ batch: InputBatch) {
+        guard let data = try? JSONEncoder().encode(batch) else {
+            return
+        }
+        channel.sendInput(data)
+    }
+
+    /// Reports whether this session's native window is key.
+    public func focusChanged(_ focused: Bool) {
+        channel.focusChanged(focused)
+    }
+
+    /// Reports that Core Animation committed a frame to the window.
+    ///
+    /// The session endpoint is session-scoped, so no caller-supplied session ID is needed.
+    public func frameDisplayed(_ message: FrameDisplayedMessage) {
+        guard let data = try? JSONEncoder().encode(message) else {
+            return
+        }
+        channel.frameDisplayed(data)
+    }
+
+    /// Reports whether the session window is visible.
+    public func visibilityChanged(_ message: VisibilityChangedMessage) {
+        guard let data = try? JSONEncoder().encode(message) else {
+            return
+        }
+        channel.visibilityChanged(data)
+    }
+
+    /// Closes this session using its configured Android task policy unless `policy` is supplied.
+    ///
+    /// A transport failure is returned without replay because the daemon may already have finished
+    /// the task and released the display.
+    public func closeSession(policy: SessionClosePolicy? = nil) async throws(RuntimeControlClientError) {
+        do {
+            let request = RuntimeCloseSessionRequest(
+                header: APIRequestHeader(clientKind: clientKind),
+                request: CloseSessionRequest(policy: policy)
+            )
+            let data: Data
+            do {
+                data = try JSONEncoder().encode(request)
+            } catch {
+                throw RuntimeControlClientError.encodingFailure
+            }
+            let response = try await channel.closeSession(data)
+            let reply: RuntimeCloseSessionReply
+            do {
+                reply = try JSONDecoder().decode(RuntimeCloseSessionReply.self, from: response)
+            } catch {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(code: failure.code, message: failure.message)
+            }
+        } catch let error as RuntimeControlClientError {
+            throw error
+        } catch {
+            let error = error as NSError
+            throw .transportFailure(domain: error.domain, code: error.code)
+        }
+    }
+
     /// Invalidates the session connection.
     public func invalidate() {
+        eventHub.finish(notifyInvalidation: false)
         channel.invalidate()
     }
 }
@@ -142,16 +235,99 @@ public final class RuntimeSessionClient: @unchecked Sendable {
 protocol RuntimeSessionChannel: Sendable {
     func importFiles(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
     func acceptExport(_ request: Data, file: FileHandle?) async throws(RuntimeControlClientError) -> Data
+    func sendInput(_ batch: Data)
+    func focusChanged(_ focused: Bool)
+    func closeSession(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func frameDisplayed(_ request: Data)
+    func visibilityChanged(_ request: Data)
     func installExportOfferReceiver(_ receiver: RuntimeSessionExportReceiver)
+    func setInvalidationHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
 
-/// Decodes and validates export offers before handing them to wrapper code.
-final class RuntimeSessionExportReceiver: NSObject, RuntimeSessionExportSink, @unchecked Sendable {
-    private let onOffer: (@Sendable (ExportOffer) -> Void)?
+extension RuntimeSessionChannel {
+    func sendInput(_ batch: Data) {}
+    func focusChanged(_ focused: Bool) {}
+    func closeSession(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .invalidRemoteProxy
+    }
+    func frameDisplayed(_ request: Data) {}
+    func visibilityChanged(_ request: Data) {}
+    func setInvalidationHandler(_ handler: @escaping @Sendable () -> Void) {}
+}
 
-    init(onOffer: (@Sendable (ExportOffer) -> Void)?) {
+/// Bounded event delivery shared by the XPC receiver and its session client.
+final class RuntimeSessionEventHub: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: AsyncStream<RuntimeSessionEvent>.Continuation?
+    private var isFinished = false
+    let stream: AsyncStream<RuntimeSessionEvent>
+
+    init() {
+        let pair = AsyncStream.makeStream(
+            of: RuntimeSessionEvent.self,
+            bufferingPolicy: .bufferingNewest(64)
+        )
+        stream = pair.stream
+        continuation = pair.continuation
+    }
+
+    func yield(_ event: RuntimeSessionEvent) {
+        lock.withLock {
+            guard !isFinished else { return }
+            continuation?.yield(event)
+        }
+    }
+
+    func finish(notifyInvalidation: Bool) {
+        lock.withLock {
+            guard !isFinished else { return }
+            if notifyInvalidation {
+                continuation?.yield(.invalidated)
+            }
+            isFinished = true
+            continuation?.finish()
+            continuation = nil
+        }
+    }
+}
+
+/// Decodes and validates export offers before handing them to wrapper code.
+final class RuntimeSessionExportReceiver: NSObject, RuntimeSessionClientSink, @unchecked Sendable {
+    private let onOffer: (@Sendable (ExportOffer) -> Void)?
+    private let eventHub: RuntimeSessionEventHub
+
+    init(onOffer: (@Sendable (ExportOffer) -> Void)?, eventHub: RuntimeSessionEventHub) {
         self.onOffer = onOffer
+        self.eventHub = eventHub
+    }
+
+    func frameReady(_ data: Data) {
+        guard let message = try? JSONDecoder().decode(FrameReadyMessage.self, from: data),
+            message.surfaceIndex >= 0
+        else {
+            return
+        }
+        eventHub.yield(.frameReady(message))
+    }
+
+    func surfacesReplaced(_ data: Data, surfaces: [IOSurface]) {
+        guard let message = try? JSONDecoder().decode(SurfacesReplacedMessage.self, from: data),
+            surfaces.count == SurfaceSet.surfaceCount,
+            message.surfaceSet.pixelSize.width > 0,
+            message.surfaceSet.pixelSize.height > 0,
+            surfaces.allSatisfy({
+                IOSurfaceGetWidth($0) == message.surfaceSet.pixelSize.width
+                    && IOSurfaceGetHeight($0) == message.surfaceSet.pixelSize.height
+            })
+        else {
+            return
+        }
+        eventHub.yield(.surfacesReplaced(message, surfaces: surfaces))
+    }
+
+    func finish(notifyInvalidation: Bool) {
+        eventHub.finish(notifyInvalidation: notifyInvalidation)
     }
 
     func exportOffered(_ data: Data, reply: @escaping (Bool) -> Void) {
@@ -195,6 +371,7 @@ final class RuntimeSessionExportReceiver: NSObject, RuntimeSessionExportSink, @u
 
 private final class XPCSessionChannel: RuntimeSessionChannel, @unchecked Sendable {
     private let connection: NSXPCConnection
+    private var invalidationRelay: RuntimeSessionConnectionEventRelay?
 
     init(endpoint: NSXPCListenerEndpoint, daemonSigningRequirement: String) throws(RuntimeControlClientError) {
         let interface = NSXPCInterface(with: RuntimeSessionXPC.self)
@@ -253,13 +430,93 @@ private final class XPCSessionChannel: RuntimeSessionChannel, @unchecked Sendabl
         }
     }
 
+    func sendInput(_ batch: Data) {
+        let proxy =
+            connection.remoteObjectProxyWithErrorHandler { _ in
+                // Connection invalidation is observed separately; this one-way message has no reply.
+            } as? any RuntimeSessionXPC
+        proxy?.sendInput(batch)
+    }
+
+    func focusChanged(_ focused: Bool) {
+        let proxy =
+            connection.remoteObjectProxyWithErrorHandler { _ in
+                // Connection invalidation is observed separately; this one-way message has no reply.
+            } as? any RuntimeSessionXPC
+        proxy?.focusChanged(focused)
+    }
+
+    func closeSession(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    let error = error as NSError
+                    finish(.failure(.transportFailure(domain: error.domain, code: error.code)))
+                } as? any RuntimeSessionXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.closeSession(request) { response in
+                finish(.success(response))
+            }
+        }
+    }
+
+    func frameDisplayed(_ request: Data) {
+        let proxy =
+            connection.remoteObjectProxyWithErrorHandler { _ in
+                // Connection invalidation is observed separately; this one-way message has no reply.
+            } as? any RuntimeSessionXPC
+        proxy?.frameDisplayed(request)
+    }
+
+    func visibilityChanged(_ request: Data) {
+        let proxy =
+            connection.remoteObjectProxyWithErrorHandler { _ in
+                // Connection invalidation is observed separately; this one-way message has no reply.
+            } as? any RuntimeSessionXPC
+        proxy?.visibilityChanged(request)
+    }
+
     func installExportOfferReceiver(_ receiver: RuntimeSessionExportReceiver) {
-        connection.exportedInterface = NSXPCInterface(with: RuntimeSessionExportSink.self)
+        let interface = NSXPCInterface(with: RuntimeSessionClientSink.self)
+        guard let surfaceClasses = NSSet(array: [NSArray.self, IOSurface.self]) as? Set<AnyHashable> else {
+            receiver.finish(notifyInvalidation: true)
+            return
+        }
+        interface.setClasses(
+            surfaceClasses,
+            for: #selector(RuntimeSessionEventSink.surfacesReplaced(_:surfaces:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
+        connection.exportedInterface = interface
         connection.exportedObject = receiver
         connection.resume()
     }
 
+    func setInvalidationHandler(_ handler: @escaping @Sendable () -> Void) {
+        let relay = RuntimeSessionConnectionEventRelay(handler)
+        invalidationRelay = relay
+        let callback: @Sendable () -> Void = { [relay] in relay.fire() }
+        connection.interruptionHandler = callback
+        connection.invalidationHandler = callback
+    }
+
     func invalidate() {
         connection.invalidate()
+    }
+}
+
+private final class RuntimeSessionConnectionEventRelay: @unchecked Sendable {
+    private let handler: @Sendable () -> Void
+
+    init(_ handler: @escaping @Sendable () -> Void) {
+        self.handler = handler
+    }
+
+    func fire() {
+        handler()
     }
 }

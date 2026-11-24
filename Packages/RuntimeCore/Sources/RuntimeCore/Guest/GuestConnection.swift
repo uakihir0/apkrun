@@ -331,7 +331,8 @@ public actor GuestConnection {
     /// and SHA-256 verification. Frames sent before the control response are held in a one-frame backpressured inbox.
     public func prepareBulkFileReceive(
         expectedSize: UInt64,
-        temporaryFileURL: URL
+        temporaryFileURL: URL,
+        receiveTimeout: Duration = GuestBulkFileReceiver.defaultReceiveTimeout
     ) async throws(GuestBulkFileReceiveFailure) -> GuestBulkFileReceiver {
         guard endpoint == .guestBulk,
             isUsable,
@@ -346,7 +347,43 @@ public actor GuestConnection {
             inbox: inboundBulkFrameInbox,
             receiveID: receiveID,
             expectedSize: expectedSize,
-            temporaryFileURL: temporaryFileURL
+            temporaryFileURL: temporaryFileURL,
+            receiveTimeout: receiveTimeout
+        )
+        inboundFileReceiveID = receiveID
+        inboundFileReceiver = receiver
+        await inboundBulkFrameInbox.activate(receiveID: receiveID)
+        guard isUsable else {
+            inboundFileReceiveID = nil
+            await inboundBulkFrameInbox.close()
+            throw .invalidOffer
+        }
+        return receiver
+    }
+
+    /// Prepares a verified guest file receive directly into a caller-owned regular file handle.
+    ///
+    /// The handle is truncated before the receiver is armed and truncated again on failure.
+    public func prepareBulkFileReceive(
+        expectedSize: UInt64,
+        destination: FileHandle,
+        receiveTimeout: Duration = GuestBulkFileReceiver.defaultReceiveTimeout
+    ) async throws(GuestBulkFileReceiveFailure) -> GuestBulkFileReceiver {
+        guard endpoint == .guestBulk,
+            isUsable,
+            sessionInfo?.enabledCapabilities.contains("bulk.v1") == true,
+            inboundFileReceiveID == nil
+        else {
+            throw .invalidOffer
+        }
+        let receiveID = UUID()
+        let receiver = try GuestBulkFileReceiver(
+            connection: self,
+            inbox: inboundBulkFrameInbox,
+            receiveID: receiveID,
+            expectedSize: expectedSize,
+            destination: destination,
+            receiveTimeout: receiveTimeout
         )
         inboundFileReceiveID = receiveID
         inboundFileReceiver = receiver

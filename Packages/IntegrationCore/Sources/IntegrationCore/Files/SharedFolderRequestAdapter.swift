@@ -1,24 +1,29 @@
 import Foundation
 import GuestProtocol
-import IntegrationCore
 
 /// Routes one bulk-connection's shared-folder requests to the host policy service.
 ///
 /// Each adapter belongs to one guest bulk connection. File handles are remembered only after
 /// the service authorizes an open, so later range requests cannot choose a package themselves.
 public actor SharedFolderRequestAdapter {
+    /// Refreshes host policy for the requested package, or all packages for document-picker listings.
+    public typealias PackageAccessRefresher = @Sendable (String?) async throws(IntegrationFailure) -> Void
+
     private let service: SharedFolderService
     private let documentPickerPackageName: String
+    private let refreshPackageAccess: PackageAccessRefresher
     private var packagesByHandle: [UInt64: String] = [:]
     private var isClosed = false
 
     /// Creates a handler for one guest bulk connection.
     public init(
         service: SharedFolderService,
-        documentPickerPackageName: String = "com.android.documentsui"
+        documentPickerPackageName: String = "com.android.documentsui",
+        refreshPackageAccess: @escaping PackageAccessRefresher
     ) {
         self.service = service
         self.documentPickerPackageName = documentPickerPackageName
+        self.refreshPackageAccess = refreshPackageAccess
     }
 
     /// Returns the request closure expected by the bulk-channel connection.
@@ -35,6 +40,7 @@ public actor SharedFolderRequestAdapter {
         }
 
         do {
+            try await refreshPolicy(for: request)
             switch request.op {
             case .hostListRoots(let operation):
                 let roots = try await service.listRoots(context: listingContext(package: operation.package))
@@ -109,12 +115,12 @@ public actor SharedFolderRequestAdapter {
 
             case .hostCloseFile(let operation):
                 let packageID = try packageForHandle(operation.handle)
+                packagesByHandle.removeValue(forKey: operation.handle)
                 try await service.closeFile(
                     packageID: packageID,
                     handle: operation.handle,
                     synchronize: operation.fsync
                 )
-                packagesByHandle.removeValue(forKey: operation.handle)
                 return Self.response(.hostCloseFile(GPEmpty()))
 
             case .hostCreateDocument(let operation):
@@ -228,6 +234,37 @@ public actor SharedFolderRequestAdapter {
 
     private func listingContext(package: String) -> SharedFolderListingContext {
         package == documentPickerPackageName ? .documentPicker : .package(package)
+    }
+
+    private func refreshPolicy(for request: GPRequest) async throws(IntegrationFailure) {
+        switch request.op {
+        case .hostListRoots(let operation):
+            try await refreshPackageAccess(
+                operation.package == documentPickerPackageName ? nil : operation.package
+            )
+        case .hostQueryChildren(let operation):
+            try await refreshPackageAccess(
+                operation.package == documentPickerPackageName ? nil : operation.package
+            )
+        case .hostStat(let operation):
+            try await refreshPackageAccess(operation.package)
+        case .hostOpenFile(let operation):
+            try await refreshPackageAccess(operation.package)
+        case .hostReadRange(let operation):
+            try await refreshPackageAccess(packageForHandle(operation.handle))
+        case .hostWriteRange(let operation):
+            try await refreshPackageAccess(packageForHandle(operation.handle))
+        case .hostCreateDocument(let operation):
+            try await refreshPackageAccess(operation.package)
+        case .hostDeleteDocument(let operation):
+            try await refreshPackageAccess(operation.package)
+        case .hostRenameDocument(let operation):
+            try await refreshPackageAccess(operation.package)
+        case .hostCloseFile, .none:
+            break
+        default:
+            break
+        }
     }
 
     private func packageForHandle(_ handle: UInt64) throws(IntegrationFailure) -> String {

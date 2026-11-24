@@ -349,6 +349,26 @@ public actor InputRouter {
         return nil
     }
 
+    /// Releases a session's display claim after its window closes. A focused session receives `cancelAll` before its
+    /// registration is removed, and a newer registration is preserved if one replaces it during that handoff.
+    public func unregister(_ session: SessionID) async {
+        guard let registration = sessions[session] else {
+            return
+        }
+        if focusedSession == session {
+            await focusChanged(session, focused: false)
+        }
+        guard let current = sessions[session],
+            current.generation == registration.generation
+        else {
+            return
+        }
+        sessions[session] = nil
+        if displayOwners[registration.displayID] == session {
+            displayOwners[registration.displayID] = nil
+        }
+    }
+
     /// Cancels open input on every display registered when this operation takes the send turn.
     ///
     /// This is used after the input channel reconnects: Android may still have keys or gestures open from the previous

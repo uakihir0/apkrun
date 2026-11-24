@@ -107,6 +107,120 @@ func daemonFileDropRefusesDisabledIntegrationBeforeTransferring() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func daemonGuestExportOffersRequireFilesPolicyAndAWindowRoute() async throws {
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let disabled = makeHeadlessServiceFixture()
+    _ = try await disabled.service.launch(RuntimeLaunchRequest(packageID: package))
+    let disabledOffer = DevelopmentGuestExportOffer(
+        offerID: UUID(),
+        name: "report.txt",
+        mimeType: "text/plain",
+        size: 4,
+        sourcePackage: package.rawValue,
+        displayID: 1
+    )
+    await disabled.agent.sendExportOffer(disabledOffer)
+    #expect(
+        await disabled.agent.exportDecisions == [
+            HeadlessExportDecisionCall(offerID: disabledOffer.offerID, decision: .decline)
+        ])
+
+    let enabledWithoutWindow = makeHeadlessServiceFixture(filesEnabled: true)
+    _ = try await enabledWithoutWindow.service.launch(RuntimeLaunchRequest(packageID: package))
+    let noWindowOffer = DevelopmentGuestExportOffer(
+        offerID: UUID(),
+        name: "report.txt",
+        mimeType: "text/plain",
+        size: 4,
+        sourcePackage: package.rawValue,
+        displayID: 1
+    )
+    await enabledWithoutWindow.agent.sendExportOffer(noWindowOffer)
+    #expect(
+        await enabledWithoutWindow.agent.exportDecisions == [
+            HeadlessExportDecisionCall(offerID: noWindowOffer.offerID, decision: .decline)
+        ])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonGuestExportOfferIsRoutedOnlyAfterPolicyValidation() async throws {
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let delivery = ExportOfferDeliverySpy(acceptsOffer: true)
+    let fixture = makeHeadlessServiceFixture(
+        filesEnabled: true,
+        exportOfferDelivery: { sessionID, offer in
+            await delivery.deliver(sessionID: sessionID, offer: offer)
+        }
+    )
+    let launched = try await fixture.service.launch(RuntimeLaunchRequest(packageID: package))
+    let guestOffer = DevelopmentGuestExportOffer(
+        offerID: UUID(),
+        name: "../報告.txt",
+        mimeType: "text/plain",
+        size: 12,
+        sourcePackage: package.rawValue,
+        displayID: 1
+    )
+
+    await fixture.agent.sendExportOffer(guestOffer)
+
+    let delivered = try #require(await delivery.deliveredOffer)
+    #expect(delivered.sessionID == launched.sessionID)
+    #expect(delivered.offer.name == "-報告.txt")
+    #expect(delivered.offer.size == 12)
+    #expect(delivered.offer.type == "text/plain")
+    #expect(await fixture.agent.exportDecisions.isEmpty)
+
+    let cancellation = AcceptExportRequest(offerID: delivered.offer.offerID, fileIndex: nil)
+        .bound(to: launched.sessionID)
+    try await fixture.service.acceptExport(cancellation, file: nil)
+    #expect(
+        await fixture.agent.exportDecisions == [
+            HeadlessExportDecisionCall(offerID: guestOffer.offerID, decision: .decline)
+        ])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonGuestExportOfferRemainsBoundAfterWrongSessionReply() async throws {
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let delivery = ExportOfferDeliverySpy(acceptsOffer: true)
+    let fixture = makeHeadlessServiceFixture(
+        filesEnabled: true,
+        exportOfferDelivery: { sessionID, offer in
+            await delivery.deliver(sessionID: sessionID, offer: offer)
+        }
+    )
+    let launched = try await fixture.service.launch(RuntimeLaunchRequest(packageID: package))
+    let guestOffer = DevelopmentGuestExportOffer(
+        offerID: UUID(),
+        name: "report.txt",
+        mimeType: "text/plain",
+        size: 12,
+        sourcePackage: package.rawValue,
+        displayID: 1
+    )
+    await fixture.agent.sendExportOffer(guestOffer)
+    let delivered = try #require(await delivery.deliveredOffer)
+
+    let forgedReply = AcceptExportRequest(offerID: delivered.offer.offerID, fileIndex: nil)
+        .bound(to: UUID())
+    do {
+        try await fixture.service.acceptExport(forgedReply, file: nil)
+        Issue.record("an offer reply from another session must be rejected")
+    } catch let error as RuntimeWireError {
+        #expect(error.code == "integration.transferFailed")
+    }
+
+    let validCancellation = AcceptExportRequest(offerID: delivered.offer.offerID, fileIndex: nil)
+        .bound(to: launched.sessionID)
+    try await fixture.service.acceptExport(validCancellation, file: nil)
+    #expect(
+        await fixture.agent.exportDecisions == [
+            HeadlessExportDecisionCall(offerID: guestOffer.offerID, decision: .decline)
+        ])
+}
+
+@Test(.timeLimit(.minutes(1)))
 func daemonFileDropStopsBeforeImportWhenGuestTransferFails() async throws {
     let fixture = makeHeadlessServiceFixture(filesEnabled: true, transferFailure: true)
     let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
@@ -379,7 +493,8 @@ private func makeHeadlessServiceFixture(
     transferFailure: Bool = false,
     importDisposition: FakeImportDisposition = .shared,
     importURIHost: String = "io.apkrun.guest.files",
-    importURICountDelta: Int = 0
+    importURICountDelta: Int = 0,
+    exportOfferDelivery: @escaping @Sendable (UUID, ExportOffer) async -> Bool = { _, _ in false }
 ) -> HeadlessServiceFixture {
     let displayControl = FakeHeadlessDisplayControlChannel()
     let scanouts = FakeHeadlessScanoutController(guest: displayControl)
@@ -412,7 +527,8 @@ private func makeHeadlessServiceFixture(
                 backingScale: 1
             )
         ),
-        fileIntegrationEnabled: { _ in filesEnabled }
+        fileIntegrationEnabled: { _ in filesEnabled },
+        exportOfferDelivery: exportOfferDelivery
     )
     return HeadlessServiceFixture(
         service: service,
@@ -467,6 +583,25 @@ private struct HeadlessImportCall: Equatable, Sendable {
     let displayID: Int32
 }
 
+private struct HeadlessExportDecisionCall: Equatable, Sendable {
+    let offerID: UUID
+    let decision: GuestExportDecision
+}
+
+private actor ExportOfferDeliverySpy {
+    private let acceptsOffer: Bool
+    private(set) var deliveredOffer: (sessionID: UUID, offer: ExportOffer)?
+
+    init(acceptsOffer: Bool) {
+        self.acceptsOffer = acceptsOffer
+    }
+
+    func deliver(sessionID: UUID, offer: ExportOffer) -> Bool {
+        deliveredOffer = (sessionID, offer)
+        return acceptsOffer
+    }
+}
+
 private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
     private let installed: Bool
     private var stopResults: [Bool]
@@ -478,12 +613,14 @@ private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
     private(set) var launchCalls: [HeadlessLaunchCall] = []
     private(set) var transfers: [HeadlessTransferCall] = []
     private(set) var importCalls: [HeadlessImportCall] = []
+    private(set) var exportDecisions: [HeadlessExportDecisionCall] = []
     private(set) var stoppedPackages: [String] = []
     private(set) var forceStoppedPackages: [String] = []
     private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
     private var resynchronizationHandlerID: UUID?
     private var resynchronizationHandler: (@Sendable (GuestSnapshotState) async -> Void)?
     private let taskEvents: AsyncStream<DevelopmentGuestTaskEvent>
+    private var exportOfferHandler: (@Sendable (DevelopmentGuestExportOffer) async -> Void)?
 
     init(
         isInstalled: Bool,
@@ -511,6 +648,27 @@ private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
 
     func taskEventStream() async -> AsyncStream<DevelopmentGuestTaskEvent> {
         taskEvents
+    }
+
+    func setExportOfferHandler(
+        _ handler: (@Sendable (DevelopmentGuestExportOffer) async -> Void)?
+    ) {
+        exportOfferHandler = handler
+    }
+
+    func resolveExport(
+        offerID: UUID,
+        decision: GuestExportDecision
+    ) async throws(GuestAgentFailure) -> GuestExportStart {
+        exportDecisions.append(HeadlessExportDecisionCall(offerID: offerID, decision: decision))
+        return GuestExportStart(transferID: decision == .accept ? 45 : nil)
+    }
+
+    func prepareExportFileReceive(
+        expectedSize: UInt64,
+        destination: FileHandle
+    ) async throws(DevelopmentGuestExportReceiveFailure) -> GuestBulkFileReceiver {
+        throw .fileTransfer(.invalidOffer)
     }
 
     func launch(package: String, displayID: Int32) async throws(GuestAgentFailure) -> GuestLaunchReport {
@@ -547,22 +705,22 @@ private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
     func importFiles(
         package: String,
         displayID: Int32,
-        files: [GPFileRef]
-    ) async throws(GuestAgentFailure) -> GPImportResult {
+        files: [GuestFileReference]
+    ) async throws(GuestAgentFailure) -> GuestFileImportResult {
         importCalls.append(HeadlessImportCall(packageID: package, displayID: displayID))
-        var result = GPImportResult()
-        result.contentUri = (0..<max(0, files.count + importURICountDelta)).map { _ in
+        let contentURIs = (0..<max(0, files.count + importURICountDelta)).map { _ in
             "content://\(importURIHost)/shared/\(UUID().uuidString)"
         }
+        let disposition: GuestFileImportDisposition
         switch importDisposition {
         case .shared:
-            result.disposition = .shared
+            disposition = .shared
         case .savedToDownloads:
-            result.disposition = .savedToDownloads
+            disposition = .savedToDownloads
         case .unknown:
-            result.disposition = .UNRECOGNIZED(999)
+            disposition = .unsupported
         }
-        return result
+        return GuestFileImportResult(contentURIs: contentURIs, disposition: disposition)
     }
 
     func stopApplication(package: String) async throws(GuestAgentFailure) -> Bool {
@@ -630,6 +788,10 @@ private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
 
     func sendTaskEvent(_ event: DevelopmentGuestTaskEvent) {
         taskEventContinuation.yield(event)
+    }
+
+    func sendExportOffer(_ offer: DevelopmentGuestExportOffer) async {
+        await exportOfferHandler?(offer)
     }
 
     func resynchronize(with snapshot: GuestSnapshotState) async {

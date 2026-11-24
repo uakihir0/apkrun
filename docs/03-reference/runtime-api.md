@@ -8,7 +8,7 @@ This document is the wire contract of RuntimeAPI, the XPC interface between apkr
 
 ### 1.1 Scope and modules
 
-Built operations: broker `hello`, `requestEndpoint`; control `runtimeStatus`, `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime`, `listPackages`, `packageInfo`, `importPackage`, `installImported`, `beginInstallImported`, `beginUninstallPackage`, `cancelOperation`, `listOperations`, `operationStatus`, `subscribe`, `unsubscribe`, `launch`, `terminate`; event sink `handshake`, `deliver`. Shared-folder DTOs and client calls are implemented; server handling remains target contract. Session-file client methods and the Android-to-Mac offer receiver are implemented; session-server handling remains target contract.
+Built operations: broker `hello`, `requestEndpoint`; control `runtimeStatus`, `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime`, `listPackages`, `packageInfo`, `importPackage`, `installImported`, `beginInstallImported`, `beginUninstallPackage`, `cancelOperation`, `listOperations`, `operationStatus`, `subscribe`, `unsubscribe`, `launch`, `terminate`; event sink `handshake`, `deliver`. Shared-folder DTOs and client calls are implemented; server handling remains target contract. Session-file client methods and the Android-to-Mac offer receiver are implemented; session-server handling remains target contract. RuntimeAPI now defines the `openSession` DTO and IOSurface XPC contract; its host and client handling remains target work.
 
 | Part | Module | Role |
 |---|---|---|
@@ -25,7 +25,7 @@ Built operations: broker `hello`, `requestEndpoint`; control `runtimeStatus`, `s
 | Maintenance (target) | anonymous listener per host client | APKRun.app, APKRunMenuBar, apkrun | `MaintenanceControl` | frozen, additive only |
 | Wrapper (target) | anonymous listener per registered wrapper, dropped 10 min after its last connection | that wrapper's launcher | `RuntimeWrapperXPC` | major N and N−1 |
 
-Clients that subscribe or open sessions export one `RuntimeEventSink` on their endpoint connection (§4.1). Wrapper session clients also export a `RuntimeSessionExportSink` on the session connection to receive file offers (§6.3). The broker exposes no capabilities ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2).
+Clients that subscribe export one `RuntimeEventSink` on the authenticated control endpoint (§4.1). Session clients export a `RuntimeSessionEventSink` on the session connection to receive frames and pool replacements; wrapper clients also export a `RuntimeSessionExportSink` there to receive file offers (§6.3). The broker exposes no capabilities ([process-model-and-ipc.md](../01-architecture/process-model-and-ipc.md) §2.2).
 
 ### 1.3 Client kinds
 
@@ -84,11 +84,11 @@ apkrund sets a requirement on each listener with `setConnectionCodeSigningRequir
 
 ### 2.1 Constants
 
-`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 15}`. Ordering compares `major`, then `minor`.
+`APIVersion.current` is the control protocol version. `APIVersion` has `major` and `minor` (Int) and encodes as `{"major": 1, "minor": 16}`. Ordering compares `major`, then `minor`.
 
 ```swift
 public struct APIVersion: Codable, Comparable, Equatable, Sendable {
-    public static let current = APIVersion(major: 1, minor: 15)
+    public static let current = APIVersion(major: 1, minor: 16)
     public let major: Int
     public let minor: Int
 }
@@ -114,6 +114,7 @@ Target constants (not in code): `wrapperMajors = [1]` (served on the wrapper end
 | 1.13 | shared-folder root listing, add, remove, and maximum-access control |
 | 1.14 | integration status queries |
 | 1.15 | Android-to-Mac file offers and session-bound accept/cancel |
+| 1.16 | session-bound open endpoint, descriptor, frame, surface-pool, and visibility messages |
 
 ### 2.2 Rules per endpoint
 
@@ -590,7 +591,7 @@ Target `RuntimeStatus` replaces `RuntimeHostStatus` for `runtimeStatus`. Fields:
 |---|---|---|---|---|---|
 | `launch` (built) | `RuntimeLaunchControlRequest` (`packageID`) → `RuntimeLaunchControlReply` (`result`: `RuntimeLaunchResult`) | C | W | `sessions.*` (target) | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.2 |
 | `terminate` (built) | `RuntimeTerminateControlRequest` (`packageID`) → `RuntimeTerminateControlReply` (`result`: `RuntimeTerminateResult`) | C | U | `sessions.ended` (target) | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.2 |
-| `openSession` (target) | `OpenSessionRequest` → `SessionDescriptor` + `[IOSurface]` | W, L | W | session channel, `sessions.opened` | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.1 |
+| `openSession` (target handler) | `RuntimeOpenSessionControlRequest` → `RuntimeOpenSessionControlReply` + `[IOSurface]` + `NSXPCListenerEndpoint` | W, L | W | session channel, `sessions.opened` | [runtime-daemon.md](../02-design/runtime-daemon.md) §7.1 |
 | `listSessions` (target) | — → `[SessionSummary]` | C | Q | — | [runtime-daemon.md](../02-design/runtime-daemon.md) §8.6 |
 
 APKRun.app and the CLI never open app sessions. They call `launch`, and the launched process opens the session (ADR-0006). Debug builds can use `APKRUN_TEST_HEADLESS_LAUNCH=1` for a daemon-owned headless session until #69 removes it ([configuration.md](configuration.md) §5.1).
@@ -601,11 +602,13 @@ APKRun.app and the CLI never open app sessions. They call `launch`, and the laun
 - `launch` opens the registered wrapper when its `WrapperStatus.state` is `valid`, otherwise the generic launcher. A running wrapper is activated. The process must connect within 20 s, or `runtime.launchTimedOut`.
 - `terminate` closes the window and force-stops the app through the Guest Agent. Without a session it force-stops only when Android is `ready`. It never starts Android.
 
-### 6.2 `openSession` (target)
+### 6.2 `openSession` (target handler)
 
-`OpenSessionRequest`: `packageID`, `geometry` (`DisplayGeometry`: `pointSize` (CGSize), `backingScale` (1.0 or 2.0), `zoom` (0.75…2.0)), `screenSize` (CGSize, points), `launchTiming` (`processStart`, `requestSent`: UInt64 nanoseconds, optional).
+`RuntimeAPI` provides the `openSession` request, reply, and XPC method. The apkrund and RuntimeClient handlers remain target work. `RuntimeControlXPC.openSession` returns descriptor JSON, three IOSurfaces, and the session-bound `NSXPCListenerEndpoint` as separate XPC reply parameters.
 
-`SessionDescriptor`: `sessionID`, `displayID`, `windowPrefs` (`resizable`, `alwaysOnTop`, `zoom`), `inputPrefs` (§14.2), `windowMode` (`secondaryDisplay` or `primaryDisplayCompatibility`), `state` (`SessionPhase`), `surfaces` (`SurfaceSet`: `generation` UInt32, `surfaceCount` 3, `pixelSize`, `densityDpi`).
+`OpenSessionRequest`: `packageID`, `geometry` (`SessionDisplayGeometry`: `pointSize` (`SessionSize` in points), `backingScale`, `zoom`), `screenSize` (`SessionSize` in points), `launchTiming` (`processStart`, `requestSent`: UInt64 nanoseconds, optional).
+
+`RuntimeOpenSessionControlReply`: `result` (`SessionDescriptor`) or `error` (`RuntimeWireError`). `SessionDescriptor`: `sessionID`, `displayID`, `windowPrefs` (`WindowPrefs`: `resizable`, `alwaysOnTop`, `zoom`), `inputPrefs` (`InputPrefs`, §14.2), `windowMode` (`AndroidWindowMode`), `state` (`SessionPhase`), `surfaces` (`SurfaceSet`: `generation` UInt32, `pixelSize`, `densityDpi`; every pool has exactly three IOSurfaces). The surface handles and endpoint are not encoded in DTO JSON.
 
 Server steps ([runtime-daemon.md](../02-design/runtime-daemon.md) §7.1):
 
@@ -623,7 +626,7 @@ While the reply is pending, `stateChanged` arrives at least every 10 s.
 
 `SessionSummary` (target): `sessionID`, `packageID`, `displayName`, `state`, `displayID`?, `clientKind` (`wrapper` or `launcher`), `openedAt`, `windowMode`, `recording` (Bool), `pointSize` (CGSize?; for **Use Current Size**, §14.3).
 
-### 6.3 Session channel (target)
+### 6.3 Session channel (target handler)
 
 The session channel needs no session ID: a connection holds at most one session. Before the reply, or after the session ends, one-way messages are dropped and requests return `runtime.invalidTransition`.
 
@@ -631,8 +634,8 @@ Client → apkrund:
 
 | Message | Shape | Kind | Rule |
 |---|---|---|---|
-| `frameDisplayed` | `(generation: UInt32, frameSeq: UInt64)` | 1 | from the Core Animation completion block; frees older buffers |
-| `visibilityChanged` | `(Bool)` | 1 | `false` → `backgrounded`; presents stop |
+| `frameDisplayed` | `FrameDisplayedMessage` (`generation: UInt32`, `frameSeq: UInt64`) | 1 | from the Core Animation completion block; frees older buffers |
+| `visibilityChanged` | `VisibilityChangedMessage` (`visible: Bool`) | 1 | `false` → `backgrounded`; presents stop |
 | `focusChanged` | `(Bool)` | 1 | key window; `false` also sends `cancelAll` ([input.md](../02-design/input.md) §7.2) |
 | `sendInput` | `InputBatch` | 1 | §7 |
 | `sendText` | `WireImeTextEvent` | 1 | §7 |
@@ -646,7 +649,7 @@ Client → apkrund:
 | `restartApp` | `RuntimeEmpty` → `RuntimeEmpty` | U | force-stop and relaunch on the same display ([wrapper.md](../02-design/wrapper.md) §5.6) |
 | `frameStatistics` | `RuntimeEmpty` → `SessionGraphicsStatistics` | Q | developer mode only; never starts Android |
 
-apkrund → client (`RuntimeEventSink`): `frameReady(generation, surfaceIndex, frameSeq, presentationTime)` (not JSON; `presentationTime` is `mach_absolute_time`); `surfacesReplaced(SurfaceSet, [IOSurface])`; `sessionEvent(SessionEvent)`.
+apkrund → client (`RuntimeSessionEventSink`): `frameReady(Data)` encodes `FrameReadyMessage` (`generation`, `surfaceIndex`, `frameSeq`, `presentationTime` as `mach_absolute_time`); `surfacesReplaced(Data, [IOSurface])` encodes `SurfacesReplacedMessage` in `Data` and sends the three surface handles directly. `RuntimeSessionXPC.frameDisplayed` and `.visibilityChanged` receive JSON-encoded DTOs as one-way messages.
 
 `SessionEvent`: `stateChanged(SessionPhase)`, `imeStateChanged(EditorState)`, `windowRequest(WindowRequest)` (`activate`, `close`, `setTitle(String)`), `windowPrefsChanged(WindowPrefs)`, `clipboardFromGuest(ClipItem)` (key window only), `exportOffered(ExportOffer)`, `linkPrompt(LinkPrompt)`, `unknown`.
 

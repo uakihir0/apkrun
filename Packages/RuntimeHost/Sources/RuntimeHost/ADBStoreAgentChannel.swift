@@ -1,6 +1,5 @@
 import APKStoreCore
 import Foundation
-import GuestProtocol
 import RuntimeCore
 
 /// The stock-image package channel.
@@ -92,7 +91,7 @@ public struct ADBStoreAgentChannel: StoreAgentChannel {
 
     /// Lists packages through Guest Agent `ListPackages`, never by parsing `pm list packages` output.
     public func listPackages(_ filter: StorePackageFilter) async throws -> [StorePackageSummary] {
-        let guestFilter: GPPackageFilter
+        let guestFilter: GuestPackageFilter
         switch filter {
         case .launchable:
             guestFilter = .launchable
@@ -119,7 +118,7 @@ public struct ADBStoreAgentChannel: StoreAgentChannel {
         }
     }
 
-    private static func packageInfo(_ guest: GPPackageInfo) throws -> StorePackageInfo {
+    private static func packageInfo(_ guest: GuestPackageInfo) throws -> StorePackageInfo {
         guard let packageID = PackageID(rawValue: guest.package) else {
             throw ADBStoreAgentChannelFailure.invalidPackageID(guest.package)
         }
@@ -171,8 +170,8 @@ public struct ADBStoreAgentChannel: StoreAgentChannel {
 /// Narrow testing seam for the Guest Agent operations used by the stock-image channel.
 protocol ADBStoreGuestAgent: Sendable {
     func installMultiple(apks: [URL], allowDowngrade: Bool) async throws(AdbFailure)
-    func queryPackage(_ package: String) async throws(GuestAgentFailure) -> GPPackageInfo?
-    func listPackages(filter: GPPackageFilter) async throws(GuestAgentFailure) -> [GPPackageSummary]
+    func queryPackage(_ package: String) async throws(GuestAgentFailure) -> GuestPackageInfo?
+    func listPackages(filter: GuestPackageFilter) async throws(GuestAgentFailure) -> [GuestPackageSummary]
 }
 
 /// Narrow testing seam for package removal through RuntimeCore's ADB helper.
@@ -180,7 +179,15 @@ protocol ADBStoreADBClient: Sendable {
     func uninstall(packageName: String, keepData: Bool) async throws(AdbFailure)
 }
 
-extension DevelopmentGuestAgent: ADBStoreGuestAgent {}
+extension DevelopmentGuestAgent: ADBStoreGuestAgent {
+    func queryPackage(_ package: String) async throws(GuestAgentFailure) -> GuestPackageInfo? {
+        try await queryPackageMetadata(package)
+    }
+
+    func listPackages(filter: GuestPackageFilter) async throws(GuestAgentFailure) -> [GuestPackageSummary] {
+        try await listPackageMetadata(filter: filter)
+    }
+}
 
 extension AdbClient: ADBStoreADBClient {
     func uninstall(packageName: String, keepData: Bool) async throws(AdbFailure) {

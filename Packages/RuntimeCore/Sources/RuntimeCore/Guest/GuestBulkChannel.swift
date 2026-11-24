@@ -44,6 +44,17 @@ actor GuestBulkChannel {
         self.acknowledgementTimeout = acknowledgementTimeout
     }
 
+    /// Arms an inbound file receiver on this authenticated bulk connection.
+    func prepareFileReceive(
+        expectedSize: UInt64,
+        destination: FileHandle
+    ) async throws(GuestBulkFileReceiveFailure) -> GuestBulkFileReceiver {
+        try await connection.prepareBulkFileReceive(
+            expectedSize: expectedSize,
+            destination: destination
+        )
+    }
+
     /// Sends a regular file to the guest and waits for the matching `BulkAck`.
     ///
     /// The host allocates positive even transfer IDs. The supplied digest is carried by `BulkBegin`; `BulkEnd`

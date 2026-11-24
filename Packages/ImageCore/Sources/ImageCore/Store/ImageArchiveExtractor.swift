@@ -26,13 +26,18 @@ public enum ImageArchiveExtractor {
                 path: FilePath(archive.path), mode: .readOnly, options: [],
                 permissions: FilePermissions(rawValue: 0o444)
             ) { bytes in
-                try ArchiveStream.withDecodeStream(
-                    readingFrom: bytes, threadCount: 0
-                ) { input in
-                    try ArchiveStream.withExtractStream(
-                        extractingTo: FilePath(directory.path), selectUsing: filter
-                    ) { output in
-                        _ = try ArchiveStream.process(readingFrom: input, writingTo: output)
+                // Release archives are packed with `aa archive -a lzfse`: the byte stream
+                // needs decompression before it decodes. The decompression stream also
+                // passes through uncompressed archives.
+                try ArchiveByteStream.withDecompressionStream(readingFrom: bytes) { inflated in
+                    try ArchiveStream.withDecodeStream(
+                        readingFrom: inflated, threadCount: 0
+                    ) { input in
+                        try ArchiveStream.withExtractStream(
+                            extractingTo: FilePath(directory.path), selectUsing: filter
+                        ) { output in
+                            _ = try ArchiveStream.process(readingFrom: input, writingTo: output)
+                        }
                     }
                 }
             }
@@ -52,14 +57,18 @@ public enum ImageArchiveExtractor {
                 path: FilePath(archive.path), mode: .readOnly, options: [],
                 permissions: FilePermissions(rawValue: 0o444)
             ) { bytes in
-                try ArchiveStream.withDecodeStream(
-                    readingFrom: bytes, threadCount: 0
-                ) { input in
-                    while let header = try input.readHeader() {
-                        guard entryAllowed(header.entryType, path: header.entryPath ?? FilePath()) else {
-                            throw ImageFailure.imageArchiveUnsafeEntry(
-                                path: header.entryPath?.string ?? ""
-                            )
+                try ArchiveByteStream.withDecompressionStream(readingFrom: bytes) { inflated in
+                    try ArchiveStream.withDecodeStream(
+                        readingFrom: inflated, threadCount: 0
+                    ) { input in
+                        while let header = try input.readHeader() {
+                            guard
+                                entryAllowed(header.entryType, path: header.entryPath ?? FilePath())
+                            else {
+                                throw ImageFailure.imageArchiveUnsafeEntry(
+                                    path: header.entryPath?.string ?? ""
+                                )
+                            }
                         }
                     }
                 }

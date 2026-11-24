@@ -13,6 +13,7 @@ import android.widget.Toast
 import io.apkrun.guest.daemon.BulkTransfers
 import io.apkrun.guest.daemon.EventBus
 import io.apkrun.guest.daemon.InboundTransfers
+import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.v1.AccessLevel
 import io.apkrun.guest.protocol.v1.BulkKind
 import io.apkrun.guest.protocol.v1.ExportDecision
@@ -158,7 +159,7 @@ internal class FilesBridge(
                     displayId = displayId,
                 )
         }
-        events.publish { event ->
+        events.publish(GuestCapability.FILES) { event ->
             event.exportFileOffered =
                 ExportFileOffered.newBuilder()
                     .setOfferId(offerId)

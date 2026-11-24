@@ -75,44 +75,8 @@ internal class DeviceOperations(
     },
 ) : AgentOperations {
     /** Capabilities whose backing framework APIs resolved on this image. */
-    fun supportedCapabilities(): Set<GuestCapability> = buildSet {
-        add(GuestCapability.CORE)
-        if (
-            hasMethod(SystemServices.display, "getDisplayIds") &&
-                hasMethod(SystemServices.display, "getDisplayInfo") &&
-                hasMethod(SystemServices.display, "registerCallback") &&
-                hasMethod(SystemServices.window, "setForcedDisplayDensityForUser") &&
-                hasMethod(SystemServices.window, "setDisplayImePolicy")
-        ) {
-            add(GuestCapability.DISPLAY)
-        }
-        if (
-            hasMethod(SystemServices.activityTask, "getTasks") &&
-                hasMethod(SystemServices.activityTask, "registerTaskStackListener") &&
-                hasMethod(SystemServices.activityTask, "startActivityAsUser") &&
-                hasMethod(SystemServices.activityTask, "moveRootTaskToDisplay") &&
-                hasMethod(SystemServices.activityTask, "removeTask") &&
-                hasMethod(SystemServices.activityTask, "setFocusedTask") &&
-                hasMethod(SystemServices.activity, "forceStopPackage")
-        ) {
-            add(GuestCapability.LAUNCH)
-        }
-        if (
-            hasMethod(SystemServices.activityTask, "getTasks") &&
-                hasMethod(SystemServices.activityTask, "setFocusedTask") &&
-                hasMethod(SystemServices.input, "injectInputEvent")
-        ) {
-            add(GuestCapability.INPUT)
-        }
-        add(GuestCapability.INPUT_ACK_TRACE)
-        add(GuestCapability.PACKAGES)
-        if (appProcessMonitoringAvailable()) {
-            add(GuestCapability.HEALTH)
-        }
-        if (hasMethod(SystemServices.power, "shutdown")) {
-            add(GuestCapability.SYSTEM)
-        }
-    }
+    fun supportedCapabilities(): Set<GuestCapability> =
+        supportedCapabilities(hasMethod, appProcessMonitoringAvailable)
 
     /** Hidden API methods absent from the current image, for GetHealth diagnostics. */
     fun missingSystemMethods(): List<String> =
@@ -297,8 +261,51 @@ internal class DeviceOperations(
             .setAndroidUptimeMs(SystemClock.uptimeMillis())
             .build()
 
-    private companion object {
+    companion object {
+        /** Capabilities whose backing framework APIs resolved on this image. */
+        internal fun supportedCapabilities(
+            hasMethod: (SystemServiceWrapper, String) -> Boolean,
+            appProcessMonitoringAvailable: () -> Boolean,
+        ): Set<GuestCapability> = buildSet {
+            add(GuestCapability.CORE)
+            if (
+                hasMethod(SystemServices.display, "getDisplayIds") &&
+                    hasMethod(SystemServices.display, "getDisplayInfo") &&
+                    hasMethod(SystemServices.display, "registerCallback") &&
+                    hasMethod(SystemServices.window, "setForcedDisplayDensityForUser") &&
+                    hasMethod(SystemServices.window, "setDisplayImePolicy")
+            ) {
+                add(GuestCapability.DISPLAY)
+            }
+            if (
+                hasMethod(SystemServices.activityTask, "getTasks") &&
+                    hasMethod(SystemServices.activityTask, "registerTaskStackListener") &&
+                    hasMethod(SystemServices.activityTask, "startActivityAsUser") &&
+                    hasMethod(SystemServices.activityTask, "moveRootTaskToDisplay") &&
+                    hasMethod(SystemServices.activityTask, "removeTask") &&
+                    hasMethod(SystemServices.activityTask, "setFocusedTask") &&
+                    hasMethod(SystemServices.activity, "forceStopPackage")
+            ) {
+                add(GuestCapability.LAUNCH)
+            }
+            if (
+                hasMethod(SystemServices.activityTask, "getTasks") &&
+                    hasMethod(SystemServices.activityTask, "setFocusedTask") &&
+                    hasMethod(SystemServices.input, "injectInputEvent")
+            ) {
+                add(GuestCapability.INPUT)
+            }
+            add(GuestCapability.INPUT_ACK_TRACE)
+            add(GuestCapability.PACKAGES)
+            if (appProcessMonitoringAvailable()) {
+                add(GuestCapability.HEALTH)
+            }
+            if (hasMethod(SystemServices.power, "shutdown")) {
+                add(GuestCapability.SYSTEM)
+            }
+        }
+
         /** Flat component of the development IME, as `DeviceSetup` selects it. */
-        const val IME_COMPONENT = "io.apkrun.guest/.ime.ApkRunInputMethodService"
+        private const val IME_COMPONENT = "io.apkrun.guest/.ime.ApkRunInputMethodService"
     }
 }

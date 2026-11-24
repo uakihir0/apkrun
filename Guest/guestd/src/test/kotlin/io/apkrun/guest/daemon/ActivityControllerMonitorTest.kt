@@ -1,5 +1,7 @@
 package io.apkrun.guest.daemon
 
+import io.apkrun.guest.protocol.FrameReader
+import io.apkrun.guest.protocol.FrameWriter
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.EOFException

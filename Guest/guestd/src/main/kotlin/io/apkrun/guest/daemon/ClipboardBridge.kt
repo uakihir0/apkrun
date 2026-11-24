@@ -7,6 +7,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.PersistableBundle
+import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.v1.ClipData as WireClipData
 import io.apkrun.guest.protocol.v1.ClipImage as WireClipImage
 import io.apkrun.guest.protocol.v1.ClipOrigin
@@ -199,7 +200,11 @@ internal class ClipboardBridge(
                 .setSensitive(raw.sensitive)
                 .apply { image?.let { setImage(it) } }
                 .build()
-        events.publish { event: Event.Builder -> event.setClipboardChanged(data) }
+        events.publish(
+            if (image != null) GuestCapability.CLIPBOARD_IMAGE else GuestCapability.CLIPBOARD_TEXT
+        ) { event: Event.Builder ->
+            event.setClipboardChanged(data)
+        }
     }
 
     private fun sha256(bytes: ByteArray): String =

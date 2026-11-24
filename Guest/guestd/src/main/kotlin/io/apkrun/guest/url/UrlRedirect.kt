@@ -1,6 +1,7 @@
 package io.apkrun.guest.url
 
 import io.apkrun.guest.daemon.EventBus
+import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.HealthWarning
@@ -85,7 +86,7 @@ class UrlRedirect(
         // A kept intent must not outlive KEEP_MILLIS even if the host never
         // answers: the scheduled expiry releases the activity's intent.
         schedule?.invoke(KEEP_MILLIS) { pending.remove(requestId) }
-        events.publish {
+        events.publish(GuestCapability.URL) {
             it.openUrlOnHost =
                 OpenUrlOnHost.newBuilder()
                     .setRequestId(requestId)
@@ -127,7 +128,7 @@ class UrlRedirect(
             if (warningSent) return
             warningSent = true
         }
-        events.publish {
+        events.publish(GuestCapability.HEALTH) {
             it.healthWarning =
                 HealthWarning.newBuilder()
                     .setKind(HealthWarningKind.HEALTH_WARNING_KIND_BROWSER_ROLE_LOST)

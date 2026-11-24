@@ -9,6 +9,7 @@ import android.content.pm.ApplicationInfo
 import android.media.AudioManager
 import android.media.AudioRecordingConfiguration
 import android.os.Handler
+import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.v1.RecordingChanged
 import io.apkrun.guest.protocol.v1.SetMicrophoneAccess
 import io.apkrun.guest.runtime.AgentLog
@@ -100,7 +101,7 @@ internal class MicrophoneGate(
         }
         recordingPackages = packages
         val changed = RecordingChanged.newBuilder().addAllPackages(packages.sorted())
-        events.publish { it.setRecordingChanged(changed) }
+        events.publish(GuestCapability.MICROPHONE) { it.setRecordingChanged(changed) }
     }
 
     companion object {

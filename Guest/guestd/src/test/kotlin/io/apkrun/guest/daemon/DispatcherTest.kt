@@ -75,6 +75,7 @@ private class FakeOperations : AgentOperations {
     var timeZoneRequest: SetTimeZone? = null
     var clockFormatRequest: SetClockFormat? = null
     var syncTimeRequest: SyncTime? = null
+    var syncTimeFailure: GuestFailure? = null
     var lastClipboard: ClipData? = null
     var movedTask: MoveTaskToDisplay? = null
     var listedTasks: ListTasks? = null
@@ -168,6 +169,7 @@ private class FakeOperations : AgentOperations {
     }
 
     override fun syncTime(request: SyncTime) {
+        syncTimeFailure?.let { throw it }
         syncTimeRequest = request
     }
 
@@ -279,18 +281,24 @@ class DispatcherTest {
     }
 
     @Test
-    fun syncTimeIsUnsupportedInTheDevelopmentShellAgent() = runBlocking {
+    fun syncTimeReachesTheOperationAndPropagatesUnsupported() = runBlocking {
+        val operations = FakeOperations()
+        operations.syncTimeFailure =
+            GuestFailure(
+                GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED,
+                "this Guest Agent does not have permission to set the wall clock",
+            )
         val request =
             Request.newBuilder()
                 .setSyncTime(SyncTime.newBuilder().setUnixTimeMs(1_800_000_000_123L).setRttMs(37))
                 .build()
 
         val response =
-            dispatcher(FakeOperations()).dispatch(1, request, everything + GuestCapability.LOCALE)
+            dispatcher(operations).dispatch(1, request, everything + GuestCapability.LOCALE)
 
         assertEquals(GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED, response.getError().getCode())
-        assertTrue(response.getError().getMessage().contains("privileged APKRun agent"))
-        assertFalse(GuestCapability.LOCALE in Connection.IMPLEMENTED)
+        assertTrue(response.getError().getMessage().contains("permission to set the wall clock"))
+        assertTrue(GuestCapability.LOCALE in Connection.IMPLEMENTED)
     }
 
     @Test

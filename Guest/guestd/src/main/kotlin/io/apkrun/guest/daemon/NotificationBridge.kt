@@ -1,5 +1,6 @@
 package io.apkrun.guest.daemon
 
+import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.HealthWarning
@@ -97,7 +98,7 @@ internal class NotificationBridge(
                 wireIfForwardable(notification, access.ranking(notification.key), replay = true)
                     ?: continue
             synchronized(lock) { forwarded.add(notification.key) }
-            events.publish { it.notificationPosted = wire }
+            events.publish(GuestCapability.NOTIFICATIONS) { it.notificationPosted = wire }
         }
     }
 
@@ -105,7 +106,7 @@ internal class NotificationBridge(
     fun posted(notification: PostedNotification, ranking: Ranking) {
         val wire = wireIfForwardable(notification, ranking, replay = false) ?: return
         synchronized(lock) { forwarded.add(notification.key) }
-        events.publish { it.notificationPosted = wire }
+        events.publish(GuestCapability.NOTIFICATIONS) { it.notificationPosted = wire }
     }
 
     /** A `NotificationListenerService.onNotificationRemoved` report (§5.1). */
@@ -113,7 +114,7 @@ internal class NotificationBridge(
         synchronized(lock) {
             if (!forwarded.remove(key)) return
         }
-        events.publish {
+        events.publish(GuestCapability.NOTIFICATIONS) {
             it.notificationRemoved =
                 NotificationRemoved.newBuilder().setKey(key).setReason(reason).build()
         }
@@ -144,7 +145,7 @@ internal class NotificationBridge(
             if (warningSent) return
             warningSent = true
         }
-        events.publish {
+        events.publish(GuestCapability.HEALTH) {
             it.healthWarning =
                 HealthWarning.newBuilder()
                     .setKind(HealthWarningKind.HEALTH_WARNING_KIND_NOTIFICATION_LISTENER_DISABLED)

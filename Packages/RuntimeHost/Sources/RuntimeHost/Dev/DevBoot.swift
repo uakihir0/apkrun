@@ -511,6 +511,16 @@ public struct DevBoot: Sendable {
         let logcat = try LogcatFile(directory: paths.logsRoot.appendingPathComponent("guest", isDirectory: true))
         onEvent(.message("logcat goes to \(logcat.url.path)"))
         let consoles = DevConsoleSocketServer(directory: paths.devConsoleDirectory)
+        let developerService = EmbeddedDeveloperService(supervisor: supervisor) { message in
+            onEvent(.warning(message))
+        }
+        let controlSocket = DevControlSocketServer(
+            directory: paths.devConsoleDirectory,
+            service: developerService
+        )
+        let powerObserver = PowerObserver { event in
+            await developerService.receivePowerObserverEvent(event)
+        }
         let eventTask = Task {
             for await event in supervisor.events {
                 switch event {
@@ -536,6 +546,8 @@ public struct DevBoot: Sendable {
         defer {
             eventTask.cancel()
             consoles.stop()
+            controlSocket.stop()
+            powerObserver.stop()
             logcat.close()
         }
 
@@ -570,6 +582,20 @@ public struct DevBoot: Sendable {
         var stopCause: StopCause = .signal
         let started = ContinuousClock.now
         if await stopSignal.current() == nil {
+            do {
+                try controlSocket.start()
+                onEvent(
+                    .message(
+                        "developer power control is on \(paths.devConsoleDirectory.appendingPathComponent("control.sock").path)"
+                    ))
+            } catch {
+                onEvent(.warning("developer power control is unavailable: \(error.qualifiedCode)"))
+            }
+            do {
+                try powerObserver.start()
+            } catch {
+                onEvent(.warning("host sleep notifications are unavailable"))
+            }
             if windowDisplay != nil {
                 onEvent(.windowStatus("Starting Android…"))
             }
@@ -1115,6 +1141,7 @@ public struct DevBoot: Sendable {
     static func describe(_ state: RuntimeState) -> String {
         switch state {
         case .stopped: "stopped"
+        case .suspended: "suspended"
         case .booting(let phase): "booting(\(phase))"
         case .ready: "ready"
         case .stopping(_): "stopping"

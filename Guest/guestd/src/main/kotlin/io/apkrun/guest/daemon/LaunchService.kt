@@ -4,6 +4,7 @@ import android.app.ActivityOptions
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchMode
@@ -140,9 +141,7 @@ private constructor(
             .build()
     }
 
-    /**
-     * Finishes every task, or force-stops every task and process, of the requested package.
-     */
+    /** Finishes every task, or force-stops every task and process, of the requested package. */
     suspend fun stop(request: StopApplication) {
         val pkg = request.getPackage()
         if (!PackageName.isValid(pkg)) {

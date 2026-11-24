@@ -299,6 +299,52 @@ public enum RuntimeImportRelation: Codable, Sendable, Equatable {
     }
 }
 
+/// One known issue of a compatibility-database entry (diagnostics.md
+/// §10.2). Strings are keyed by locale (`en`, `ja`).
+public struct RuntimeCompatibilityIssue: Codable, Sendable, Equatable {
+    /// The stable issue identifier.
+    public var id: String
+    /// The issue title, keyed by locale.
+    public var title: [String: String]
+    /// The workaround, keyed by locale, when one exists.
+    public var workaround: [String: String]?
+
+    /// Creates an issue.
+    public init(id: String, title: [String: String], workaround: [String: String]? = nil) {
+        self.id = id
+        self.title = title
+        self.workaround = workaround
+    }
+}
+
+/// The compatibility-database verdict for one package
+/// (diagnostics.md §10.3; API 1.37). It is advice and never blocks
+/// an install.
+public struct RuntimeCompatibilityInfo: Codable, Sendable, Equatable {
+    /// The level word: `works`, `compatibilityMode`, or `unsupported`.
+    public var level: String
+    /// The display label ("Works", "Works with limitations",
+    /// "Unsupported").
+    public var label: String
+    /// The known issues.
+    public var issues: [RuntimeCompatibilityIssue]
+    /// The setting keys the entry recommends.
+    public var recommendedKeys: [String]
+
+    /// Creates a compatibility verdict.
+    public init(
+        level: String,
+        label: String,
+        issues: [RuntimeCompatibilityIssue] = [],
+        recommendedKeys: [String] = []
+    ) {
+        self.level = level
+        self.label = label
+        self.issues = issues
+        self.recommendedKeys = recommendedKeys
+    }
+}
+
 /// A non-fatal observation from APK inspection.
 public enum RuntimeImportWarning: Codable, Sendable, Equatable {
     case missingHardwareFeature(feature: String)
@@ -330,6 +376,12 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
     public var relation: RuntimeImportRelation
     /// Non-fatal observations from host inspection.
     public var warnings: [RuntimeImportWarning]
+    /// The provider the Add sheet may offer to enable (§4.7); only a
+    /// suggestion — it is off until the user turns it on.
+    public var suggestedProvider: String?
+    /// The compatibility-database verdict, `nil` for an unknown app
+    /// (diagnostics.md §10.3; API 1.37).
+    public var compatibility: RuntimeCompatibilityInfo?
 
     private enum CodingKeys: String, CodingKey {
         case ticket
@@ -342,6 +394,8 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
         case excludedSplits
         case relation
         case warnings
+        case suggestedProvider
+        case compatibility
     }
 
     /// Creates an import preview.
@@ -355,7 +409,9 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
         files: [RuntimeArtifactFile],
         excludedSplits: [String] = [],
         relation: RuntimeImportRelation,
-        warnings: [RuntimeImportWarning] = []
+        warnings: [RuntimeImportWarning] = [],
+        suggestedProvider: String? = nil,
+        compatibility: RuntimeCompatibilityInfo? = nil
     ) {
         self.ticket = ticket
         self.packageID = packageID
@@ -367,6 +423,8 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
         self.excludedSplits = excludedSplits
         self.relation = relation
         self.warnings = warnings
+        self.suggestedProvider = suggestedProvider
+        self.compatibility = compatibility
     }
 
     /// Decodes previews from earlier API minors that did not include signer digests.
@@ -382,6 +440,9 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
         excludedSplits = try container.decode([String].self, forKey: .excludedSplits)
         relation = try container.decode(RuntimeImportRelation.self, forKey: .relation)
         warnings = try container.decode([RuntimeImportWarning].self, forKey: .warnings)
+        suggestedProvider = try container.decodeIfPresent(String.self, forKey: .suggestedProvider)
+        compatibility = try container.decodeIfPresent(
+            RuntimeCompatibilityInfo.self, forKey: .compatibility)
     }
 }
 
@@ -515,18 +576,88 @@ public struct RuntimePackageDetails: Codable, Sendable, Equatable {
     public var artifactBytes: Int64
     /// The last known Android app-data size, in bytes.
     public var androidDataBytes: Int64?
+    /// A verified update waiting for installation, when one is staged
+    /// (package-store.md §7.1).
+    public var staged: RuntimeStagedArtifact?
+    /// The last known-good set kept for rollback, when one exists
+    /// (package-store.md §7.2; API 1.25).
+    public var previous: RuntimeArtifactSlot?
+    /// The compatibility-database verdict, `nil` for an unknown app
+    /// (diagnostics.md §10.3; API 1.37).
+    public var compatibility: RuntimeCompatibilityInfo?
 
     /// Creates package details.
     public init(
         summary: RuntimePackageSummary,
         files: [RuntimeArtifactFile],
         artifactBytes: Int64,
-        androidDataBytes: Int64? = nil
+        androidDataBytes: Int64? = nil,
+        staged: RuntimeStagedArtifact? = nil,
+        previous: RuntimeArtifactSlot? = nil,
+        compatibility: RuntimeCompatibilityInfo? = nil
     ) {
         self.summary = summary
         self.files = files
         self.artifactBytes = artifactBytes
         self.androidDataBytes = androidDataBytes
+        self.staged = staged
+        self.previous = previous
+        self.compatibility = compatibility
+    }
+}
+
+/// The rollback slot `packageInfo` reports (package-store.md §7.2).
+public struct RuntimeArtifactSlot: Codable, Sendable, Equatable {
+    /// Android's long version code of the slot's set.
+    public var versionCode: RuntimeVersionCode
+    /// The display-only version string, if present.
+    public var versionName: String?
+    /// The combined size of the APK files in bytes.
+    public var size: Int64
+    /// The number of APK files.
+    public var fileCount: Int
+
+    /// Creates a slot summary.
+    public init(
+        versionCode: RuntimeVersionCode,
+        versionName: String? = nil,
+        size: Int64,
+        fileCount: Int
+    ) {
+        self.versionCode = versionCode
+        self.versionName = versionName
+        self.size = size
+        self.fileCount = fileCount
+    }
+}
+
+/// The staged artifact set `packageInfo` reports (package-store.md §7.1).
+public struct RuntimeStagedArtifact: Codable, Sendable, Equatable {
+    /// Android's long version code of the staged set.
+    public var versionCode: RuntimeVersionCode
+    /// The display-only Android version name, when present.
+    public var versionName: String?
+    /// The combined size of the staged APK files in bytes.
+    public var size: Int64
+    /// The number of APK files in the staged set.
+    public var fileCount: Int
+    /// The source that supplied the set (`local`, `direct`, `fdroid`,
+    /// `github`, or `manualFile`).
+    public var origin: String
+
+    /// Creates a staged-artifact summary.
+    public init(
+        versionCode: RuntimeVersionCode,
+        versionName: String? = nil,
+        size: Int64,
+        fileCount: Int,
+        origin: String
+    ) {
+        self.versionCode = versionCode
+        self.versionName = versionName
+        self.size = size
+        self.fileCount = fileCount
+        self.origin = origin
     }
 }
 
@@ -544,22 +675,32 @@ public struct RuntimeInstallOptions: Codable, Sendable, Equatable {
     public var createWrapper: Bool
     /// Reserved for wire compatibility. RuntimeHost rejects lower-version imports regardless.
     public var allowDowngrade: Bool
+    /// The `--provider` spec attached after a successful install (cli.md §4.2).
+    public var provider: ProviderSpec?
+    /// The `--updates` mode; nil means the §2.4 defaults.
+    public var updateMode: UpdateChoice?
 
     /// Creates installation options.
     public init(
         authority: RuntimeUpdateAuthority = .manual,
         createWrapper: Bool = false,
-        allowDowngrade: Bool = false
+        allowDowngrade: Bool = false,
+        provider: ProviderSpec? = nil,
+        updateMode: UpdateChoice? = nil
     ) {
         self.authority = authority
         self.createWrapper = createWrapper
         self.allowDowngrade = allowDowngrade
+        self.provider = provider
+        self.updateMode = updateMode
     }
 
     private enum CodingKeys: String, CodingKey {
         case authority
         case createWrapper
         case allowDowngrade
+        case provider
+        case updateMode
     }
 
     /// Decodes older clients with downgrade approval disabled by default.
@@ -568,6 +709,8 @@ public struct RuntimeInstallOptions: Codable, Sendable, Equatable {
         authority = try container.decodeIfPresent(RuntimeUpdateAuthority.self, forKey: .authority) ?? .manual
         createWrapper = try container.decodeIfPresent(Bool.self, forKey: .createWrapper) ?? false
         allowDowngrade = try container.decodeIfPresent(Bool.self, forKey: .allowDowngrade) ?? false
+        provider = try container.decodeIfPresent(ProviderSpec.self, forKey: .provider)
+        updateMode = try container.decodeIfPresent(UpdateChoice.self, forKey: .updateMode)
     }
 
     /// Encodes all install options for newer clients.
@@ -576,6 +719,8 @@ public struct RuntimeInstallOptions: Codable, Sendable, Equatable {
         try container.encode(authority, forKey: .authority)
         try container.encode(createWrapper, forKey: .createWrapper)
         try container.encode(allowDowngrade, forKey: .allowDowngrade)
+        try container.encodeIfPresent(provider, forKey: .provider)
+        try container.encodeIfPresent(updateMode, forKey: .updateMode)
     }
 }
 
@@ -590,6 +735,28 @@ public struct RuntimeInstallImportedRequest: Codable, Sendable, Equatable {
     public init(ticket: RuntimeImportTicket, options: RuntimeInstallOptions = RuntimeInstallOptions()) {
         self.ticket = ticket
         self.options = options
+    }
+}
+
+/// Drops an import ticket and its private APK copies (runtime-api.md §10).
+public struct RuntimeDiscardImportRequest: Codable, Sendable, Equatable {
+    /// The import ticket returned by `importPackage`.
+    public var ticket: RuntimeImportTicket
+
+    /// Creates a discard request.
+    public init(ticket: RuntimeImportTicket) {
+        self.ticket = ticket
+    }
+}
+
+/// Adopts a package Android has but APKRun does not manage (package-store.md §9.3).
+public struct RuntimeAdoptPackageRequest: Codable, Sendable, Equatable {
+    /// The Android package name to adopt.
+    public var packageID: RuntimePackageID
+
+    /// Creates an adopt request.
+    public init(packageID: RuntimePackageID) {
+        self.packageID = packageID
     }
 }
 
@@ -683,10 +850,33 @@ public struct RuntimePackageRequest: Codable, Sendable, Equatable {
 public struct RuntimeLaunchRequest: Codable, Sendable, Equatable {
     /// The package to launch.
     public var packageID: RuntimePackageID
+    /// The calling launcher's own timing stamps, so the daemon can record
+    /// `WRAPPER_PROCESS_START` and `APP_LAUNCH_REQUEST` (diagnostics.md §4.2).
+    public var launchTiming: LaunchTiming?
 
     /// Creates a launch request.
-    public init(packageID: RuntimePackageID) {
+    public init(packageID: RuntimePackageID, launchTiming: LaunchTiming? = nil) {
         self.packageID = packageID
+        self.launchTiming = launchTiming
+    }
+}
+
+/// The window preferences a session applies (package-metadata-json.md §3.1
+/// `window.*`; runtime-api.md `SessionDescriptor.windowPrefs`). A launcher
+/// reads them at launch and on `windowPrefsChanged` (§10.2).
+public struct WindowPrefs: Codable, Sendable, Equatable {
+    /// `window.resizable`.
+    public var resizable: Bool
+    /// `window.alwaysOnTop`: the window floats while it is not full screen.
+    public var alwaysOnTop: Bool
+    /// `window.zoom`.
+    public var zoom: Double
+
+    /// Creates a preferences value.
+    public init(resizable: Bool, alwaysOnTop: Bool, zoom: Double) {
+        self.resizable = resizable
+        self.alwaysOnTop = alwaysOnTop
+        self.zoom = zoom
     }
 }
 
@@ -749,12 +939,19 @@ public struct RuntimeLaunchResult: Codable, Sendable, Equatable {
     public var packageID: RuntimePackageID
     /// The session state when this reply was produced.
     public var state: RuntimeSessionPhase
+    /// The resolved `window.*` settings the session window applies
+    /// (runtime-api.md `SessionDescriptor.windowPrefs`).
+    public var windowPrefs: WindowPrefs?
 
     /// Creates a launch result.
-    public init(sessionID: UUID, packageID: RuntimePackageID, state: RuntimeSessionPhase) {
+    public init(
+        sessionID: UUID, packageID: RuntimePackageID, state: RuntimeSessionPhase,
+        windowPrefs: WindowPrefs? = nil
+    ) {
         self.sessionID = sessionID
         self.packageID = packageID
         self.state = state
+        self.windowPrefs = windowPrefs
     }
 }
 
@@ -783,6 +980,36 @@ public struct RuntimeTerminateResult: Codable, Sendable, Equatable {
     }
 }
 
+/// Closes a package session per `window.closeBehavior`
+/// (display-and-windowing.md §7.6).
+public struct RuntimeCloseSessionRequest: Codable, Sendable, Equatable {
+    /// The package whose session should close.
+    public var packageID: RuntimePackageID
+    /// The policy to apply; `nil` reads the package's saved
+    /// `window.closeBehavior` (`stop` when unset).
+    public var policy: WireClosePolicy?
+
+    /// Creates a close request.
+    public init(packageID: RuntimePackageID, policy: WireClosePolicy? = nil) {
+        self.packageID = packageID
+        self.policy = policy
+    }
+}
+
+/// The outcome of a session close request.
+public struct RuntimeCloseSessionResult: Codable, Sendable, Equatable {
+    /// The package whose session was closed.
+    public var packageID: RuntimePackageID
+    /// Whether the runtime had an active session to close.
+    public var hadSession: Bool
+
+    /// Creates a close result.
+    public init(packageID: RuntimePackageID, hadSession: Bool) {
+        self.packageID = packageID
+        self.hadSession = hadSession
+    }
+}
+
 /// A stable, transport-safe runtime failure with a user-facing fallback message.
 public struct RuntimeWireError: Error, Codable, Sendable, Equatable {
     /// The error domain, such as `runtime` or `store`.
@@ -793,13 +1020,20 @@ public struct RuntimeWireError: Error, Codable, Sendable, Equatable {
     public var message: String
     /// An optional action the user can take to recover.
     public var remediation: String?
+    /// The error's named parameters, such as a `stagingToken` for
+    /// `wrapper.destinationNotAccessible`. Not part of the message.
+    public var parameters: [String: String]
 
     /// Creates a transport-safe failure.
-    public init(domain: String, code: String, message: String, remediation: String? = nil) {
+    public init(
+        domain: String, code: String, message: String, remediation: String? = nil,
+        parameters: [String: String] = [:]
+    ) {
         self.domain = domain
         self.code = code
         self.message = message
         self.remediation = remediation
+        self.parameters = parameters
     }
 
     /// Creates a runtime-domain error.
@@ -810,5 +1044,180 @@ public struct RuntimeWireError: Error, Codable, Sendable, Equatable {
     /// Creates a package-store-domain error.
     public static func store(_ code: String, message: String, remediation: String? = nil) -> Self {
         Self(domain: "store", code: "store.\(code)", message: message, remediation: remediation)
+    }
+
+    /// Creates a maintenance-domain error (runtime-api.md §12).
+    public static func maintenance(_ code: String, message: String, remediation: String? = nil) -> Self {
+        Self(domain: "maintenance", code: "maintenance.\(code)", message: message, remediation: remediation)
+    }
+}
+
+/// A `settings.json` patch of dotted keys (host-ui.md §7): `set` writes a
+/// value, `clear` removes the stored value (the UI's **Reset**).
+public struct RuntimePackageSettingsPatch: Codable, Sendable, Equatable {
+    /// Keys to write.
+    public var set: [String: String]
+    /// Keys to remove.
+    public var clear: [String]
+
+    /// Creates a patch.
+    public init(set: [String: String] = [:], clear: [String] = []) {
+        self.set = set
+        self.clear = clear
+    }
+}
+
+/// The `packageSettings` request (host-ui.md §7).
+public struct RuntimePackageSettingsRequest: Codable, Sendable, Equatable {
+    /// The package whose `settings.json` to read.
+    public var packageID: RuntimePackageID
+
+    /// Creates a request.
+    public init(packageID: RuntimePackageID) {
+        self.packageID = packageID
+    }
+}
+
+/// The `updatePackageSettings` request (host-ui.md §7).
+public struct RuntimeUpdatePackageSettingsRequest: Codable, Sendable, Equatable {
+    /// The package to patch.
+    public var packageID: RuntimePackageID
+    /// The patch to apply.
+    public var patch: RuntimePackageSettingsPatch
+
+    /// Creates a request.
+    public init(packageID: RuntimePackageID, patch: RuntimePackageSettingsPatch) {
+        self.packageID = packageID
+        self.patch = patch
+    }
+}
+
+/// A package's stored settings groups on the wire (package-metadata-json.md
+/// §3): each group maps a leaf key to its string form.
+/// One resolved `settings.json` key on the wire: the effective value and
+/// where it came from (configuration.md §3.2, cli.md §4.2 `settings list`).
+public struct PackageSettingWire: Codable, Sendable, Equatable {
+    /// The dotted key (`window.zoom`).
+    public var key: String
+    /// The effective value after resolution.
+    public var value: String
+    /// `user`, `recommended`, `default`, or `globalSwitch`.
+    public var source: String
+    /// Whether the value applies without a new session (§3.1 Applies column).
+    public var appliesLive: Bool
+    /// The stored value, nil when the key uses a fallback.
+    public var stored: String?
+    /// The accepted values for a `word` key, nil otherwise.
+    public var allowed: [String]?
+
+    /// Creates a resolved key row.
+    public init(
+        key: String, value: String, source: String, appliesLive: Bool,
+        stored: String? = nil, allowed: [String]? = nil
+    ) {
+        self.key = key
+        self.value = value
+        self.source = source
+        self.appliesLive = appliesLive
+        self.stored = stored
+        self.allowed = allowed
+    }
+}
+
+/// Resolved per-app settings payload: stored groups, recommendation map,
+/// and the entry list the UI/CLI render (host-ui.md §7, cli.md §4.2).
+public struct PackageSettingsWire: Codable, Sendable, Equatable {
+    /// Stored values per top-level group.
+    public var groups: [String: [String: String]]
+    /// Compatibility-database recommendations by dotted key, for the
+    /// "Recommended for this app" marker (host-ui.md §7). Empty until #91.
+    public var recommended: [String: String]
+    /// Every §3.1 key resolved for this package.
+    public var entries: [PackageSettingWire]
+
+    /// Creates a wire settings value.
+    public init(
+        groups: [String: [String: String]] = [:], recommended: [String: String] = [:],
+        entries: [PackageSettingWire] = []
+    ) {
+        self.groups = groups
+        self.recommended = recommended
+        self.entries = entries
+    }
+
+    /// The stored value of a dotted key, nil when absent.
+    public func value(_ key: String) -> String? {
+        let parts = key.split(separator: ".", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return nil }
+        return groups[parts[0]]?[parts[1]]
+    }
+}
+
+/// A `packageSettings` control request.
+public struct RuntimePackageSettingsControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The request.
+    public let request: RuntimePackageSettingsRequest
+
+    /// Creates a request.
+    public init(header: APIRequestHeader, request: RuntimePackageSettingsRequest) {
+        self.header = header
+        self.request = request
+    }
+}
+
+/// The stored settings or typed error of `packageSettings`. A managed
+/// package with no `settings.json` returns `result == nil`.
+public struct RuntimePackageSettingsControlReply: Codable, Equatable, Sendable {
+    /// The stored settings, nil when none are stored.
+    public let result: PackageSettingsWire?
+    /// The structured failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: PackageSettingsWire?) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// An `updatePackageSettings` control request.
+public struct RuntimeUpdatePackageSettingsControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The request.
+    public let request: RuntimeUpdatePackageSettingsRequest
+
+    /// Creates a request.
+    public init(header: APIRequestHeader, request: RuntimeUpdatePackageSettingsRequest) {
+        self.header = header
+        self.request = request
+    }
+}
+
+/// The resulting settings or typed error of `updatePackageSettings`.
+public struct RuntimeUpdatePackageSettingsControlReply: Codable, Equatable, Sendable {
+    /// The stored settings after the patch.
+    public let result: PackageSettingsWire?
+    /// The structured failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: PackageSettingsWire) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
     }
 }

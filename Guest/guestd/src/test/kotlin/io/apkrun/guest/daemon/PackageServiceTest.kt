@@ -1,6 +1,7 @@
 package io.apkrun.guest.daemon
 
 import com.google.protobuf.ByteString
+import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.GuestErrorCode
 import io.apkrun.guest.protocol.v1.ListPackages
 import io.apkrun.guest.protocol.v1.PackageFilter

@@ -86,6 +86,12 @@ let package = Package(
             url: "https://github.com/weichsel/ZIPFoundation.git",
             exact: "0.9.20"
         ),
+        // Sparkle is linked into APKRun.app only (through project.yml);
+        // it is pinned here so the third-party lock check sees it.
+        .package(
+            url: "https://github.com/sparkle-project/Sparkle.git",
+            exact: "2.10.1"
+        ),
     ],
     targets: [
         .target(name: "DiagnosticsCore", path: "Packages/DiagnosticsCore/Sources/DiagnosticsCore"),
@@ -220,6 +226,17 @@ let package = Package(
             path: "Packages/IntegrationCore/Sources/IntegrationCore"
         ),
         .executableTarget(
+            name: "apkrun-perf",
+            dependencies: [
+                "RuntimeClient",
+                "RuntimeAPI",
+                "DiagnosticsCore",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            path: "Tests/PerformanceTests",
+            exclude: ["baselines"]
+        ),
+        .executableTarget(
             name: "apkrun",
             dependencies: [
                 "RuntimeClient",
@@ -306,7 +323,7 @@ let package = Package(
         ),
         .testTarget(
             name: "GraphicsCoreSystemTests",
-            dependencies: ["GraphicsCore", "GraphicsBridge"],
+            dependencies: ["GraphicsCore", "GraphicsBridge", "GraphicsCoreTestSupport"],
             path: "Packages/GraphicsCore/Tests/GraphicsCoreSystemTests",
             swiftSettings: [
                 .define("APKRUN_TEST_READBACK", .when(traits: ["TestReadback"]))
@@ -326,6 +343,11 @@ let package = Package(
             name: "GuestProtocolTests",
             dependencies: ["GuestProtocol"],
             path: "Packages/GuestProtocol/Tests/GuestProtocolTests"
+        ),
+        .testTarget(
+            name: "GuestProtocolSystemTests",
+            dependencies: ["GuestProtocol", "GuestProtocolTestSupport"],
+            path: "Packages/GuestProtocol/Tests/GuestProtocolSystemTests"
         ),
         .testTarget(
             name: "ImageCoreTests",
@@ -350,7 +372,7 @@ let package = Package(
         ),
         .testTarget(
             name: "RuntimeHostTests",
-            dependencies: ["RuntimeHost", "DiagnosticsCore"],
+            dependencies: ["RuntimeHost", "DiagnosticsCore", "IntegrationCore"],
             path: "Packages/RuntimeHost/Tests/RuntimeHostTests"
         ),
         .testTarget(
@@ -364,9 +386,23 @@ let package = Package(
             path: "Packages/APKStoreCore/Tests/APKStoreCoreTests"
         ),
         .testTarget(
+            name: "APKStoreCoreSystemTests",
+            dependencies: [
+                "APKStoreCore",
+                "APKStoreCoreTestSupport",
+                .product(name: "ZIPFoundation", package: "zipfoundation"),
+            ],
+            path: "Packages/APKStoreCore/Tests/APKStoreCoreSystemTests"
+        ),
+        .testTarget(
             name: "UpdateCoreTests",
             dependencies: ["UpdateCore"],
             path: "Packages/UpdateCore/Tests/UpdateCoreTests"
+        ),
+        .testTarget(
+            name: "UpdateCoreSystemTests",
+            dependencies: ["UpdateCore", "APKStoreCore", "UpdateCoreTestSupport"],
+            path: "Packages/UpdateCore/Tests/UpdateCoreSystemTests"
         ),
         .testTarget(
             name: "WrapperCoreTests",
@@ -377,6 +413,26 @@ let package = Package(
             name: "IntegrationCoreTests",
             dependencies: ["IntegrationCore"],
             path: "Packages/IntegrationCore/Tests/IntegrationCoreTests"
+        ),
+        .target(
+            name: "GraphicsCoreTestSupport",
+            dependencies: ["GraphicsCore"],
+            path: "Packages/GraphicsCore/Tests/GraphicsCoreTestSupport"
+        ),
+        .target(
+            name: "GuestProtocolTestSupport",
+            dependencies: ["GuestProtocol"],
+            path: "Packages/GuestProtocol/Tests/GuestProtocolTestSupport"
+        ),
+        .target(
+            name: "APKStoreCoreTestSupport",
+            dependencies: ["APKStoreCore"],
+            path: "Packages/APKStoreCore/Tests/APKStoreCoreTestSupport"
+        ),
+        .target(
+            name: "UpdateCoreTestSupport",
+            dependencies: ["UpdateCore", "APKStoreCore"],
+            path: "Packages/UpdateCore/Tests/UpdateCoreTestSupport"
         ),
         // The per-run resources of the VM tests (test-strategy §3.10). The same helper is compiled into the
         // IntegrationTests and AcceptanceTests bundles, which exclude this file.
@@ -399,3 +455,37 @@ let package = Package(
     ],
     swiftLanguageModes: [.v6]
 )
+
+// libFuzzer harnesses (build-system.md §15.2, #92). Xcode's toolchain ships
+// no fuzzer runtime, so these only appear with APKRUN_FUZZ=1 and a swift.org
+// toolchain resolved by scripts/run-fuzz.sh.
+if ProcessInfo.processInfo.environment["APKRUN_FUZZ"] == "1" {
+    package.products += [
+        .executable(name: "GraphicsCoreFuzz", targets: ["GraphicsCoreFuzz"]),
+        .executable(name: "GuestProtocolFuzz", targets: ["GuestProtocolFuzz"]),
+        .executable(name: "APKStoreCoreFuzz", targets: ["APKStoreCoreFuzz"]),
+        .executable(name: "UpdateCoreFuzz", targets: ["UpdateCoreFuzz"]),
+    ]
+    package.targets += [
+        .executableTarget(
+            name: "GraphicsCoreFuzz",
+            dependencies: ["GraphicsCoreTestSupport"],
+            path: "Packages/GraphicsCore/Fuzz/GraphicsCoreFuzz"
+        ),
+        .executableTarget(
+            name: "GuestProtocolFuzz",
+            dependencies: ["GuestProtocolTestSupport"],
+            path: "Packages/GuestProtocol/Fuzz/GuestProtocolFuzz"
+        ),
+        .executableTarget(
+            name: "APKStoreCoreFuzz",
+            dependencies: ["APKStoreCoreTestSupport"],
+            path: "Packages/APKStoreCore/Fuzz/APKStoreCoreFuzz"
+        ),
+        .executableTarget(
+            name: "UpdateCoreFuzz",
+            dependencies: ["UpdateCoreTestSupport"],
+            path: "Packages/UpdateCore/Fuzz/UpdateCoreFuzz"
+        ),
+    ]
+}

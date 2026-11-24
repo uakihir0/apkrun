@@ -1,6 +1,7 @@
 package io.apkrun.guest.daemon
 
 import android.content.ComponentName
+import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.ClearPolicy
 import io.apkrun.guest.protocol.v1.DisplayEmpty
@@ -137,7 +138,8 @@ class TaskService(
 
     /**
      * Waits until Android no longer reports [packageName], publishing `TaskVanished` before return.
-     * Used after `IActivityManager.forceStopPackage`, which removes tasks without calling `removeTask`.
+     * Used after `IActivityManager.forceStopPackage`, which removes tasks without calling
+     * `removeTask`.
      */
     suspend fun awaitPackageTasksDisappear(packageName: String) {
         removalLock.withLock {

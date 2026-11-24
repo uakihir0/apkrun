@@ -332,6 +332,41 @@ import Testing
     #expect(command is RuntimeResetCommand)
 }
 
+#if !APKRUN_EMBEDDED_RUNTIME
+    @Test func setupCommandParsesImageAndConfirmation() async throws {
+        let command = try await APKRunCommand.asyncParseAsRoot(["setup", "--image", "/tmp/bundle", "--yes"])
+        guard let setup = command as? SetupCommand else {
+            Issue.record("setup did not parse as SetupCommand")
+            return
+        }
+        #expect(setup.image == "/tmp/bundle")
+        #expect(setup.yes == true)
+    }
+
+    @Test func setupCommandDefaultsToFeedImage() async throws {
+        let command = try await APKRunCommand.asyncParseAsRoot(["setup"])
+        guard let setup = command as? SetupCommand else {
+            Issue.record("setup did not parse as SetupCommand")
+            return
+        }
+        #expect(setup.image == nil)
+        #expect(setup.yes == false)
+    }
+
+    @Test func runtimeResetCommandParsesEraseFlags() async throws {
+        let command = try await APKRunCommand.asyncParseAsRoot([
+            "runtime", "reset", "--erase", "--no-backup", "--yes",
+        ])
+        guard let reset = command as? RuntimeResetCommand else {
+            Issue.record("runtime reset did not parse as RuntimeResetCommand")
+            return
+        }
+        #expect(reset.erase == true)
+        #expect(reset.noBackup == true)
+        #expect(reset.yes == true)
+    }
+#endif
+
 @Test func packageInfoRejectsTheDisplayOptionWithAnActionableCatalogError() async throws {
     let command = try await APKRunCommand.asyncParseAsRoot(["info", "--displays"])
     guard var infoCommand = command as? PackageInfoCommand else {
@@ -556,12 +591,38 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
 }
 
 #if APKRUN_EMBEDDED_RUNTIME
+    @Test func developerPowerCommandsParseBothActions() async throws {
+        let sleep = try await APKRunCommand.asyncParseAsRoot(["dev", "power", "sleep"])
+        #expect((sleep as? DevPowerCommand)?.action == "sleep")
+
+        let wake = try await APKRunCommand.asyncParseAsRoot(["dev", "power", "wake"])
+        #expect((wake as? DevPowerCommand)?.action == "wake")
+    }
+
+    @Test func developerPowerCommandRejectsUnknownActions() async throws {
+        var command = try #require(
+            await APKRunCommand.asyncParseAsRoot(["dev", "power", "hibernate"]) as? DevPowerCommand
+        )
+        do {
+            try await command.run()
+            Issue.record("An unsupported developer power action unexpectedly succeeded.")
+        } catch CLIFailure.invalidArgument(let argument, let reason) {
+            #expect(argument == "action")
+            #expect(reason == "power")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
     @Test func runtimeControlCommandsParseStatusStartAndStop() async throws {
         let status = try await APKRunCommand.asyncParseAsRoot(["runtime", "status", "--json"])
         #expect((status as? RuntimeStatusCommand)?.json == true)
 
         let start = try await APKRunCommand.asyncParseAsRoot(["runtime", "start"])
         #expect(start is RuntimeStartCommand)
+
+        let heldStart = try await APKRunCommand.asyncParseAsRoot(["runtime", "start", "--hold"])
+        #expect((heldStart as? RuntimeStartCommand)?.hold == true)
 
         let stop = try await APKRunCommand.asyncParseAsRoot(["runtime", "stop"])
         #expect(stop is RuntimeStopCommand)
@@ -841,6 +902,14 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
     #endif
 }
 
+@Test func updateHelpMatchesGolden() {
+    #expect(UpdateCommand.helpMessage() == golden("help-update.txt"))
+}
+
+@Test func doctorHelpMatchesGolden() {
+    #expect(DoctorCommand.helpMessage() == golden("help-doctor.txt"))
+}
+
 #if APKRUN_EMBEDDED_RUNTIME
     @Test func developmentLaunchOnlyStartsTheWindowForAnActualLaunch() {
         #expect(DisplayWindowSession.request(in: ["dev", "launch", "HelloText.apk"]) == .launch)
@@ -1014,6 +1083,207 @@ private final class CLIOutputRecorder: @unchecked Sendable {
     }
 }
 
+#if !APKRUN_EMBEDDED_RUNTIME
+    @Test func wrapCommandParsesPackageOutputReplaceAndJSON() async throws {
+        let parsed = try await APKRunCommand.asyncParseAsRoot([
+            "wrap", "io.apkrun.fixture.hellotext",
+            "--output", "/tmp", "--replace", "--json",
+        ])
+        let command = try #require(parsed as? WrapCommand)
+        #expect(command.package == "io.apkrun.fixture.hellotext")
+        #expect(command.output == "/tmp")
+        #expect(command.replace == true)
+        #expect(command.json == true)
+        #expect(command.portable == false)
+    }
+
+    @Test func wrapCommandParsesPortable() async throws {
+        let parsed = try await APKRunCommand.asyncParseAsRoot([
+            "wrap", "app.apk", "--portable", "--updates", "notify",
+        ])
+        let command = try #require(parsed as? WrapCommand)
+        #expect(command.portable == true)
+        #expect(command.install == false)
+        #expect(command.updates == "notify")
+    }
+
+    @Test func wrapSuccessResultPrintsTheBundlePath() {
+        #expect(WrapCommandSupport.resultText(helloWrapperInfo()) == golden("wrap-success.txt"))
+    }
+
+    @Test func wrapperInfoReturnsTheSucceededWrapper() throws {
+        let info = helloWrapperInfo()
+        let snapshot = wrapSnapshot(result: .succeeded(.wrapper(info)))
+        #expect(
+            try WrapCommandSupport.wrapperInfo(
+                from: snapshot, expectedPackageID: helloPackageID) == info)
+    }
+
+    @Test func wrapperInfoPropagatesPackageNotInstalled() {
+        let wireError = RuntimeWireError(
+            domain: "wrapper",
+            code: "wrapper.packageNotInstalled",
+            message: "io.apkrun.fixture.hellotext isn't installed in APKRun.",
+            remediation: "Install io.apkrun.fixture.hellotext first. "
+                + "apkrun wrap installs it too when you add --install."
+        )
+        let snapshot = wrapSnapshot(result: .failed(wireError))
+        #expect(throws: wireError) {
+            try WrapCommandSupport.wrapperInfo(
+                from: snapshot, expectedPackageID: helloPackageID)
+        }
+        #expect(ErrorOutput.render(wireError, json: false) == golden("wrap-package-not-installed.txt"))
+    }
+
+    @Test func wrapperInfoPropagatesWrapperExists() {
+        let wireError = RuntimeWireError(
+            domain: "wrapper",
+            code: "wrapper.wrapperExists",
+            message:
+                "io.apkrun.fixture.hellotext already has a Mac app (HelloText.app).",
+            remediation:
+                "Use Update Mac App, or run: apkrun wrap io.apkrun.fixture.hellotext --replace"
+        )
+        let snapshot = wrapSnapshot(result: .failed(wireError))
+        #expect(throws: wireError) {
+            try WrapCommandSupport.wrapperInfo(
+                from: snapshot, expectedPackageID: helloPackageID)
+        }
+        #expect(ErrorOutput.render(wireError, json: false) == golden("wrap-wrapper-exists.txt"))
+    }
+
+    private var helloPackageID: RuntimePackageID {
+        RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext")!
+    }
+
+    private func helloWrapperInfo() -> WrapperInfo {
+        WrapperInfo(
+            summary: WrapperSummary(
+                packageID: helloPackageID,
+                bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+                displayName: "HelloText",
+                kind: .local,
+                bundleURL: URL(fileURLWithPath: "/Applications/HelloText.app"),
+                status: WrapperStatus(state: .valid),
+                approval: .generated,
+                launcherVersion: "1",
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+            ),
+            fileName: "HelloText",
+            customization: WrapperCustomizationWire(),
+            signer: .adHoc,
+            cdhash: "0123456789abcdef0123456789abcdef01234567",
+            launcherAPI: APIVersion(major: 1, minor: 0),
+            formatVersion: 1
+        )
+    }
+
+    private func wrapSnapshot(result: OperationResult) -> OperationSnapshot {
+        OperationSnapshot(
+            operationID: OperationID(),
+            kind: .wrapperCreate,
+            packageID: helloPackageID,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            result: result,
+            finishedAt: Date(timeIntervalSince1970: 1_700_000_001)
+        )
+    }
+#endif
+
+// MARK: - install update flags (cli.md §4.2)
+
+@Test func installProviderFlagMapsToApkrunAuthority() throws {
+    let options = try InstallUpdateOptions.options(
+        provider: "direct:https://updates.example.com/app.json",
+        updates: nil, update: nil, updateProvider: nil, updateURL: nil)
+    #expect(options.authority == .apkrun)
+    #expect(options.updateMode == nil)
+    #expect(options.provider?.spec == "direct:https://updates.example.com/app.json")
+    #expect(options.provider?.bookmark == nil)
+}
+
+@Test func installUpdateProviderURLPairMapsToSameSpec() throws {
+    let options = try InstallUpdateOptions.options(
+        provider: nil, updates: nil, update: nil,
+        updateProvider: "direct", updateURL: "https://updates.example.com/app.json")
+    #expect(options.authority == .apkrun)
+    #expect(options.provider?.spec == "direct:https://updates.example.com/app.json")
+}
+
+@Test func installUpdatesNotifyMapsToNotifyOnly() throws {
+    let options = try InstallUpdateOptions.options(
+        provider: "direct:https://updates.example.com/app.json",
+        updates: "notify", update: nil, updateProvider: nil, updateURL: nil)
+    #expect(options.authority == .apkrun)
+    #expect(options.updateMode == .notifyOnly)
+}
+
+@Test func installUpdatesManualLeavesProviderUnused() throws {
+    let options = try InstallUpdateOptions.options(
+        provider: "direct:https://updates.example.com/app.json",
+        updates: nil, update: "manual", updateProvider: nil, updateURL: nil)
+    #expect(options.authority == .manual)
+    #expect(options.updateMode == .manual)
+    #expect(options.provider != nil)
+}
+
+@Test func installUpdateAliasConflictsFail() throws {
+    #expect(throws: CLIFailure.self) {
+        _ = try InstallUpdateOptions.options(
+            provider: nil, updates: "notify", update: "manual",
+            updateProvider: nil, updateURL: nil)
+    }
+    #expect(throws: CLIFailure.self) {
+        _ = try InstallUpdateOptions.options(
+            provider: "direct:https://a.example/m.json", updates: nil, update: nil,
+            updateProvider: "direct", updateURL: "https://b.example/m.json")
+    }
+    #expect(throws: CLIFailure.self) {
+        _ = try InstallUpdateOptions.options(
+            provider: nil, updates: nil, update: nil,
+            updateProvider: "direct", updateURL: nil)
+    }
+    #expect(throws: CLIFailure.self) {
+        _ = try InstallUpdateOptions.options(
+            provider: nil, updates: "bogus", update: nil,
+            updateProvider: nil, updateURL: nil)
+    }
+}
+
+@Test func updatePolicyParsesDirectProviderSpec() async throws {
+    let command = try await APKRunCommand.asyncParseAsRoot(
+        [
+            "update", "policy", "com.example.app", "--mode", "automatic",
+            "--provider", "direct:https://updates.example.com/app.json",
+        ])
+    let policy = try #require(command as? UpdatePolicyCommand)
+    #expect(policy.provider == "direct:https://updates.example.com/app.json")
+}
+
+#if !APKRUN_EMBEDDED_RUNTIME
+    @Test func installParsesDirectProviderAndAliasFlags() async throws {
+        let plain = try await APKRunCommand.asyncParseAsRoot(
+            [
+                "install", "app.apk", "--provider",
+                "direct:https://updates.example.com/app.json",
+            ])
+        let aliased = try await APKRunCommand.asyncParseAsRoot(
+            [
+                "install", "app.apk", "--update-provider", "direct",
+                "--update-url", "https://updates.example.com/app.json",
+                "--updates", "notify",
+            ])
+        #expect(
+            (plain as? InstallCommand)?.provider
+                == "direct:https://updates.example.com/app.json")
+        #expect((aliased as? InstallCommand)?.updateProvider == "direct")
+        #expect(
+            (aliased as? InstallCommand)?.updateURL
+                == "https://updates.example.com/app.json")
+        #expect((aliased as? InstallCommand)?.updates == "notify")
+    }
+#endif
+
 private func golden(_ name: String) -> String {
     let contents = try! String(
         contentsOf: goldenDirectory.appendingPathComponent(name), encoding: .utf8)
@@ -1030,3 +1300,299 @@ private let releaseBuildInfo = BuildInfo(
         "APKRunEmbeddedRuntime": false,
     ]
 )
+
+// MARK: - wrap import/install table (wrapper.md §12.2)
+
+#if !APKRUN_EMBEDDED_RUNTIME
+    @Test func wrapFilePlanCoversTheImportTable() throws {
+        // §12.2 rows: installable relations ask or honor --install; the
+        // installed package is wrapped without reinstalling the file.
+        #expect(
+            WrapCommandSupport.filePlan(relation: .newPackage, install: false) == .confirmInstall)
+        #expect(
+            WrapCommandSupport.filePlan(relation: .newPackage, install: true) == .installAndWrap)
+        #expect(
+            WrapCommandSupport.filePlan(relation: .unknown, install: false) == .confirmInstall)
+        #expect(
+            WrapCommandSupport.filePlan(relation: .sameAsInstalled, install: false)
+                == .wrapInstalled(.sameVersion))
+        #expect(
+            WrapCommandSupport.filePlan(relation: .sameAsInstalled, install: true)
+                == .wrapInstalled(.sameVersion))
+        #expect(
+            WrapCommandSupport.filePlan(relation: .update(from: 1), install: false)
+                == .wrapInstalled(.newerFile))
+        #expect(
+            WrapCommandSupport.filePlan(relation: .update(from: 1), install: true)
+                == .installAndWrap)
+        #expect(
+            WrapCommandSupport.filePlan(relation: .downgrade(from: 2), install: false)
+                == .wrapInstalled(.olderFile))
+        #expect(
+            WrapCommandSupport.filePlan(relation: .downgrade(from: 2), install: true)
+                == .installAndWrap)
+        #expect(
+            WrapCommandSupport.filePlan(relation: .otherSigner, install: false)
+                == .wrapInstalled(.otherSigner))
+        #expect(
+            WrapCommandSupport.filePlan(relation: .otherSigner, install: true)
+                == .installAndWrap)
+    }
+
+    @Test func wrapParsesAliasAndWindowFlags() async throws {
+        let command =
+            try await APKRunCommand.asyncParseAsRoot(
+                [
+                    "wrap", "com.example.app",
+                    "--update", "auto", "--window-size", "800x600", "--resizable",
+                ]) as? WrapCommand
+        let parsed = try #require(command)
+        #expect(parsed.update == "auto")
+        #expect(parsed.windowSize == "800x600")
+        #expect(parsed.resizable)
+    }
+
+    @Test func wrapUpdateAliasMapsToAutomatic() throws {
+        // update-system.md §2.4: without a provider the authority stays
+        // manual and the automatic mode sits unused.
+        let options = try InstallUpdateOptions.options(
+            provider: nil, updates: nil, update: "auto",
+            updateProvider: nil, updateURL: nil)
+        #expect(options.authority == .manual)
+        #expect(options.updateMode == .automatic)
+    }
+
+    @Test func wrapperSubcommandsParse() async throws {
+        let verify = try await APKRunCommand.asyncParseAsRoot(
+            ["wrapper", "verify", "/Applications/App.app", "--deep", "--json"])
+        #expect(verify is WrapperVerifyCommand)
+        let info = try await APKRunCommand.asyncParseAsRoot(
+            ["wrapper", "info", "com.example.app", "--json"])
+        #expect(info is WrapperInfoCommand)
+    }
+
+    @Test func installParsesWrapFlags() async throws {
+        let command =
+            try await APKRunCommand.asyncParseAsRoot(
+                ["install", "app.apk", "--wrap", "--output", "/tmp/apps"]) as? InstallCommand
+        let parsed = try #require(command)
+        #expect(parsed.wrap)
+        #expect(parsed.output == "/tmp/apps")
+    }
+
+    @Test func wrapperSubcommandsParseListRefreshRemove() async throws {
+        #expect(
+            try await APKRunCommand.asyncParseAsRoot(["wrapper", "list", "--json"])
+                is WrapperListCommand)
+        #expect(
+            try await APKRunCommand.asyncParseAsRoot(
+                ["wrapper", "refresh", "com.example.app", "--name", "New", "--launcher-only"])
+                is WrapperRefreshCommand)
+        #expect(
+            try await APKRunCommand.asyncParseAsRoot(["wrapper", "refresh", "--all"])
+                is WrapperRefreshCommand)
+        #expect(
+            try await APKRunCommand.asyncParseAsRoot(
+                ["wrapper", "remove", "com.example.app", "--trash", "--yes"])
+                is WrapperRemoveCommand)
+    }
+
+    @Test func wrapGoldenListAndBatchTexts() throws {
+        let entries = [
+            WrapperListEntryWire(
+                summary: helloWrapperInfo().summary, state: .valid, refreshReasons: []),
+            WrapperListEntryWire(
+                summary: WrapperSummary(
+                    packageID: RuntimePackageID(rawValue: "com.example.other")!,
+                    bundleID: "io.apkrun.android.com.example.other",
+                    displayName: "Other",
+                    kind: .local,
+                    bundleURL: URL(fileURLWithPath: "/Applications/Other.app"),
+                    status: WrapperStatus(state: .missing),
+                    approval: .generated,
+                    launcherVersion: "1",
+                    createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+                ),
+                state: .missing,
+                refreshReasons: []
+            ),
+        ]
+        #expect(WrapCommandSupport.listText(entries) == golden("wrapper-list.txt"))
+        let batch = WrapperBatchResult(
+            refreshed: [RuntimePackageID(rawValue: "com.example.one")!],
+            skippedRunning: [RuntimePackageID(rawValue: "com.example.busy")!],
+            failed: [
+                WrapperBatchFailure(
+                    packageID: RuntimePackageID(rawValue: "com.example.broken")!,
+                    error: .runtime(
+                        "internalError",
+                        message: "APKRun's background service failed."))
+            ]
+        )
+        #expect(WrapCommandSupport.batchText(batch) == golden("wrapper-batch.txt"))
+    }
+
+    @Test func wrapGoldenVerificationAndInfoTexts() throws {
+        let verification = WrapperVerification(
+            bundleURL: URL(fileURLWithPath: "/Applications/HelloText.app"),
+            bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+            packageID: "io.apkrun.fixture.hellotext",
+            kind: .local,
+            registered: true,
+            cdhash: "0123456789abcdef0123456789abcdef01234567"
+        )
+        #expect(
+            WrapCommandSupport.verificationText(verification)
+                == golden("wrap-verify-valid.txt"))
+        #expect(
+            WrapCommandSupport.infoText(helloWrapperInfo()) == golden("wrap-info.txt"))
+        let broken = WrapperVerification(
+            bundleURL: URL(fileURLWithPath: "/Applications/HelloText.app"),
+            bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+            packageID: "io.apkrun.fixture.hellotext",
+            registered: true,
+            problems: [.signatureInvalid, .bundleIDMismatch]
+        )
+        #expect(
+            WrapCommandSupport.verificationText(broken)
+                == golden("wrap-verify-problems.txt"))
+    }
+
+    @Test func wrapGoldenDistributionTexts() {
+        let plain = DistributionWrapperResult(
+            appURL: URL(fileURLWithPath: "/Users/devin/HelloText.app"),
+            zipURL: URL(fileURLWithPath: "/Users/devin/HelloText.zip"),
+            bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+            cdhash: "0123456789abcdef0123456789abcdef01234567",
+            teamID: "ABCDE12345",
+            notarized: false
+        )
+        #expect(
+            WrapCommandSupport.distributionText(plain)
+                == golden("wrap-distribution.txt"))
+        let notarized = DistributionWrapperResult(
+            appURL: plain.appURL,
+            zipURL: plain.zipURL,
+            bundleID: plain.bundleID,
+            cdhash: plain.cdhash,
+            teamID: plain.teamID,
+            notarized: true,
+            submissionID: "SUB-1",
+            assessment: "source=Notarized Developer ID"
+        )
+        #expect(
+            WrapCommandSupport.distributionText(notarized)
+                == golden("wrap-distribution-notarized.txt"))
+    }
+
+    /// #93: human output localizes line by line under a ja locale; interpolated
+    /// literals splice their captures into the ja template in placeholder order.
+    @Test func wrapGoldenJapaneseTexts() {
+        CLIStrings.forcedLanguage = "ja"
+        defer { CLIStrings.forcedLanguage = nil }
+        #expect(
+            CLIStrings.text(WrapCommandSupport.resultText(helloWrapperInfo()))
+                == golden("wrap-success-ja.txt"))
+        #expect(
+            CLIStrings.text(WrapCommandSupport.infoText(helloWrapperInfo()))
+                == golden("wrap-info-ja.txt"))
+        let verification = WrapperVerification(
+            bundleURL: URL(fileURLWithPath: "/Applications/HelloText.app"),
+            bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+            packageID: "io.apkrun.fixture.hellotext",
+            kind: .local,
+            registered: true,
+            cdhash: "0123456789abcdef0123456789abcdef01234567"
+        )
+        #expect(
+            CLIStrings.text(WrapCommandSupport.verificationText(verification))
+                == golden("wrap-verify-valid-ja.txt"))
+        let plain = DistributionWrapperResult(
+            appURL: URL(fileURLWithPath: "/Users/devin/HelloText.app"),
+            zipURL: URL(fileURLWithPath: "/Users/devin/HelloText.zip"),
+            bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+            cdhash: "0123456789abcdef0123456789abcdef01234567",
+            teamID: "ABCDE12345",
+            notarized: false
+        )
+        #expect(
+            CLIStrings.text(WrapCommandSupport.distributionText(plain))
+                == golden("wrap-distribution-ja.txt"))
+    }
+
+    /// #93/#60: `apkrun doctor` human lines pass through the same line-localizing
+    /// writer as the rest of the CLI.
+    @Test func doctorOutputLocalizesJapanese() {
+        CLIStrings.forcedLanguage = "ja"
+        defer { CLIStrings.forcedLanguage = nil }
+        let report = """
+            ✕ apkrund.reachable — Background service
+            Fixed: Guest Agent restart
+            ✓ vm.virtualizationSupported — Virtualization
+            """
+        #expect(CLIStrings.text(report) == golden("doctor-report-ja.txt"))
+    }
+#endif
+
+// MARK: - #80 `apkrun settings`
+
+struct SettingsCommandTests {
+    private func entries() -> [PackageSettingWire] {
+        [
+            PackageSettingWire(
+                key: "window.defaultWidth", value: "1080", source: "default",
+                appliesLive: false, stored: nil, allowed: nil),
+            PackageSettingWire(
+                key: "window.resizable", value: "true", source: "recommended",
+                appliesLive: true, stored: nil, allowed: ["true", "false"]),
+            PackageSettingWire(
+                key: "window.zoom", value: "1.00", source: "user",
+                appliesLive: true, stored: "1.00", allowed: nil),
+        ]
+    }
+
+    /// cli.md §4.2: `settings list` shows the effective value and source.
+    @Test func settingsListGolden() {
+        #expect(
+            SettingsCommand.SettingsCommandSupport.listText(entries())
+                == golden("settings-list.txt"))
+    }
+
+    /// cli.md §4.2: an unknown key exits 4 (`store.unknownSetting`).
+    @Test func settingsUnknownKeyExitCode() {
+        let failure = SettingsCommand.unknownSetting("window.bogus")
+        #expect(failure.code == "store.unknownSetting")
+        #expect(ExitCodes.code(for: failure) == 4)
+    }
+
+    /// cli.md §4.2: an invalid value exits 64 (`store.invalidSettingValue`).
+    @Test func settingsInvalidValueExitCode() {
+        let failure = RuntimeWireError(
+            domain: "store", code: "store.invalidSettingValue",
+            message: "window.zoom must be one of 0.75–2.0",
+            parameters: ["key": "window.zoom", "allowed": "0.75–2.0"])
+        #expect(ExitCodes.code(for: failure) == 64)
+    }
+
+    /// cli.md §4.2: an unmanaged package exits 4 (`store.packageNotFound`).
+    @Test func settingsPackageNotFoundExitCode() {
+        let failure = RuntimeWireError(
+            domain: "store", code: "store.packageNotFound",
+            message: "APKRun doesn't manage an app named com.nope.")
+        #expect(ExitCodes.code(for: failure) == 4)
+    }
+}
+
+/// cli.md §4.6: restart-applied keys say so after `config set`.
+@Test func configSetAppliesNoteCoversSpecKeys() {
+    for key in [
+        "runtime.memoryGiB", "runtime.cpuCount", "audio.output",
+        "graphics.safeMode", "developer.enabled",
+    ] {
+        #expect(ConfigSetCommand.appliesNote(for: key) == "Applies the next time Android starts.")
+    }
+    #expect(
+        ConfigSetCommand.appliesNote(for: "runtime.userdataGiB")
+            == "Applies after Reset Android.")
+    #expect(ConfigSetCommand.appliesNote(for: "updates.checkIntervalHours") == nil)
+}

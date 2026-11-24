@@ -137,16 +137,16 @@ Clipboard, notification, and file contents never appear in logs or diagnostics b
 
 Task #92 reviews every trust boundary before v1.0. Each item names its evidence (a test, a fuzz target, or a review note) and has a status: `open`, `closed`, or `follow-up #NNN`. v1.0 ships only when every item is `closed`, or has a follow-up task that is not High impact ([roadmap.md](../04-plan/roadmap.md) §3.6, item 5).
 
-| Item | Boundary | Status |
-|---|---|---|
-| SR-01 | The XPC broker and endpoints (§3.1) | open |
-| SR-02 | Guest → host parsers: virtio-gpu, guest protocol, input | open |
-| SR-03 | Agent host operations: clipboard, notifications, links, files, microphone (§6) | open |
-| SR-04 | APK and container parsing, including aapt2 | open |
-| SR-05 | Provider parsing and the update validation pipeline (§5) | open |
-| SR-06 | APKRun and image updates ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §10) | open |
-| SR-07 | Signing, entitlements, and the release checks (§3.2) | open |
-| SR-08 | The custom image's SELinux, vsock, and privileged permissions (§4) | open |
-| SR-09 | ADB exposure (§4, NFR-SEC-06) | open |
-| SR-10 | Secrets in logs and diagnostics bundles (NFR-SEC-05) | open |
-| SR-11 | Storage of keys and secrets (§7) | open |
+| Item | Boundary | Evidence | Status |
+|---|---|---|---|
+| SR-01 | The XPC broker and endpoints (§3.1) | Per-endpoint authorization in `RuntimeXPCServer` (wrapper cdhash check, per-package session limit, wrapper scoped to its own packageID); hostile-peer T2 check `testHostileControlPeerGetsTypedErrorsOnly` (needs-verification). | closed |
+| SR-02 | Guest → host parsers: virtio-gpu, guest protocol, input | Fuzz targets `virtio-gpu-request`, `resource-table`, `guest-frame-swift`/`guest-frame-kotlin`, `input-batch` + replay tests. | closed |
+| SR-03 | Agent host operations: clipboard, notifications, links, files, microphone (§6) | Policy layer: focus-only clipboard, per-package policy, links off allowedApps + registered-domain check, shared-folder allowlist, microphone permission gate; malicious-agent T2 check `testMaliciousAgentCannotEscapeSharedFolder` (needs-verification). | closed |
+| SR-04 | APK and container parsing, including aapt2 | Fuzz targets `container-reader`, `apk-signing-block`, `aapt2-badging`; aapt2 runs under the `sandbox-exec` profile probed by `testAapt2SandboxProfileDeniesWritesAndNetwork`. | closed |
+| SR-05 | Provider parsing and the update validation pipeline (§5) | Fuzz targets `direct-manifest` (1 MiB), `fdroid-index` (64/16 MiB), `github-releases` (4 MiB); V0–V3 signature verification never skipped (#42). | closed |
+| SR-06 | APKRun and image updates ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §10) | Signed image feed (signature + sequence + expiry), archive SHA-256, manifest signature, monotonic image versions (#59, #88). | closed |
+| SR-07 | Signing, entitlements, and the release checks (§3.2) | Developer ID + notarization + stapler + spctl prechecks (#89); release.yml `notarize` job. | closed |
+| SR-08 | The custom image's SELinux, vsock, and privileged permissions (§4) | Needs a T2 audit of the built image (SELinux enforcing, vsock listener list, no privileged app permissions). | follow-up — lab verification |
+| SR-09 | ADB exposure (§4, NFR-SEC-06) | Loopback-only forwarder; `testDevelopmentBootServesADBOnLoopbackOnlyAndStopsGracefully`, `testDeveloperModeOffListensOnNoPort`, `testProductionBootHasNoVsock5555AndNoADB` (T2). | closed |
+| SR-10 | Secrets in logs and diagnostics bundles (NFR-SEC-05) | Four-layer redaction + `redactionFailed` rescan in the diagnostics bundle (#61); secrets never logged (AGENTS.md §8). | closed |
+| SR-11 | Storage of keys and secrets (§7) | Test keystores only in `Tests/Fixtures/signing/`; notary credentials in Keychain/`secrets.*` env, never committed (#89). | closed |

@@ -511,6 +511,43 @@ M7 (v0.4) makes an installed Android app an ordinary Mac app. `apkrun wrap` or t
 
 ---
 
+## #116 Keep-running task lifetime and idle activity
+
+| Field | Value |
+|---|---|
+| Milestone | M7 (v0.4) |
+| Depends on | #69, #70, #80 |
+| Design | [display-and-windowing.md](../../02-design/display-and-windowing.md) §7.6; [runtime-daemon.md](../../02-design/runtime-daemon.md) §5.1; [runtime-api.md](../../03-reference/runtime-api.md) §6; [wrapper.md](../../02-design/wrapper.md) §5.2 |
+| Code | `Packages/RuntimeAPI/`, `Packages/RuntimeClient/`, `Packages/RuntimeCore/`, `Packages/RuntimeHost/`, `Apps/APKRunLauncher/`, `Tests/IntegrationTests/` |
+
+**Goal.** Closing a wrapper window with `window.closeBehavior = keepRunning` moves its Android task behind the launcher and keeps the runtime active until the task ends.
+
+**Out of scope.** Idle timers and host sleep/wake (#70); per-app settings storage and UI (#80).
+
+**Steps.**
+1. **Close request.** Add a typed `closeSession(policy)` request across RuntimeAPI, RuntimeClient, and the XPC service. The wrapper reads the saved per-app close policy and uses it for ⌘W, ⌘Q, the close button, and Dock Quit. **Check:** T0 request round trips and XPC dispatch tests pass.
+2. **Retain the guest task.** For `keepRunning`, move the root task to display 0 with the existing Guest Agent operation before ending the window session. Acquire a package-and-task-scoped `.backgroundTask` assertion before releasing `.session`; release it on task disappearance, explicit terminate, uninstall, or runtime teardown. Reopening the package moves the retained task to its new display without an idle gap. `stop` keeps its existing finish-tasks behavior. **Check:** T1 fake-agent lifecycle tests pass.
+3. **Idle integration.** Verify that a retained task keeps the runtime ready beyond the idle suspend deadline and that the deadline resumes after the task is gone. **Check:** T2 `AndroidIdleSuspendTests` passes on the custom image.
+
+**Tests.**
+- T0 (`Packages/RuntimeAPI/Tests/`, `Packages/RuntimeClient/Tests/`): close-policy codec and dispatch.
+- T1 (`Packages/RuntimeHost/Tests/`): acquire, transfer, and release background-task activity across close, relaunch, task events, terminate, and uninstall.
+- T2 (`Tests/IntegrationTests/DaemonTests/`, AndroidCustom): add an `AndroidCustomKeepRunning` test-plan configuration with `APKRUN_INTEGRATION_SUITE=android-keep-running-idle` and run `KeepRunningIdleTests.testRetainedTaskHoldsRuntimeUntilTermination`; a `keepRunning` task prevents suspend past one minute, and terminating it allows suspend.
+- T3: none.
+
+**Done when.**
+- Closing with `stop` finishes the guest tasks and releases the session hold.
+- Closing with `keepRunning` moves the task to display 0, closes the wrapper session, and holds `.backgroundTask` while the task remains.
+- Relaunch moves the kept task to its new display without an idle-suspend window.
+- Terminate, uninstall, or `TaskVanished` releases the task hold and idle suspension resumes.
+- The idle-suspend T2 case passes with a real AndroidCustom VM.
+
+**Pitfalls.**
+- Do not infer kept tasks from every task outside a `SessionRegistry` session. Only an explicit `keepRunning` close owns a background-task assertion.
+- Acquire the background assertion before releasing the session assertion, so the idle controller never sees a false idle transition.
+
+---
+
 ## #90 Portable wrappers
 
 | Field | Value |

@@ -75,6 +75,12 @@ public enum RuntimeFailure: APKRunError, Equatable {
     /// failure, or nil when the boot has no running Guest Agent to bind to. A warning: the boot goes on.
     case inputNotBound(cause: GuestAgentFailure?)
 
+    /// First-run provisioning has not completed, so Android is not available (runtime-daemon.md §9.2).
+    case notProvisioned
+
+    /// One or more host requirements of §9.1 failed.
+    case hostRequirementsNotMet([HostRequirement])
+
     /// The stable error catalog namespace for the runtime host.
     public static let domain: ErrorDomain = .runtime
 
@@ -95,6 +101,8 @@ public enum RuntimeFailure: APKRunError, Equatable {
         case .devConsoleNotRunning: "devConsoleNotRunning"
         case .devConsoleSocketUnavailable: "devConsoleSocketUnavailable"
         case .inputNotBound: "inputNotBound"
+        case .notProvisioned: "notProvisioned"
+        case .hostRequirementsNotMet: "hostRequirementsNotMet"
         }
     }
 
@@ -122,6 +130,10 @@ public enum RuntimeFailure: APKRunError, Equatable {
         case .inputNotBound(let cause):
             // Without a cause, the catalog's variant for a boot with no running Guest Agent is used.
             cause == nil ? ["reason": .text("guestAgentNotRunning")] : [:]
+        case .notProvisioned:
+            [:]
+        case .hostRequirementsNotMet(let requirements):
+            ["items": .text(requirements.map(\.itemName).joined(separator: ","))]
         }
     }
 
@@ -135,5 +147,42 @@ public enum RuntimeFailure: APKRunError, Equatable {
     public var cause: (any APKRunError)? {
         guard case .inputNotBound(let cause?) = self else { return nil }
         return cause
+    }
+
+    /// The failed host requirements, as ordered list items for multi-item rendering.
+    public var listItems: [ErrorListItem] {
+        guard case .hostRequirementsNotMet(let requirements) = self else { return [] }
+        return requirements.map { requirement in
+            var parameters: [String: ErrorParameter] = [:]
+            if case .freeDiskSpace(let needed) = requirement {
+                parameters["needed"] = .text(
+                    ByteCountFormatter.string(fromByteCount: needed, countStyle: .file)
+                )
+            }
+            return ErrorListItem(
+                selector: .variant(code: "runtime.hostRequirementsNotMet", key: requirement.itemName),
+                parameters: parameters
+            )
+        }
+    }
+}
+
+/// A host requirement from runtime-daemon.md §9.1. Memory is a warning, not a requirement.
+public enum HostRequirement: Sendable, Codable, Equatable {
+    case appleSilicon
+    case macOSVersion
+    case virtualization
+    case apfsVolume
+    case freeDiskSpace(needed: Int64)
+
+    /// The stable variant key used by the error catalog and wire list items.
+    public var itemName: String {
+        switch self {
+        case .appleSilicon: "appleSilicon"
+        case .macOSVersion: "macOSVersion"
+        case .virtualization: "virtualization"
+        case .apfsVolume: "apfsVolume"
+        case .freeDiskSpace: "freeDiskSpace"
+        }
     }
 }

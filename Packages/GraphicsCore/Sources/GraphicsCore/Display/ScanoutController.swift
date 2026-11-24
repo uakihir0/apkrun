@@ -12,20 +12,27 @@ public struct ScanoutPoolHandle: @unchecked Sendable {
     public let surfaces: [IOSurface]
     /// Completed guest frames for this presenter generation.
     public let frames: AsyncStream<ScanoutFrame>
+    /// The latest sequence assigned to an accepted guest flush, including one held before its blit starts.
+    public var latestIssuedFrameSequence: UInt64 {
+        latestSequence()
+    }
 
     private let acknowledgeFrame: @Sendable (UInt64) -> Void
+    private let latestSequence: @Sendable () -> UInt64
 
-    /// Creates a pool handle. The optional acknowledgement closure is primarily useful to scanout fakes.
+    /// Creates a pool handle. The optional closures are primarily useful to scanout fakes.
     public init(
         generation: UInt64,
         surfaces: [IOSurface],
         frames: AsyncStream<ScanoutFrame>,
-        acknowledgeFrame: @escaping @Sendable (UInt64) -> Void = { _ in }
+        acknowledgeFrame: @escaping @Sendable (UInt64) -> Void = { _ in },
+        latestIssuedFrameSequence: @escaping @Sendable () -> UInt64 = { 0 }
     ) {
         self.generation = generation
         self.surfaces = surfaces
         self.frames = frames
         self.acknowledgeFrame = acknowledgeFrame
+        latestSequence = latestIssuedFrameSequence
     }
 
     /// Makes a buffer reusable after its frame is committed by the consumer.
@@ -44,7 +51,8 @@ public struct ScanoutPoolHandle: @unchecked Sendable {
                     generation: presenter.generation,
                     sequence: sequence
                 )
-            }
+            },
+            latestIssuedFrameSequence: { presenter.sequenceSource.latestIssued() }
         )
     }
 }
@@ -76,6 +84,13 @@ public protocol ScanoutController: Sendable {
 
     /// Detaches one pool. A generation mismatch leaves a newer lease untouched.
     func detachPool(_ scanout: ScanoutID, generation: UInt64?)
+
+    /// The present statistics of a scanout's current presenter, for `frameStatistics`
+    /// (diagnostics.md §9.3). `nil` when no presenter is attached.
+    func presentStatistics(for scanout: ScanoutID) -> (statistics: PresentStatistics, durationsUs: [UInt64])?
+
+    /// The device-wide GPU counters (`hostReadbacks`, `cpuPixelCopies`).
+    func graphicsCounters() -> GraphicsCounters
 }
 
 /// Production scanout operations backed by one running or booting virtio-gpu device.
@@ -104,6 +119,21 @@ public final class VirtioGPUScanoutController: ScanoutController, Sendable {
         height: Int
     ) throws(GraphicsFailure) -> ScanoutPoolHandle {
         ScanoutPoolHandle(presenter: try device.attachPresenter(scanout, width: width, height: height), device: device)
+    }
+
+    /// The present statistics of the scanout's presenter, or `nil`.
+    public func presentStatistics(
+        for scanout: ScanoutID
+    ) -> (statistics: PresentStatistics, durationsUs: [UInt64])? {
+        guard let presenter = device.presenter(for: scanout) else {
+            return nil
+        }
+        return (presenter.statistics, presenter.presentDurationsUs)
+    }
+
+    /// The device-wide GPU counters.
+    public func graphicsCounters() -> GraphicsCounters {
+        device.statistics
     }
 
     /// Replaces the selected scanout's presenter pool after its mode changes.

@@ -1,0 +1,6 @@
+Mac アプリ: /Applications/HelloText.app
+バンドル ID: io.apkrun.android.io.apkrun.fixture.hellotext
+パッケージ: io.apkrun.fixture.hellotext
+名前: HelloText
+種類: local
+Launcher: 1

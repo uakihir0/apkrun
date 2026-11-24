@@ -1,107 +1,124 @@
 {
-  "configurations" : [
+  "configurations": [
     {
-      "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003003",
-      "name" : "LinuxGuest",
-      "options" : {
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003003",
+      "name": "LinuxGuest",
+      "options": {}
+    },
+    {
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003004",
+      "name": "AndroidADB",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-adb",
+            "enabled": true
+          },
+          {
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15037",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 1200
       }
     },
     {
-      "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003004",
-      "name" : "AndroidADB",
-      "options" : {
-        "environmentVariableEntries" : [
+      "id": "0F4AFC2E-3F03-4E56-9C1F-0030030030F0",
+      "name": "Security",
+      "options": {
+        "environmentVariableEntries": [
           {
-            "key" : "APKRUN_INTEGRATION_SUITE",
-            "value" : "android-adb",
-            "enabled" : true
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "security",
+            "enabled": true
           },
           {
-            "key" : "ANDROID_ADB_SERVER_PORT",
-            "value" : "15037",
-            "enabled" : true
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15037",
+            "enabled": true
           }
         ],
-        "maximumTestExecutionTimeAllowance" : 1200
+        "maximumTestExecutionTimeAllowance": 1200
       }
     },
     {
-      "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003005",
-      "name" : "AndroidPackage",
-      "options" : {
-        "environmentVariableEntries" : [
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003005",
+      "name": "AndroidPackage",
+      "options": {
+        "environmentVariableEntries": [
           {
-            "key" : "APKRUN_INTEGRATION_SUITE",
-            "value" : "android-package",
-            "enabled" : true
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-package",
+            "enabled": true
           },
           {
-            "key" : "APKRUN_FIXTURE_APK",
-            "value" : "/tmp/apkrun-test-fixtures/HelloText.apk",
-            "enabled" : true
+            "key": "APKRUN_FIXTURE_APK",
+            "value": "/tmp/apkrun-test-fixtures/HelloText.apk",
+            "enabled": true
           },
           {
-            "key" : "APKRUN_GUEST_DIR",
-            "value" : "/tmp/apkrun-test-guest",
-            "enabled" : true
+            "key": "APKRUN_GUEST_DIR",
+            "value": "/tmp/apkrun-test-guest",
+            "enabled": true
           },
           {
-            "key" : "ANDROID_ADB_SERVER_PORT",
-            "value" : "15037",
-            "enabled" : true
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15037",
+            "enabled": true
           }
         ],
-        "maximumTestExecutionTimeAllowance" : 1200
+        "maximumTestExecutionTimeAllowance": 1200
       }
     },
     {
-      "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003006",
-      "name" : "AndroidBoot",
-      "options" : {
-        "environmentVariableEntries" : [
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003006",
+      "name": "AndroidBoot",
+      "options": {
+        "environmentVariableEntries": [
           {
-            "key" : "APKRUN_INTEGRATION_SUITE",
-            "value" : "android-boot",
-            "enabled" : true
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-boot",
+            "enabled": true
           }
         ],
-        "maximumTestExecutionTimeAllowance" : 1800
+        "maximumTestExecutionTimeAllowance": 1800
       }
     },
     {
-      "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003007",
-      "name" : "AndroidNetwork",
-      "options" : {
-        "environmentVariableEntries" : [
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003007",
+      "name": "AndroidNetwork",
+      "options": {
+        "environmentVariableEntries": [
           {
-            "key" : "APKRUN_INTEGRATION_SUITE",
-            "value" : "android-network",
-            "enabled" : true
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-network",
+            "enabled": true
           }
         ],
-        "maximumTestExecutionTimeAllowance" : 900
+        "maximumTestExecutionTimeAllowance": 900
       }
     },
     {
-      "id" : "0F4AFC2E-3F03-4E56-9C1F-003003003008",
-      "name" : "AndroidGraphics",
-      "options" : {
-        "environmentVariableEntries" : [
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003008",
+      "name": "AndroidGraphics",
+      "options": {
+        "environmentVariableEntries": [
           {
-            "key" : "APKRUN_INTEGRATION_SUITE",
-            "value" : "android-graphics",
-            "enabled" : true
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-graphics",
+            "enabled": true
           },
           {
-            "key" : "ANDROID_ADB_SERVER_PORT",
-            "value" : "15038",
-            "enabled" : true
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15038",
+            "enabled": true
           }
         ],
-        "maximumTestExecutionTimeAllowance" : 1500
+        "maximumTestExecutionTimeAllowance": 1500
       }
-    }
-    ,
+    },
     {
       "id": "0F4AFC2E-3F03-4E56-9C1F-003003003011",
       "name": "AndroidGuestAgent",
@@ -130,6 +147,64 @@
           {
             "key": "APKRUN_FIXTURE_APK",
             "value": "/tmp/apkrun-test-fixtures/HelloText.apk",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 1800
+      }
+    },
+    {
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003016",
+      "name": "AndroidIdleSuspend",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-idle-suspend",
+            "enabled": true
+          },
+          {
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15045",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_GUEST_DIR",
+            "value": "/tmp/apkrun-test-guest",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_FIXTURE_APK",
+            "value": "/tmp/apkrun-test-fixtures/HelloText.apk",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_TEST_HEADLESS_LAUNCH",
+            "value": "1",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 1800
+      }
+    },
+    {
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003017",
+      "name": "AndroidSleepWake",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-sleep-wake",
+            "enabled": true
+          },
+          {
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15046",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_GUEST_DIR",
+            "value": "/tmp/apkrun-test-guest",
             "enabled": true
           }
         ],
@@ -365,22 +440,100 @@
         ],
         "maximumTestExecutionTimeAllowance": 1800
       }
-    }
-  ],
-  "defaultOptions" : {
-    "maximumTestExecutionTimeAllowance" : 900,
-    "testTimeoutsEnabled" : true
-  },
-  "testTargets" : [
+    },
     {
-      "target" : {
-        "containerPath" : "container:APKRun.xcodeproj",
-        "identifier" : "ED9E247DF5B14612D27ADA78",
-        "name" : "IntegrationTests"
-      },
-      "parallelizable" : false,
-      "skippedTests" : [ ]
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003012",
+      "name": "AndroidStore",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-store",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_HELLOUPDATE_V1_APK",
+            "value": "/tmp/apkrun-test-fixtures/HelloUpdate-v1.apk",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_HELLOUPDATE_V2_APK",
+            "value": "/tmp/apkrun-test-fixtures/HelloUpdate-v2.apk",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_OTHERINSTALLER_APK",
+            "value": "/tmp/apkrun-test-fixtures/OtherInstaller.apk",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_GUEST_DIR",
+            "value": "/tmp/apkrun-test-guest",
+            "enabled": true
+          },
+          {
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15040",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_HELLOSPLIT_APKS",
+            "value": "/tmp/apkrun-test-fixtures/HelloSplit.apks",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 2400
+      }
+    },
+    {
+      "id": "28AE21E9-6BC4-5CEA-A0F7-2A5D71FA7219",
+      "name": "AndroidCustomKeepRunning",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-keep-running-idle",
+            "enabled": true
+          },
+          {
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15045",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_GUEST_DIR",
+            "value": "/tmp/apkrun-test-guest",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_FIXTURE_APK",
+            "value": "/tmp/apkrun-test-fixtures/HelloText.apk",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_TEST_HEADLESS_LAUNCH",
+            "value": "1",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 1800
+      }
     }
   ],
-  "version" : 1
+  "defaultOptions": {
+    "maximumTestExecutionTimeAllowance": 900,
+    "testTimeoutsEnabled": true
+  },
+  "testTargets": [
+    {
+      "target": {
+        "containerPath": "container:APKRun.xcodeproj",
+        "identifier": "ED9E247DF5B14612D27ADA78",
+        "name": "IntegrationTests"
+      },
+      "parallelizable": false,
+      "skippedTests": []
+    }
+  ],
+  "version": 1
 }

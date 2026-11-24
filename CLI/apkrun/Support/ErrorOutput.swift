@@ -13,7 +13,8 @@ enum ErrorOutput {
     }
 
     static func write(_ error: any Error, json: Bool) {
-        let text = render(error, json: json) + "\n"
+        let rendered = render(error, json: json)
+        let text = (json ? rendered : CLIStrings.text(rendered)) + "\n"
         let data = Data(text.utf8)
         if json {
             FileHandle.standardOutput.write(data)

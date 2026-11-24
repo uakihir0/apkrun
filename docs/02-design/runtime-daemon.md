@@ -179,8 +179,10 @@ ensureReady(reason)
   3. GraphicsCore: create the virtio-gpu device model and the renderer thread; apply graphics.safeMode (graphics.md §9)
   4. VirtualMachineCore: VMController.start(definition)           PerfMarker VM_START
   5. attach ConsoleLogWriter → BootPhaseDetector (§3.3)
-  6. start the ADB bridge: guest vsock 5555 ↔ 127.0.0.1:6520 (connects succeed once adbd listens)
-  7. agents (§4): development → after .bootCompleted, GuestAgentProvisioner installs/starts guestd over ADB
+  6. start the ADB bridges: external developer ADB at 127.0.0.1:6520 (configurable) and a private, ephemeral
+     supervisor endpoint, both to guest vsock 5555 (connects succeed once adbd listens)
+  7. agents (§4): development → after .bootCompleted, the supervisor's internal ADB client provisions guestd through
+     the private endpoint; `apkrun dev adb` uses the external endpoint
                   custom image → connect attempts start at .systemServer (persistent apps start before boot completes)
   8. booting(.agentsConnecting) → all required agents accepted (guest-protocol.md §5)   PerfMarker AGENT_CONNECTED (per agent)
   9. post-boot setup (§3.4)
@@ -323,10 +325,10 @@ The runtime is **active** while any source below exists. Idle time counts only w
 | Source | How it is tracked |
 |---|---|
 | An app session in any state except `ended` (`backgrounded` counts) | `SessionRegistry` |
-| A task kept alive by `window.closeBehavior = keepRunning` ([display-and-windowing.md](display-and-windowing.md) §7.6) | `ActivityKind.backgroundTask`, until the task vanishes or the package is terminated |
-| Install, uninstall, gentle update install, icon rendering, metadata refresh | `ActivityKind.storeOperation`, held by APKStoreCore for the operation |
+| A task kept alive by `window.closeBehavior = keepRunning` ([display-and-windowing.md](display-and-windowing.md) §7.6) | `ActivityKind.backgroundTask`, acquired by the close-policy owner and held until the task vanishes or the package is terminated (#116) |
+| Install, uninstall, gentle update install, icon rendering, metadata refresh | `RuntimeHost` holds `.storeOperation` for the host-owned package mutation |
 | Diagnostics collection, image migration, first-run provisioning | `.diagnostics`, `.migration`, `.provisioning` |
-| An ADB client connected through the bridge (developer mode) | `.adbClient`, while a TCP connection to 127.0.0.1:6520 is open |
+| An external ADB client connected through the developer endpoint | `.adbClient`, while a TCP connection to the configured loopback port (6520 by default) is open |
 | `apkrun runtime start --hold` (until the CLI exits or is interrupted) | `.cli` |
 
 ```swift
@@ -345,6 +347,11 @@ public final class RuntimeActivityAssertion: Sendable {
 `IdleController.assertActivity(_:)` emits an `activityBegan` action before it returns the assertion, so the lifecycle owner makes the runtime ready. Lifecycle actions run serially, and pending idle actions are discarded when activity begins. Action handlers never acquire assertions, directly or in child tasks. Owners acquire assertions before they request lifecycle work.
 
 Not activity: GUI, menu bar, or CLI connections that only observe, and update checks and downloads (UpdateCore works while the runtime is stopped).
+
+The supervisor's internal ADB client uses a second, ephemeral loopback endpoint to reach the same guest ADB service.
+Its connections do not count as user activity; otherwise the supervisor's persistent ADB transport would prevent
+idle suspend. `DevelopmentStoreRuntimeAccess` uses this private endpoint too; the Guest Agent's ongoing host
+communication uses GuestProtocol over vsock.
 
 An app closed with `stop` receives no notifications while the runtime is suspended. Messaging and music apps need `keepRunning`. The Settings UI says so.
 
@@ -506,6 +513,7 @@ Long operations return an `OperationHandle { operationID }` at once. `OperationK
 - Session events (`frameReady`, `surfacesReplaced`, `imeStateChanged`, …) go only to the session's own connection.
 - For `runtime` boot progress, `operations` progress, and `health`, only the latest value per key is delivered, at most 10 per second per subscriber. State changes and results are never coalesced. An invalidated subscriber is removed at once.
 - A successful install publishes `packages.installed` or `packages.updated`. A successful tracked uninstall publishes `packages.removed`.
+- A change in the available headless session snapshot publishes `sessions.snapshotChanged`; clients then fetch `listSessions`. This currently covers Debug headless sessions only. Normal app-window sessions join this topic when the window session path is connected (#69).
 
 ### 8.5 The CLI as a client
 
@@ -519,7 +527,7 @@ The request and reply types are in [runtime-api.md](../03-reference/runtime-api.
 |---|---|---|
 | `startRuntime`, `stopRuntime`, `restartRuntime`, `resetRuntime` | The wire names of `ensureReady`, `stop`, `restart`, and `reset` (§3.1). `startRuntime` uses `.cli` for the CLI and `.user` for APKRun.app and the menu bar. `resetRuntime` clears `failed` and the boot-loop guard, and deletes nothing ([runtime-api.md](../03-reference/runtime-api.md) §5.2) | #32 (`startRuntime`, `stopRuntime`), #33 (the others) |
 | `runtimeInfo` | `apkrun info` without a package: versions, state, resource use, and display pool size ([cli.md](cli.md) §4.1) | #33, #29 |
-| `listSessions` | Open sessions (§7) with package, display, phase, and point size. Used by `apkrun status`, the menu bar, and **Use Current Size** | #33 |
+| `listSessions` | Live app sessions from the daemon's session registry, currently populated by Debug headless launches (`APKRUN_TEST_HEADLESS_LAUNCH=1`). It does not start Android; snapshots contain package and phase only, without display mappings or point sizes. Normal app-window sessions will appear when the window session path is connected (#69) | #33 |
 | `restartApp` | Session channel request for Android → Restart ‹App› ([wrapper.md](wrapper.md) §5.6): `StopApplication`, then `LaunchApplication` on the same display. The session stays open | #45 |
 | `listOperations` | Running operations and the last 50 finished ones (§8.3). Used by `apkrun operations list` | #33 |
 | `unsubscribe`, `closeStream` | Counterparts of `subscribe` and of the stream operations (§8.4) | #33 |
@@ -712,7 +720,7 @@ Error domain `runtime`. Codes, user messages, and remediations are in [error-cat
 | T0 | `RuntimeState` edges ([state-machines.md](../01-architecture/state-machines.md) §2). `IdleController` with a manual clock (activity sources, both timers, settings change, `0` = never, sleep not counted). `BootPhaseDetector` golden tests over captured console logs. `BootProgressEstimator`. `ReplyGuard`. Exit rules | `Packages/RuntimeCore/Tests/RuntimeCoreTests/`, `Packages/RuntimeHost/Tests/RuntimeHostTests/` |
 | T1 | `RuntimeHost` startup order with fake modules, including degraded steps. Instance lock contention between two processes. XPC server over `NSXPCListener.anonymous()`: version mismatch, authorization per endpoint kind, the 65th in-flight request, long-operation cancel. `SessionRegistry` with a fake runtime: queued sessions, orphan re-attach, takeover, reconciliation (§4.2) | `Packages/RuntimeHost/Tests/` |
 | T2 | Real VM: cold boot to `ready` with markers; stop paths (graceful, power button, forced); agent kill and reconnect with session continuity; suspend and resume with time sync; injected sleep and wake; `kill -9 apkrund` recovery; boot-loop guard with test bundle P, whose kernel panics on a missing init ([test-strategy.md](../04-plan/test-strategy.md) §3.5) | `Tests/IntegrationTests/` |
-| T2 | Acceptance: `kill -9` of apkrund during a session restarts it within 15 s, the wrapper reconnects, and HelloText returns by cold launch (NFR-REL-02). Logout with a session stops Android gracefully. Idle: with `runtime.idleSuspendMinutes = 1` the runtime is `suspended` after 1 minute, and the average of 60 `top -l 61 -s 1 -pid <apkrund>` samples is below 1 %. With `runtime.idleStopMinutes = 2` the runtime stops gracefully. A `keepRunning` task, a connected `adb shell`, or a running install prevents suspend. Resume from `suspended` shows the first frame, and `VM_RESUMED → RUNTIME_READY` has p50 ≤ 500 ms over 20 runs. A warm launch writes no boot markers. `apkrun launch io.apkrun.fixture.hellotext` starts HelloText through XPC, the CLI owns no VM, and `apkrun runtime status --json` reports `owner: apkrund`. A binary signed with another identity is rejected at the control endpoint (ADR-0007). A wrapper requesting another package's session gets `notAuthorized` | `Tests/IntegrationTests/` |
+| T2 | Acceptance: `kill -9` of apkrund during a session restarts it within 15 s, the wrapper reconnects, and HelloText returns by cold launch (NFR-REL-02). Logout with a session stops Android gracefully. Idle: with `runtime.idleSuspendMinutes = 1` the runtime is `suspended` after 1 minute, and the average of 60 `top -l 61 -s 1 -pid <apkrund>` samples is below 1 %. With `runtime.idleStopMinutes = 2` the runtime stops gracefully. A connected `adb shell` or a running install prevents suspend; #116 verifies the `keepRunning` case. Resume from `suspended` shows the first frame, and `VM_RESUMED → RUNTIME_READY` has p50 ≤ 500 ms over 20 runs. A warm launch writes no boot markers. `apkrun launch io.apkrun.fixture.hellotext` starts HelloText through XPC, the CLI owns no VM, and `apkrun runtime status --json` reports `owner: apkrund`. A binary signed with another identity is rejected at the control endpoint (ADR-0007). A wrapper requesting another package's session gets `notAuthorized` | `Tests/IntegrationTests/` |
 | T2 | Headless G6: with the GUI closed, HelloText stays interactive for 5 minutes; an injected tap is answered by its `click <n>` line ([roadmap.md](../04-plan/roadmap.md) §2). Debug-only `APKRUN_TEST_HEADLESS_LAUNCH=1` opens a headless session on a pool display ([configuration.md](../03-reference/configuration.md) §5.1); Release builds must not contain it | `Tests/IntegrationTests/` |
 | T3 | Gate G6 with the GUI closed ([roadmap.md](../04-plan/roadmap.md) §2). Warm launch KPI. Real `pmset sleepnow` sleep and wake: the guest clock is within 2 s of the host within 5 s of wake (`adb shell date +%s`). Onboarding on a fresh macOS user account with a local image bundle reaches `complete` without a terminal command, and quitting during `firstBoot` resumes there (checklist C10-3, [test-strategy.md](../04-plan/test-strategy.md) §8) | Manual |
 

@@ -362,6 +362,11 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
         return presenter
     }
 
+    /// The presenter currently attached to `scanout`, for statistics reads (diagnostics.md §9.3).
+    public func presenter(for scanout: ScanoutID) -> ScanoutPresenter? {
+        sessionLock.withLock { session.presenter(for: scanout) }
+    }
+
     /// Returns a frame handle for the currently attached presenter, if one exists.
     ///
     /// This lets RuntimeCore represent the already-presented primary display as an exclusive compatibility lease

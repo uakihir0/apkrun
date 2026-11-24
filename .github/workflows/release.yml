@@ -1,0 +1,106 @@
+name: release
+
+# APKRun release (workflow.md §9.4). On `v*` tags it runs the full job after
+# maintainer approval; `workflow_dispatch` with `dry-run` exercises the whole
+# pipeline on `main` and publishes nothing (§9.7, v0.5).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry-run on main, or promote a beta item to stable"
+        type: choice
+        options: [dry-run, promote]
+        default: dry-run
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: xcode-27
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read the release version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME#v}"
+          else
+            tag="$(grep -E '^ *MARKETING_VERSION' project.yml | head -1 | sed -E 's/.*: *"?([^" ]+)"?.*/\1/')"
+          fi
+          build="$(python3 - "$tag" <<'PY'
+          import re, sys
+          major, minor, patch = (int(p) for p in sys.argv[1].split("."))
+          print(major * 1000 + minor * 100 + patch * 10)
+          PY
+          )"
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "tag_version=$tag" | tr -d '\n'; echo " build=$build"
+
+      - name: Bootstrap dependencies
+        run: scripts/bootstrap || true
+
+      - name: Import the Developer ID certificate
+        if: github.event.inputs.mode != 'dry-run'
+        env:
+          APKRUN_DEVELOPER_ID_P12: ${{ secrets.APKRUN_DEVELOPER_ID_P12 }}
+          APKRUN_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APKRUN_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          security create-keychain -p ci ci.keychain
+          security default-keychain -s ci.keychain
+          security unlock-keychain -p ci ci.keychain
+          echo "$APKRUN_DEVELOPER_ID_P12" | base64 -d > build/developer-id.p12
+          security import build/developer-id.p12 -k ci.keychain \
+            -P "$APKRUN_DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci ci.keychain
+
+      - name: Use the test Sparkle key on a dry run
+        if: github.event.inputs.mode == 'dry-run'
+        run: |
+          key="$(xcrun swift scripts/release/sign-update.swift --generate | awk '/^private:/ {print $2}')"
+          echo "APKRUN_SPARKLE_ED_PRIVATE_KEY=$key" >> "$GITHUB_ENV"
+
+      - name: Store the notarization API key
+        if: github.event.inputs.mode != 'dry-run'
+        env:
+          APKRUN_NOTARY_KEY_P8: ${{ secrets.APKRUN_NOTARY_KEY_P8 }}
+        run: |
+          mkdir -p build/notary
+          echo "$APKRUN_NOTARY_KEY_P8" | base64 -d > build/notary/key.p8
+
+      - name: Build, sign, and package
+        env:
+          APKRUN_SPARKLE_ED_PRIVATE_KEY: ${{ secrets.APKRUN_SPARKLE_ED_PRIVATE_KEY }}
+          APKRUN_NOTARY_KEY_ID: ${{ secrets.APKRUN_NOTARY_KEY_ID }}
+          APKRUN_NOTARY_ISSUER: ${{ secrets.APKRUN_NOTARY_ISSUER }}
+          APKRUN_DEVELOPER_ID: ${{ vars.APKRUN_DEVELOPER_ID }}
+          DRY_RUN: ${{ github.event.inputs.mode == 'dry-run' && '1' || '0' }}
+        run: |
+          args=(--version "${{ steps.version.outputs.version }}" \
+                --build "${{ steps.version.outputs.build }}")
+          if [[ "$DRY_RUN" == "1" ]]; then
+            args+=(--dry-run)
+          else
+            args+=(--developer-id "$APKRUN_DEVELOPER_ID" --notarize \
+                   --notary-key build/notary/key.p8 \
+                   --notary-key-id "$APKRUN_NOTARY_KEY_ID" \
+                   --notary-issuer "$APKRUN_NOTARY_ISSUER")
+          fi
+          scripts/release/build-release.sh "${args[@]}"
+
+      - name: Upload the release artifacts
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: release-${{ steps.version.outputs.version }}
+          path: build/release/

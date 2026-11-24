@@ -78,6 +78,88 @@ func daemonTerminateWithoutSessionRejectsAnUninstalledPackage() async throws {
     }
 
     #expect(await fixture.agent.forceStoppedPackages.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonCloseSessionStopFinishesTheTasksAndEndsTheSession() async throws {
+    let fixture = makeHeadlessServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let launched = try await fixture.service.launch(RuntimeLaunchRequest(packageID: package))
+
+    let result = try await fixture.service.closeSession(
+        RuntimeCloseSessionRequest(packageID: package), policy: .stop)
+
+    #expect(result.hadSession)
+    let stopPolicies = await fixture.agent.clearPolicies
+    #expect(stopPolicies.count == 1)
+    #expect(stopPolicies.first?.displayID == 1)
+    #expect(stopPolicies.first?.policy == .finishTasks)
+    #expect(await fixture.registry.session(.app(launched.sessionID))?.state == .ended(.userClosed))
+    #expect((await fixture.displayPool.snapshot())[0].state == .free)
+    #expect(!(await fixture.service.hasBackgroundActivity(packageID: package)))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonCloseSessionKeepRunningMovesTheTaskToDisplayZeroAndKeepsABackgroundHold() async throws {
+    let fixture = makeHeadlessServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let launched = try await fixture.service.launch(RuntimeLaunchRequest(packageID: package))
+
+    let result = try await fixture.service.closeSession(
+        RuntimeCloseSessionRequest(packageID: package), policy: .keepRunning)
+
+    #expect(result.hadSession)
+    let keepPolicies = await fixture.agent.clearPolicies
+    #expect(keepPolicies.count == 1)
+    #expect(keepPolicies.first?.displayID == 1)
+    #expect(keepPolicies.first?.policy == .moveToDefaultDisplay)
+    #expect(await fixture.service.hasBackgroundActivity(packageID: package))
+    #expect(await fixture.registry.session(.app(launched.sessionID))?.state == .ended(.userClosed))
+    #expect((await fixture.displayPool.snapshot())[0].state == .free)
+
+    let terminated = try await fixture.service.terminate(RuntimeTerminateRequest(packageID: package))
+    #expect(!terminated.hadSession)
+    #expect(await fixture.agent.forceStoppedPackages == [package.rawValue])
+    #expect(!(await fixture.service.hasBackgroundActivity(packageID: package)))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func daemonCloseSessionKeepRunningReleasesItsHoldWhenTheRetainedTaskVanishes() async throws {
+    let fixture = makeHeadlessServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    _ = try await fixture.service.launch(RuntimeLaunchRequest(packageID: package))
+    _ = try await fixture.service.closeSession(
+        RuntimeCloseSessionRequest(packageID: package), policy: .keepRunning)
+    #expect(await fixture.service.hasBackgroundActivity(packageID: package))
+
+    // A second task of the retained package keeps the hold when one task
+    // of the package vanishes.
+    await fixture.agent.sendTaskEvent(.appeared(packageID: package.rawValue, taskID: 42))
+    await fixture.agent.sendTaskEvent(.vanished(packageID: package.rawValue, taskID: 42))
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(await fixture.service.hasBackgroundActivity(packageID: package))
+
+    await fixture.agent.sendTaskEvent(.vanished(packageID: package.rawValue, taskID: 41))
+    for _ in 0..<100 {
+        if await !fixture.service.hasBackgroundActivity(packageID: package) {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+
+    #expect(!(await fixture.service.hasBackgroundActivity(packageID: package)))
+}
+
+@Test
+func daemonCloseSessionWithoutASessionReportsHadSessionFalse() async throws {
+    let fixture = makeHeadlessServiceFixture()
+    let package = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+
+    let result = try await fixture.service.closeSession(
+        RuntimeCloseSessionRequest(packageID: package), policy: .stop)
+
+    #expect(!result.hadSession)
+    #expect(await fixture.agent.clearPolicies.isEmpty)
     #expect(fixture.scanouts.configuredScanouts.isEmpty)
     #expect((await fixture.displayPool.snapshot())[0].state == .free)
 }
@@ -253,6 +335,7 @@ private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
     private(set) var launchCalls: [HeadlessLaunchCall] = []
     private(set) var stoppedPackages: [String] = []
     private(set) var forceStoppedPackages: [String] = []
+    private(set) var clearPolicies: [(displayID: Int32, policy: GPClearPolicy)] = []
     private let taskEventContinuation: AsyncStream<DevelopmentGuestTaskEvent>.Continuation
     private var resynchronizationHandlerID: UUID?
     private var resynchronizationHandler: (@Sendable (GuestSnapshotState) async -> Void)?
@@ -295,6 +378,10 @@ private actor FakeDaemonHeadlessGuestAgent: DaemonHeadlessGuestAgent {
     func forceStopApplication(package: String) async throws(GuestAgentFailure) -> Bool {
         forceStoppedPackages.append(package)
         return stopResults.isEmpty ? true : stopResults.removeFirst()
+    }
+
+    func applyClearPolicy(_ displayID: Int32, policy: GPClearPolicy) async throws(GuestAgentFailure) {
+        clearPolicies.append((displayID: displayID, policy: policy))
     }
 
     func addResynchronizationHandler(
@@ -460,6 +547,16 @@ private final class FakeHeadlessScanoutController: ScanoutController, @unchecked
         height: Int
     ) throws(GraphicsFailure) -> ScanoutPoolHandle {
         makePool(scanout)
+    }
+
+    func presentStatistics(
+        for scanout: ScanoutID
+    ) -> (statistics: PresentStatistics, durationsUs: [UInt64])? {
+        nil
+    }
+
+    func graphicsCounters() -> GraphicsCounters {
+        GraphicsCounters()
     }
 
     func detachPool(_ scanout: ScanoutID, generation: UInt64?) {}

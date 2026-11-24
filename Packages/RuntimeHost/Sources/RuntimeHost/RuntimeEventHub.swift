@@ -102,6 +102,15 @@ final class RuntimeEventHub: @unchecked Sendable {
         }
     }
 
+    /// Whether a connected client of the kind is subscribed to the topic.
+    func hasSubscriber(clientKind: RuntimeClientKind, topic: EventTopic) -> Bool {
+        queue.sync {
+            subscribers.values.contains {
+                $0.clientKind == clientKind && $0.topics.contains(topic) && $0.isConnectionOpen()
+            }
+        }
+    }
+
     func removeAll(connectionIDs: [ObjectIdentifier]) {
         queue.sync {
             for connectionID in connectionIDs {
@@ -169,6 +178,17 @@ final class RuntimeEventHub: @unchecked Sendable {
         )
     }
 
+    func publishWrapperChange(_ change: WrapperChange, operationID: OperationID? = nil) {
+        publish(
+            QueuedEvent(
+                topic: .wrappers,
+                time: Date(),
+                operationID: operationID,
+                payload: .wrappers(change)
+            )
+        )
+    }
+
     func publishPackageChange(_ change: PackageChange, operationID: OperationID? = nil) {
         publish(
             QueuedEvent(
@@ -180,14 +200,64 @@ final class RuntimeEventHub: @unchecked Sendable {
         )
     }
 
+    /// Publishes an app-session event on the `sessions` topic (host-ui.md §5.2).
+    func publishSessionChange(_ change: SessionChange) {
+        publish(
+            QueuedEvent(
+                topic: .sessions,
+                time: Date(),
+                operationID: nil,
+                payload: .sessions(change)
+            )
+        )
+    }
+
+    /// Publishes a maintenance event on the `maintenance` topic (runtime-api.md §8.3).
+    func publishMaintenanceEvent(_ event: MaintenanceEvent) {
+        publish(
+            QueuedEvent(
+                topic: .maintenance,
+                time: Date(),
+                operationID: nil,
+                payload: .maintenance(event)
+            )
+        )
+    }
+
+    /// Publishes a `healthChanged` event on the `health` topic (§13).
+    func publishHealthEvent(_ event: HealthEvent) {
+        publish(
+            QueuedEvent(
+                topic: .health,
+                time: Date(),
+                operationID: nil,
+                payload: .health(event)
+            )
+        )
+    }
+
+    /// Publishes an integration event on the `integrations` topic (§16.2).
+    func publishIntegrationChange(_ change: IntegrationChange) {
+        publish(
+            QueuedEvent(
+                topic: .integrations,
+                time: Date(),
+                operationID: nil,
+                payload: .integrations(change)
+            )
+        )
+    }
+
     private func publish(_ event: QueuedEvent) {
         queue.sync {
             for connectionID in Array(subscribers.keys) {
                 guard var subscriber = subscribers[connectionID],
-                    subscriber.topics.contains(event.topic),
                     subscriber.isConnectionOpen()
                 else {
                     subscribers[connectionID] = nil
+                    continue
+                }
+                guard subscriber.topics.contains(event.topic) else {
                     continue
                 }
                 if case .operations(.finished(let finishedID, _)) = event.payload {
@@ -222,9 +292,11 @@ final class RuntimeEventHub: @unchecked Sendable {
                 .wrappers, .integrations,
             ]
         case .launcher:
-            [.runtime]
+            // TODO(#83): `integrations` rides the control channel until the
+            // session channel exists; the session ID in each event scopes it.
+            [.runtime, .integrations]
         case .wrapper:
-            []
+            [.integrations]
         }
     }
 

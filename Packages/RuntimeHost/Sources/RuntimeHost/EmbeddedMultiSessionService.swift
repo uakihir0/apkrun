@@ -1,5 +1,6 @@
 import Foundation
 import RuntimeAPI
+import RuntimeCore
 
 /// Dispatches package-session requests to the window that owns that package in an embedded multi-window run (#31).
 ///
@@ -16,6 +17,9 @@ public actor EmbeddedMultiSessionService: RuntimeSessionService, PackageMutation
     /// Updates or adds the service for one package.
     public func setSession(_ session: EmbeddedRuntimeService, for packageID: String) {
         sessions[packageID] = session
+        for observer in activityObservers {
+            Task { await session.observeSessionActivity(observer) }
+        }
     }
 
     /// Attaches the same Guest Agent control plane to each window session.
@@ -51,6 +55,34 @@ public actor EmbeddedMultiSessionService: RuntimeSessionService, PackageMutation
     func endSessionForPackageUninstall(_ request: RuntimeTerminateRequest) async throws(RuntimeWireError) {
         guard let session = sessions[request.packageID.rawValue] else { return }
         try await session.endSessionForPackageUninstall(request)
+    }
+
+    func lastSessionEnd(packageID: RuntimePackageID) async -> ContinuousClock.Instant? {
+        await sessions[packageID.rawValue]?.lastSessionEnd(packageID: packageID)
+    }
+
+    func endSessionForUpdate(packageID: RuntimePackageID, reason: SessionEndReason = .updating) async {
+        await sessions[packageID.rawValue]?.endSessionForUpdate(packageID: packageID, reason: reason)
+    }
+
+    func reopenPackageSession(packageID: RuntimePackageID) async throws {
+        _ = try await launch(RuntimeLaunchRequest(packageID: packageID))
+    }
+
+    /// keepRunning tasks are a daemon feature; a dev window run has none.
+    func hasBackgroundActivity(packageID: RuntimePackageID) async -> Bool {
+        false
+    }
+
+    private var activityObservers: [@Sendable (RuntimePackageID, PackageSessionActivity) -> Void] = []
+
+    func observeSessionActivity(
+        _ observer: @escaping @Sendable (RuntimePackageID, PackageSessionActivity) -> Void
+    ) {
+        activityObservers.append(observer)
+        for session in sessions.values {
+            Task { await session.observeSessionActivity(observer) }
+        }
     }
 
     private static func sessionUnavailable(_ packageID: String) -> RuntimeWireError {

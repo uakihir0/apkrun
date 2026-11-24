@@ -17,10 +17,21 @@ struct APKRunCommand: AsyncParsableCommand {
                     LogsCommand.self,
                     InstallCommand.self,
                     UninstallCommand.self,
+                    RollbackCommand.self,
+                    RepairCommand.self,
                     ListPackagesCommand.self,
                     PackageInfoCommand.self,
                     LaunchCommand.self,
                     StopCommand.self,
+                    IntegrationsCommand.self,
+                    SharedFoldersCommand.self,
+                    UpdateCommand.self,
+                    ImageCommand.self,
+                    SettingsCommand.self,
+                    ConfigCommand.self,
+                    SelfUpdateCommand.self,
+                    DoctorCommand.self,
+                    DiagnosticsCommand.self,
                     DevCommand.self,
                 ]
             )
@@ -31,15 +42,31 @@ struct APKRunCommand: AsyncParsableCommand {
                 version: Output.versionFlag(BuildInfo.current),
                 subcommands: [
                     VersionCommand.self,
+                    SetupCommand.self,
                     RuntimeCommand.self,
                     LogsCommand.self,
                     InstallCommand.self,
+                    InspectCommand.self,
                     UninstallCommand.self,
+                    RollbackCommand.self,
+                    RepairCommand.self,
                     ListPackagesCommand.self,
                     PackageInfoCommand.self,
+                    AdoptCommand.self,
                     LaunchCommand.self,
                     StopCommand.self,
+                    IntegrationsCommand.self,
+                    SharedFoldersCommand.self,
+                    UpdateCommand.self,
+                    ImageCommand.self,
                     OperationsCommand.self,
+                    WrapCommand.self,
+                    WrapperCommand.self,
+                    SettingsCommand.self,
+                    ConfigCommand.self,
+                    SelfUpdateCommand.self,
+                    DoctorCommand.self,
+                    DiagnosticsCommand.self,
                 ]
             )
         #endif
@@ -87,6 +114,8 @@ struct APKRunCommand: AsyncParsableCommand {
             }
         } catch let cleanExit as CleanExit {
             Self.exit(withError: cleanExit)
+        } catch let exitCode as ExitCode {
+            Self.exit(withError: exitCode)
         } catch {
             if Self.isBuiltInOutputRequest(arguments) {
                 Self.exit(withError: error)

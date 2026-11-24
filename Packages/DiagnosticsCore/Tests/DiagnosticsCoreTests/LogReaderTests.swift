@@ -1,6 +1,7 @@
 import DiagnosticsCoreTestSupport
 import Foundation
 import Testing
+
 @testable import DiagnosticsCore
 
 @Test func logReaderParsesUnifiedLogAndBuildsSafeArguments() async throws {

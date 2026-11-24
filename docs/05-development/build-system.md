@@ -124,7 +124,7 @@ Each check is a script that runs without arguments. `scripts/ci/run-checks.sh`, 
 | `scripts/check-sepolicy.sh` | release (`user`) product sources declare no permissive domain (R-13) | #36 (planned) | no |
 | `scripts/check-fixtures.sh` | APKs in `Tests/Fixtures/apks/` are newer than their sources; no committed fixture over 10 MiB (§8) | #42 (planned) | no |
 | `scripts/check-compatibility-db.sh` | `compatibility.json` against `compatibility.schema.json` ([diagnostics.md](../02-design/diagnostics.md) §10) | #91 (planned) | no |
-| `scripts/check-licenses.sh` | SPDX license and committed `licenseFiles` for every lock entry, `Package.resolved`, and the Gradle and Cargo locks; allowed licenses per `ships` ([legal-and-licensing.md](legal-and-licensing.md) §4); the `Derived from RiftVM` marker names the pin ([legal-and-licensing.md](legal-and-licensing.md) §3.1) | #94 (planned) | no |
+| `scripts/check-licenses.sh` | SPDX license and committed `licenseFiles` for every lock entry, `Package.resolved`, and the Gradle and Cargo locks; allowed licenses per `ships` ([legal-and-licensing.md](legal-and-licensing.md) §4); the `Derived from RiftVM` marker names the pin ([legal-and-licensing.md](legal-and-licensing.md) §3.1) | #94 | no |
 | `scripts/check-strings.sh` | `.xcstrings` and `errors.json`: for Release, no missing `ja`, `stale`, or `needs review`; Debug only warns ([host-ui.md](../02-design/host-ui.md) §13) | #93 (planned) | no |
 
 A new dependency edge or third-party component needs an ADR before its check changes ([decisions/README.md](../01-architecture/decisions/README.md)).
@@ -178,7 +178,7 @@ Generated files are committed. The `codegen` job runs `scripts/ci/codegen.sh`, w
 
 ## 5. Build metadata: components.json
 
-The `APKRun` target runs `scripts/build/write-components.py` as a build phase (planned, #58). It writes `Contents/Resources/components.json` ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.1):
+The `APKRun` target runs `scripts/build/write-components.py` as a build phase. It writes `Contents/Resources/components.json` ([runtime-maintenance.md](../02-design/runtime-maintenance.md) §2.1):
 
 | Field | Taken from |
 |---|---|
@@ -397,20 +397,20 @@ The build is reproducible: the same sources and pinned tools give the same APK b
 
 ---
 
-## 9. AOSP product build (planned)
+## 9. AOSP product build
 
 The APKRun product (`Guest/product/`, [android-image.md](../02-design/android-image.md) §11) builds on the Linux builder of [environment-setup.md](environment-setup.md) §5.
 
 `scripts/aosp/build-product.sh --revision <commit> --variant userdebug|user` runs in the builder container:
 
-1. Syncs the tree to `Guest/product/manifest/pinned.xml` if needed.
-2. Writes `.repo/local_manifests/apkrun.xml`: this repository at `<commit>`, `Guest/product/` mapped to `device/apkrun/apkrun_arm64/`. The Rust crate has its own `Android.bp` in `Guest/vsockd/`, because Soong does not accept `..` in `srcs`. Kati and Soong must each see every product file exactly once. If a `repo` `<linkfile>` cannot do this, the script copies the directories.
-3. Runs `scripts/build-guest.sh` and copies the agent APKs to `Guest/product/prebuilt/` (git-ignored); `android_app_import` reads them with `certificate: "platform"`, `privileged: true`, `presigned: false`.
-4. Runs `lunch apkrun_arm64-trunk_staging-<variant>`, `m`, and `m dist`, with `BUILD_NUMBER=ar<counter>`.
-5. For `user` builds, signs the target files with the release keys and rebuilds the zip (flow fixed by #36; OQ-36).
+1. Syncs the tree to `Guest/product/manifest/pinned.xml` (`--update-manifest` syncs to the tree's current revisions and rewrites it; `--pin-manifest` writes it and stops).
+2. Writes `.repo/local_manifests/apkrun.xml`: this repository at `<commit>`, `Guest/product/` mapped to `device/apkrun/apkrun_arm64/` and `Guest/vsockd/` alongside it. The Rust crate has its own `Android.bp` in `Guest/vsockd/`, because Soong does not accept `..` in `srcs`.
+3. Runs `scripts/build-guest.sh` and `APKRunStore:assembleRelease`, and copies the agent APKs to `Guest/product/prebuilt/` (git-ignored); `android_app_import` reads them with `certificate: "platform"`, `privileged: true`, `presigned: false`.
+4. For `user` builds, `scripts/check-sepolicy.sh` runs first (R-13). Then `lunch apkrun_arm64-trunk_staging-<variant>`, `m`, and `m dist`, with `BUILD_NUMBER=ar<counter>`.
+5. For `user` builds, `sign_target_files_apks` signs the target files with the release keys (`--keys-dir`), and `img_from_target_files` rebuilds the image zip (OQ-36, ADR-0020).
 6. Writes `build-info.json`: pinned manifest SHA-256, container digest, APKRun revision, APK SHA-256s, `BUILD_NUMBER`.
 
-The result, `apkrun_arm64-img-ar<counter>.zip`, enters the stock pipeline (§10). For `user` builds, `scripts/check-sepolicy.sh` runs before step 4 (R-13).
+The result, `apkrun_arm64-img-ar<counter>.zip`, enters the stock pipeline (§10). Release keys live outside the repository (ADR-0020).
 
 ---
 
@@ -467,9 +467,9 @@ The layout is fixed by [filesystem-layout.md](../01-architecture/filesystem-layo
 | Embed Frameworks (planned, #58) | `Contents/Frameworks/Sparkle.framework` | Sparkle |
 | `scripts/build/embed-tools.sh` (planned, #28) | `Contents/Resources/tools/aapt2` | pinned Maven artifact, hash-checked |
 | Copy resources (planned, #91) | `compatibility.json` | `Tests/Compatibility/database/compatibility.json` ([diagnostics.md](../02-design/diagnostics.md) §10) |
-| `scripts/build/write-components.py` (planned, #58) | `Contents/Resources/components.json` | §5 |
+| `scripts/build/write-components.py` | `Contents/Resources/components.json` | §5 |
 
-Release assembly is `scripts/release/assemble-bundle.sh` (planned, #89): `xcodebuild -configuration Release` with `CODE_SIGNING_ALLOWED=NO`, then `scripts/release/sign-bundle.sh` (§12.3). The runtime image is never inside the app bundle ([decisions/0011-runtime-image-bundle.md](../01-architecture/decisions/0011-runtime-image-bundle.md)).
+Release assembly is `scripts/release/assemble-bundle.sh`: `xcodebuild -configuration Release` with `CODE_SIGNING_ALLOWED=NO`, then `scripts/release/sign-bundle.sh` (§12.3). The runtime image is never inside the app bundle ([decisions/0011-runtime-image-bundle.md](../01-architecture/decisions/0011-runtime-image-bundle.md)).
 
 ---
 
@@ -481,7 +481,7 @@ Release assembly is `scripts/release/assemble-bundle.sh` (planned, #89): `xcodeb
 |---|---|---|---|
 | Debug | "Sign to Run Locally" or the Apple Development certificate; Xcode adds `get-task-allow` | yes | no |
 | ReleaseUpdateTest (planned, #58) | Developer ID Application, CI only | yes | no |
-| Release | Developer ID Application, secure timestamp | yes | yes (planned, #89) |
+| Release | Developer ID Application, secure timestamp | yes | yes |
 | Local wrappers | ad-hoc, per wrapper (§12.5) | yes | no |
 | Distribution wrappers | the creator's Developer ID | yes | yes (§12.6) |
 
@@ -544,7 +544,7 @@ xcodebuild test -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Int
 - Use `-derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd"` and an `APKRUN_ANDROID_HOME` that holds a copy of `platform-tools`. CI uses `$RUNNER_TEMP`. `scripts/run-gate.sh` builds under `build/gates/` in the checkout.
 - `APKRUN_TEST_DEVELOPMENT_TEAM` and `APKRUN_TEST_CODE_SIGN_IDENTITY` (the SHA-1 fingerprint of the certificate) come from the environment or from CI repository variables. The fingerprint is explicit, because the generic `Apple Development` name does not reliably select the lab certificate.
 - `APKRunTestHost` and the hosted test bundles disable hardened runtime; that exception is limited to test targets.
-- `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per test group: `LinuxGuest`, `AndroidADB`, `AndroidPackage`, `AndroidBoot`, `AndroidNetwork`, `AndroidGraphics`, `AndroidGuestAgent`, `AndroidInput`, and the four input configurations below. The T2 suites of [test-strategy.md](../04-plan/test-strategy.md) §2.4 are `LinuxGuest`, `AndroidStock`, `AndroidCustom`, and `Maintenance`; the last three are planned. T2 has one automatic retry ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
+- `Tests/IntegrationTests/IntegrationTests.xctestplan` has one configuration per test group: `LinuxGuest`, `AndroidADB`, `AndroidPackage`, `AndroidBoot`, `AndroidNetwork`, `AndroidGraphics`, `AndroidGuestAgent`, `AndroidIdleSuspend`, `AndroidSleepWake`, `AndroidInput`, and the four input configurations below. `AndroidIdleSuspend` and `AndroidSleepWake` are focused AndroidStock configurations for #70; they run the listed single method below. `AndroidIdleSuspend` stages the debug HelloText fixture in `APKRUN_FIXTURE_APK` and enables the Debug headless-launch hook for its resume/first-frame test. The T2 suites of [test-strategy.md](../04-plan/test-strategy.md) §2.4 are `LinuxGuest`, `AndroidStock`, `AndroidCustom`, and `Maintenance`; the last three are planned. T2 has one automatic retry ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
 
 Input tests run in their own configurations. Select the configuration and the method together:
 
@@ -556,6 +556,12 @@ Input tests run in their own configurations. Select the configuration and the me
 | `AndroidInputCadence` | `testThreeConsecutiveHundredClickBatchesThroughDirectView` | three batches at 50 ms press and gap through direct view dispatch; posts no system events; cannot satisfy #25 box 3 or #103 |
 | `AndroidInputCadence` | `testOneHundredClickDiagnosticTraceJoinsHostGuestAndFixtureThroughDirectView` | diagnostic only; one untraced warm-up, then a traced batch |
 | `AndroidInputEdges` | `testDragsBeyondTopAndLeftEdgesCloseTheGuestTouch` | the #25 top and left guest-edge check; `SessionWindowController.show()` activates the window |
+| `AndroidIdleSuspend` | `testIdlePolicySuspendsThenStopsTheRuntime` | #70 T2 against a real Android VM; checks one-minute suspend and two-minute stop deadlines |
+| `AndroidIdleSuspend` | `testConnectedADBCommandKeepsRuntimeReadyPastSuspendDeadline` | #70 T2 holds a real ADB shell open past the one-minute suspend deadline |
+| `AndroidIdleSuspend` | `testPendingInstallKeepsRuntimeReadyPastSuspendDeadline` | #70 T2 holds a PackageStore install at the guest commit boundary while advancing the idle clock |
+| `AndroidIdleSuspend` | `testRuntimeStartRequestResumesSuspendedVM` | #70 T2 resumes the idle-suspended VM through RuntimeHost |
+| `AndroidIdleSuspend` | `testIdleResumeReadyP50IsUnder500MillisecondsAndHelloTextGetsNewIOSurfaceFrame` | #70 T2 opens HelloText after 20 idle resumes, confirms a new IOSurface frame each time, and measures p50 from `VM_RESUMED` to `RUNTIME_READY` |
+| `AndroidSleepWake` | `testHostSleepPausesAndWakeResumesWithSynchronizedGuestClock` | #70 T2 against a real Android VM; injects sleep/wake through the shared developer event handler and checks guest time |
 
 - The interactive and edge tests need a dedicated lab GUI session with exactly one display. They activate the test window; the interactive test moves and clicks the desktop pointer. Run them only on a dedicated desktop (typically the reference Mac), never on a desktop used for other work, in unattended CI, or on a self-hosted GUI runner.
 - Run each command separately, with a new `-resultBundlePath` per attempt:
@@ -572,6 +578,65 @@ xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan Integrat
   -only-testing:IntegrationTests/AndroidInputTests/testThreeConsecutiveHundredClickBatchesThroughWindowServer test
 ```
 
+- Run each #70 Android configuration separately, with a new result bundle per attempt:
+
+```bash
+xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+  -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \
+  -resultBundlePath "${TMPDIR:-/tmp}/apkrun-idle-suspend.xcresult" \
+  APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
+  -only-test-configuration AndroidIdleSuspend \
+  -only-testing:IntegrationTests/IdleSuspendTests/testIdlePolicySuspendsThenStopsTheRuntime test
+
+xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+  -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \
+  -resultBundlePath "${TMPDIR:-/tmp}/apkrun-adb-idle.xcresult" \
+  APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
+  -only-test-configuration AndroidIdleSuspend \
+  -only-testing:IntegrationTests/IdleSuspendTests/testConnectedADBCommandKeepsRuntimeReadyPastSuspendDeadline test
+
+xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+  -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \
+  -resultBundlePath "${TMPDIR:-/tmp}/apkrun-install-idle.xcresult" \
+  APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
+  -only-test-configuration AndroidIdleSuspend \
+  -only-testing:IntegrationTests/IdleSuspendTests/testPendingInstallKeepsRuntimeReadyPastSuspendDeadline test
+
+xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+  -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \
+  -resultBundlePath "${TMPDIR:-/tmp}/apkrun-resume-idle.xcresult" \
+  APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
+  -only-test-configuration AndroidIdleSuspend \
+  -only-testing:IntegrationTests/IdleSuspendTests/testRuntimeStartRequestResumesSuspendedVM test
+
+xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+  -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \
+  -resultBundlePath "${TMPDIR:-/tmp}/apkrun-resume-first-frame.xcresult" \
+  APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
+  -only-test-configuration AndroidIdleSuspend \
+  -only-testing:IntegrationTests/IdleSuspendTests/testIdleResumeReadyP50IsUnder500MillisecondsAndHelloTextGetsNewIOSurfaceFrame test
+
+xcodebuild -project APKRun.xcodeproj -scheme IntegrationTests -testPlan IntegrationTests \
+  -configuration Debug -derivedDataPath "${TMPDIR:-/tmp}/apkrun-dd" \
+  -resultBundlePath "${TMPDIR:-/tmp}/apkrun-sleep-wake.xcresult" \
+  APKRUN_ANDROID_HOME="${TMPDIR:-/tmp}/apkrun-test-sdk" \
+  DEVELOPMENT_TEAM="$APKRUN_TEST_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="$APKRUN_TEST_CODE_SIGN_IDENTITY" \
+  -only-test-configuration AndroidSleepWake \
+  -only-testing:IntegrationTests/SleepWakeTests/testHostSleepPausesAndWakeResumesWithSynchronizedGuestClock test
+```
+
+- These #70 T2 checks need a signed test host, the Android SDK tools, the development Guest Agent bundle, and the debug HelloText APK at `/tmp/apkrun-test-fixtures/HelloText.apk`. Build it with `Tests/Fixtures/AndroidApps/gradlew -p Tests/Fixtures/AndroidApps :HelloText:assembleDebug`, then copy `Tests/Fixtures/AndroidApps/HelloText/build/outputs/apk/debug/HelloText-debug.apk` to that path. The resume/first-frame case runs 20 suspend/resume cycles using the test's manual idle clock, checks a new IOSurface frame for each launched session, and measures `VM_RESUMED` to `RUNTIME_READY` from the performance timeline. Sleep/wake is injected through the same serialized handler used by the control socket; it does not exercise live IOKit notifications or physically sleep the test Mac. The `pmset sleepnow` acceptance and the `control.sock`/IOKit path remain T3 checks on the reference Mac.
 - On macOS 27, the hosted `APKRunTestHost` checks `CGPreflightPostEventAccess()`. When it fails, enable the exact `APKRunTestHost.app` path from the skip message under System Settings → Privacy & Security → Device Control and Data Access. A grant to Terminal, Xcode, or another app does not satisfy it. Sign the host with the configured identity so its designated requirement stays stable.
 - These tests exercise the embedded `DevBoot` and `DevInputRoute` path, not the wrapper-to-apkrund XPC route.
 - `Tests/AcceptanceTests/AcceptanceTests.xctestplan` has one configuration per gate (`G1`–`G9`; each gate task adds its own), plus `ReleaseSmoke` and `Network`. Current configurations: `G1`, `G2`, `G3`, `Network`. Automatic retry is off, except one retry for `Network` ([test-strategy.md](../04-plan/test-strategy.md) §2.7).
@@ -589,7 +654,7 @@ WrapperCore signs each local wrapper at run time, not at build time ([wrapper.md
 - The launcher must be re-signable this way: system frameworks only, arm64 only, no nested code. `scripts/check-launcher.sh` enforces it (planned, #69).
 - `scripts/dev/make-wrapper.sh <package> <out-dir>` (planned, #46) builds a wrapper by hand with the same command and registers it with `apkrun wrapper approve`.
 
-### 12.6 Notarization (planned)
+### 12.6 Notarization
 
 `scripts/release/notarize.sh <path>` handles the app and the DMG:
 
@@ -602,7 +667,7 @@ spctl --assess --type execute -vv APKRun.app
 
 In CI the script uses the API key form (`--key`, `--key-id`, `--issuer`) from the release secrets. `scripts/release/make-dmg.sh` then builds `APKRun-<version>.dmg` (`hdiutil create -format UDZO`), signs it with the Developer ID, notarizes it, and staples it.
 
-Distribution wrappers use the same tools on the creator's Mac: `apkrun wrap <package> --distribution --identity "Developer ID Application: Name (TEAMID)" [--notarize --keychain-profile <profile>]` ([wrapper.md](../02-design/wrapper.md) §11). The nightly `notarize` job (planned) keeps that path working with a HelloText distribution wrapper.
+Distribution wrappers use the same tools on the creator's Mac: `apkrun wrap <package> --distribution --identity "Developer ID Application: Name (TEAMID)" [--notarize --keychain-profile <profile>]` ([wrapper.md](../02-design/wrapper.md) §11). The nightly `notarize` job keeps that path working.
 
 ---
 
@@ -663,7 +728,7 @@ Jobs marked *(planned)* do not exist yet.
 
 | Workflow | Trigger | Job | Tier | Runner | Content |
 |---|---|---|---|---|---|
-| `ci-policy.yml` | `pull_request_target` to `main`: opened, reopened, synchronize, edited, labeled, unlabeled | `workflow-policy` | — | `ubuntu-latest` | `scripts/ci/check-pr-control-changes.py` from `main`: head, base, changed paths, and reviews through the read-only API. Control paths: workflows, build and convention scripts, generators, pins, formatter and tool settings, test and build manifests, test trees, module graph. The approver applies `ci-policy-approved`; a new commit, reopen, PR edit, or later label event resets the check; removing the label revokes it |
+| `ci-policy.yml` | `pull_request_target` to `main`: opened, reopened, synchronize, edited, labeled, unlabeled | `workflow-policy` | — | `ubuntu-latest` | `scripts/ci/check-pr-control-changes.py` from `main`: head, base, changed paths, and reviews through the read-only API. Control paths: workflows, build and convention scripts, generators, pins, formatter and tool settings, test and build manifests, test trees, module graph. Report-only: the job prints the control paths a pull request changed and always succeeds |
 | `ci.yml` | every pull request; push to `main` | `lint` | — | `xcode-27` | `scripts/bootstrap`; `scripts/ci/run-checks.sh` (`tests/run.sh`, `check-module-deps.sh`, `check-logging.sh`, `check-todos.sh`, `check-format.sh`, `check-lock.sh`, `check-protos.sh`) |
 | | | `codegen` | — | `xcode-27` | `scripts/ci/codegen.sh` (§4) |
 | | | `third-party` | — | `xcode-27` | cache key from `build-third-party.sh --print-cache-key virgl-runtime`; restore; `build-third-party.sh virgl-runtime`; `generate-notices.py --check` |

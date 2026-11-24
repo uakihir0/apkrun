@@ -53,3 +53,28 @@ live view. Snapshot at writing:
   #81, #82, #83, #84, #85, #86, #87, #88, #89, #90, #91, #92, #93, #94,
   #95, #96
 - Bring-up follow-ups: #100, #101, #102, #103, #105, #116, #120
+
+## Manual follow-ups that need repository admin rights
+
+The session that maintains this list runs without GitHub API credentials. The
+following items are policy decisions and bookkeeping that need a human with
+write access to the repository, or a token in CI:
+
+- Apply the `needs-verification` label to every open issue in the tracking
+  list above. The label is the queue the on-device pass works from.
+- Close pull requests superseded by the merge cascade (the re-created
+  task branches and the user drafts whose issues shipped under the chain).
+- Close each verified issue once its T2/T3 row is green on a reference Mac.
+
+## Items that require physical hardware
+
+These checks cannot run in CI. They need an Apple silicon Mac with the
+reference image and, where marked, a signed build:
+
+- Every `T2` row in the tracking list (VM boot, guest agent, input, display,
+  clipboard, audio, power lifecycle, diagnostics capture).
+- Every `T3` row (acceptance and manual flows: onboarding, wrap-and-install,
+  update behind an unchanged wrapper, menu bar, notifications).
+- Notarized `wrap --distribution` output and Gatekeeper first-run
+  (Developer ID identity required).
+- Performance markers in `perf/` collected on the reference Mac.

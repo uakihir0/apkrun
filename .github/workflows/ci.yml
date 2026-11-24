@@ -15,10 +15,6 @@ concurrency:
 
 env:
   APKRUN_CI: "1"
-  GIT_CONFIG_COUNT: "1"
-  GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
-  GIT_CONFIG_VALUE_0: "https://github.com/"
-  GITHUB_TOKEN: ${{ github.token }}
 
 jobs:
   lint:
@@ -30,6 +26,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Install pinned repository tools
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Run repository checks
         run: scripts/ci/run-checks.sh
@@ -43,6 +44,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Install pinned repository tools
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Check generated files
         run: scripts/ci/codegen.sh
@@ -57,6 +63,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Install pinned repository tools
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Compute verified build cache key
         id: third-party-key
@@ -83,6 +94,11 @@ jobs:
       - name: Prepare result directories
         run: mkdir -p build/ci
       - name: Install pinned repository tools
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Compute verified build cache key
         id: third-party-key
@@ -146,6 +162,11 @@ jobs:
       - name: Prepare result directory
         run: mkdir -p build/ci
       - name: Install pinned repository tools
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Compute verified build cache key
         id: third-party-key
@@ -184,6 +205,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Install pinned repository tools
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Compute verified build cache key
         id: third-party-key

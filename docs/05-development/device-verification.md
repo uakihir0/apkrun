@@ -64,6 +64,30 @@ write access to the repository, or a token in CI:
   list above. The label is the queue the on-device pass works from.
 - Close pull requests superseded by the merge cascade (the re-created
   task branches and the user drafts whose issues shipped under the chain).
+  Suggested one-line notes per pull request — every listed change rides the
+  cascade head merged through #216:
+
+  | Pull request | Disposition note |
+  |---|---|
+  | #178–#184 | Content re-pushed into the cascade; superseded by #216 |
+  | #126 | #87 menu bar: content merged into the cascade head; superseded by #216 |
+  | #109 | #105 VirGL fix: content merged into the cascade head; superseded by #216 |
+  | #111 | #102 tap-focus test: content merged into the cascade head; superseded by #216 |
+  | #185, #211 | Signature-verifier fix landed as `fix(store): reject v3.1 SDK-range tampering and bound v1 CD lookups`; superseded by #216 |
+  | #201–#210 | Re-created task branches; all content is in the cascade head; superseded by #216 |
+  | #212 | Authenticated-clone lint fix is in the cascade head (`github.token` in the lint job); superseded by #216 |
+  | #213 | This document; merged with the cascade |
+  | #214 | #107 issue entry; merged with the cascade |
+  | #215 | Fuzz toolchain/SDK probe; merged with the cascade |
+  | #135 | #54 clipboard plus the `github.token` fetch fix; superseded by #216 |
+  | #167 | #58 runtime updater plus the `self-update` help golden; superseded by #216 |
+  | #108 | #107 boot tests: reimplemented in the cascade (issue entry + tests) |
+  | #121 | #36 image compose: reimplemented as `Images/tools/apkrun_image/bundle.py` |
+  | #122 | #69 session streaming: reimplemented as `SessionWireTypes`, `WindowingCore/FrameSource`, and `SessionWindowController` |
+  | #123 | #37 Store Agent: reimplemented under `Guest/APKRunStore` (`io.apkrun.store.*`) |
+  | #124 | #28 store crash recovery: covered by `packageStoreRecoversInstallInterrupted…` tests |
+  | #127 | #45 launcher flow: reimplemented in `Apps/APKRunLauncher` and `CLI/apkrun/Commands` |
+
 - Close each verified issue once its T2/T3 row is green on a reference Mac.
 
 ## Items that require physical hardware

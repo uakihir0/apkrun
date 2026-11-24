@@ -1166,8 +1166,9 @@ def workflow_errors(workflow, trigger_key)
     errors << "push checks must run only for main"
   end
   workflow.fetch("jobs").each do |job_name, job|
-    unless job["runs-on"] == "xcode-27"
-      errors << "#{job_name} must use a fresh GitHub-hosted macOS 27 runner"
+    expected_runner = job_name == "test-vsockd" ? "ubuntu-24.04" : "xcode-27"
+    unless job["runs-on"] == expected_runner
+      errors << "#{job_name} must use a fresh GitHub-hosted #{expected_runner} runner"
     end
     checkout = job.fetch("steps").find do |step|
       step["uses"]&.start_with?("actions/checkout@")
@@ -1241,7 +1242,7 @@ def workflow_errors(workflow, trigger_key)
   unless workflow.fetch("permissions") == { "contents" => "read" }
     errors << "workflow permissions must remain contents: read"
   end
-  expected_jobs = %w[lint codegen third-party build test-swift test-graphics test-images fuzz-short]
+  expected_jobs = %w[lint codegen third-party build test-swift test-graphics test-images fuzz-short test-vsockd]
   unless workflow.fetch("jobs").keys.sort == expected_jobs.sort
     errors << "CI jobs must match the required job set"
   end

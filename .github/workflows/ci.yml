@@ -15,6 +15,10 @@ concurrency:
 
 env:
   APKRUN_CI: "1"
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+  GIT_CONFIG_VALUE_0: "https://github.com/"
+  GITHUB_TOKEN: ${{ github.token }}
 
 jobs:
   lint:

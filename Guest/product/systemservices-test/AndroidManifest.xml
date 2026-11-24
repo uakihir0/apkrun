@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="io.apkrun.guest.systemservicetest">
+    <uses-sdk android:minSdkVersion="34" android:targetSdkVersion="37" />
+    <queries>
+        <package android:name="io.apkrun.guest" />
+    </queries>
+    <application
+        android:allowBackup="false"
+        android:label="APKRun System Services Test" />
+    <instrumentation
+        android:name=".SystemServicesInstrumentation"
+        android:targetPackage="io.apkrun.guest.systemservicetest"
+        android:functionalTest="false"
+        android:handleProfiling="false" />
+</manifest>

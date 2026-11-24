@@ -17,6 +17,11 @@ PRODUCT_PACKAGES += \
     ApkRunGuest \
     apkrun_vsockd
 
+ifeq ($(TARGET_BUILD_VARIANT),userdebug)
+PRODUCT_PACKAGES += \
+    ApkRunSystemServicesTest
+endif
+
 PRODUCT_SYSTEM_PROPERTIES += \
     persist.sys.usb.config=none \
     ro.adb.secure=1

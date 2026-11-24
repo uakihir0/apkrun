@@ -32,5 +32,6 @@ SUBCOMMANDS:
   wrapper                 Inspect the Mac apps APKRun created.
   settings                Show or change the settings of one Android app.
   config                  Read and write daemon settings.
+  self-update             Check for, install, and finish APKRun updates.
 
   See 'apkrun help <subcommand>' for detailed help.

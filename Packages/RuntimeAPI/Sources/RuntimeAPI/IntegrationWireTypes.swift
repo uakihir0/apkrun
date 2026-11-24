@@ -1,0 +1,899 @@
+import Foundation
+
+/// The clipboard wire types of runtime-api.md §11.2 and desktop-integration.md
+/// §3.3 and §4.
+///
+/// A clip fits the 32 MiB XPC message limit: text and HTML cap at 1 MiB and a
+/// clip image is PNG bytes of at most 16 MiB.
+
+/// What brought a `ClipItem` to apkrund (desktop-integration.md §4.2).
+public enum ClipTrigger: String, Codable, Sendable, Equatable {
+    /// ⌘V or Edit → Paste in the window.
+    case paste
+    /// The window became key and the pasteboard changed.
+    case focus
+}
+
+/// A clipboard image as PNG bytes (desktop-integration.md §4.4, target #81).
+public struct ClipImage: Codable, Sendable, Equatable {
+    /// PNG bytes, at most 16 MiB.
+    public var png: Data
+    /// The image's pixel width, at most 8192.
+    public var pixelWidth: Int
+    /// The image's pixel height, at most 8192.
+    public var pixelHeight: Int
+
+    /// Creates a clip image.
+    public init(png: Data, pixelWidth: Int, pixelHeight: Int) {
+        self.png = png
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+    }
+}
+
+/// One clipboard payload, either direction (runtime-api.md §11.2).
+public struct ClipItem: Codable, Sendable, Equatable {
+    /// UTF-8 text, at most 1 MiB.
+    public var text: String?
+    /// HTML, at most 1 MiB, only together with `text`.
+    public var html: String?
+    /// A PNG image (target #81).
+    public var image: ClipImage?
+    /// `ClipDescription.EXTRA_IS_SENSITIVE` / `org.nspasteboard.ConcealedType`.
+    public var sensitive: Bool
+    /// SHA-256 over the normalized text (or image bytes); a loop-prevention signal.
+    public var digest: RuntimeSHA256Digest
+    /// `true` when content was cut at its limit.
+    public var truncated: Bool
+    /// What triggered the item; set by the client, not by apkrund.
+    public var trigger: ClipTrigger?
+
+    /// Creates a clip item.
+    public init(
+        text: String? = nil,
+        html: String? = nil,
+        image: ClipImage? = nil,
+        sensitive: Bool = false,
+        digest: RuntimeSHA256Digest,
+        truncated: Bool = false,
+        trigger: ClipTrigger? = nil
+    ) {
+        self.text = text
+        self.html = html
+        self.image = image
+        self.sensitive = sensitive
+        self.digest = digest
+        self.truncated = truncated
+        self.trigger = trigger
+    }
+}
+
+/// The acknowledged sequence number of a `pushClipboard` (runtime-api.md §11.2).
+public struct ClipAck: Codable, Sendable, Equatable {
+    /// The sequence number the host assigned to the clip.
+    public var seq: UInt64
+    /// An image that exceeded the §11.4 limits was dropped; the text and HTML
+    /// still went (desktop-integration.md §4.4).
+    public var droppedImageTooLarge: Bool
+
+    /// Creates an acknowledgment.
+    public init(seq: UInt64, droppedImageTooLarge: Bool = false) {
+        self.seq = seq
+        self.droppedImageTooLarge = droppedImageTooLarge
+    }
+}
+
+/// `clipboardWritten`: the window wrote a guest clip to the Mac pasteboard
+/// (runtime-api.md §11.2, desktop-integration.md §4.3).
+public struct ClipboardWritten: Codable, Sendable, Equatable {
+    /// `NSPasteboard.changeCount` after the write.
+    public var changeCount: Int
+    /// The digest of the clip that was written.
+    public var digest: RuntimeSHA256Digest
+
+    /// Creates the report.
+    public init(changeCount: Int, digest: RuntimeSHA256Digest) {
+        self.changeCount = changeCount
+        self.digest = digest
+    }
+}
+
+/// `pushClipboard` through the authenticated control endpoint. The session
+/// channel carries it once the wrapper endpoint exists; until then the window
+/// names its session here (runtime-api.md §6.3, §11.2).
+public struct RuntimePushClipboardControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The session of the window that pushes.
+    public var sessionID: UUID
+    /// The clip payload.
+    public var item: ClipItem
+
+    /// Creates a push request.
+    public init(header: APIRequestHeader, sessionID: UUID, item: ClipItem) {
+        self.header = header
+        self.sessionID = sessionID
+        self.item = item
+    }
+}
+
+/// The reply of `pushClipboard`.
+public struct RuntimePushClipboardControlReply: Codable, Equatable, Sendable {
+    /// The acknowledged sequence number on success.
+    public let ack: ClipAck?
+    /// The control error on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(ack: ClipAck) {
+        self.ack = ack
+        error = nil
+    }
+
+    /// Creates an error reply.
+    public init(error: RuntimeWireError) {
+        ack = nil
+        self.error = error
+    }
+}
+
+/// `clipboardWritten` through the authenticated control endpoint
+/// (runtime-api.md §6.3, §11.2).
+public struct RuntimeClipboardWrittenControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The session of the window that wrote the pasteboard.
+    public var sessionID: UUID
+    /// The write report.
+    public var written: ClipboardWritten
+
+    /// Creates the request.
+    public init(header: APIRequestHeader, sessionID: UUID, written: ClipboardWritten) {
+        self.header = header
+        self.sessionID = sessionID
+        self.written = written
+    }
+}
+
+/// The reply of `clipboardWritten`.
+public struct RuntimeClipboardWrittenControlReply: Codable, Equatable, Sendable {
+    /// The control error on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init() {
+        error = nil
+    }
+
+    /// Creates an error reply.
+    public init(error: RuntimeWireError) {
+        self.error = error
+    }
+}
+
+/// `focusChanged`: the window reports whether it is the key window. The session
+/// channel carries it once the wrapper endpoint exists; until then it names its
+/// session here (runtime-api.md §6.3, input.md §7.2).
+public struct RuntimeFocusChangedControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The session of the window.
+    public var sessionID: UUID
+    /// `true` when the window became key, `false` when it resigned key.
+    public var isKey: Bool
+
+    /// Creates the request.
+    public init(header: APIRequestHeader, sessionID: UUID, isKey: Bool) {
+        self.header = header
+        self.sessionID = sessionID
+        self.isKey = isKey
+    }
+}
+
+/// The reply of `focusChanged`.
+public struct RuntimeFocusChangedControlReply: Codable, Equatable, Sendable {
+    /// The control error on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init() {
+        error = nil
+    }
+
+    /// Creates an error reply.
+    public init(error: RuntimeWireError) {
+        self.error = error
+    }
+}
+
+/// An integration event of the `integrations` topic (runtime-api.md §8,
+/// desktop-integration.md §3.3). `clipboardFromGuest` is published only for the
+/// key window's session.
+public enum IntegrationChange: Codable, Sendable, Equatable {
+    /// A guest clip that the key window should write to its pasteboard.
+    case clipboardFromGuest(sessionID: UUID, packageID: RuntimePackageID, item: ClipItem)
+    /// A link the guest wants opened; the key window asks the user where
+    /// it goes (desktop-integration.md §7.2, `links = ask`).
+    case linkPrompt(sessionID: UUID, packageID: RuntimePackageID, prompt: LinkPrompt)
+    /// An Android app offered a "Save to Mac" file; the session's window
+    /// shows the save panel (desktop-integration.md §6.3).
+    case exportOffered(sessionID: UUID, packageID: RuntimePackageID, offer: ExportOffer)
+    /// The shared-folder roots changed; clients refetch with `sharedFolders`
+    /// (desktop-integration.md §6.4).
+    case sharedFoldersChanged
+    /// The packages that started or stopped recording changed; the menu bar
+    /// shows "‹App› is using the microphone" while the set is non-empty
+    /// (desktop-integration.md §8.2).
+    case recordingChanged(packageIDs: [RuntimePackageID])
+    /// An event kind this client does not know.
+    case unknown
+
+    private enum Kind: String, Codable {
+        case clipboardFromGuest
+        case linkPrompt
+        case exportOffered
+        case sharedFoldersChanged
+        case recordingChanged
+        case unknown
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, sessionID, packageID, item, prompt, offer, packageIDs
+    }
+
+    /// Creates the event from its coded form.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decodeIfPresent(Kind.self, forKey: .kind) ?? .unknown
+        switch kind {
+        case .clipboardFromGuest:
+            self = .clipboardFromGuest(
+                sessionID: try container.decode(UUID.self, forKey: .sessionID),
+                packageID: try container.decode(RuntimePackageID.self, forKey: .packageID),
+                item: try container.decode(ClipItem.self, forKey: .item)
+            )
+        case .linkPrompt:
+            self = .linkPrompt(
+                sessionID: try container.decode(UUID.self, forKey: .sessionID),
+                packageID: try container.decode(RuntimePackageID.self, forKey: .packageID),
+                prompt: try container.decode(LinkPrompt.self, forKey: .prompt)
+            )
+        case .exportOffered:
+            self = .exportOffered(
+                sessionID: try container.decode(UUID.self, forKey: .sessionID),
+                packageID: try container.decode(RuntimePackageID.self, forKey: .packageID),
+                offer: try container.decode(ExportOffer.self, forKey: .offer)
+            )
+        case .sharedFoldersChanged:
+            self = .sharedFoldersChanged
+        case .recordingChanged:
+            self = .recordingChanged(
+                packageIDs: try container.decode([RuntimePackageID].self, forKey: .packageIDs)
+            )
+        case .unknown:
+            self = .unknown
+        }
+    }
+
+    /// Writes the event's coded form.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .clipboardFromGuest(let sessionID, let packageID, let item):
+            try container.encode(Kind.clipboardFromGuest, forKey: .kind)
+            try container.encode(sessionID, forKey: .sessionID)
+            try container.encode(packageID, forKey: .packageID)
+            try container.encode(item, forKey: .item)
+        case .linkPrompt(let sessionID, let packageID, let prompt):
+            try container.encode(Kind.linkPrompt, forKey: .kind)
+            try container.encode(sessionID, forKey: .sessionID)
+            try container.encode(packageID, forKey: .packageID)
+            try container.encode(prompt, forKey: .prompt)
+        case .exportOffered(let sessionID, let packageID, let offer):
+            try container.encode(Kind.exportOffered, forKey: .kind)
+            try container.encode(sessionID, forKey: .sessionID)
+            try container.encode(packageID, forKey: .packageID)
+            try container.encode(offer, forKey: .offer)
+        case .sharedFoldersChanged:
+            try container.encode(Kind.sharedFoldersChanged, forKey: .kind)
+        case .recordingChanged(let packageIDs):
+            try container.encode(Kind.recordingChanged, forKey: .kind)
+            try container.encode(packageIDs, forKey: .packageIDs)
+        case .unknown:
+            try container.encode(Kind.unknown, forKey: .kind)
+        }
+    }
+}
+
+// MARK: - Link prompts (runtime-api.md §11.2, desktop-integration.md §7.2)
+
+/// The user's answer to a link prompt (runtime-api.md §11.2).
+public enum LinkChoice: String, Codable, Sendable, Equatable {
+    /// Open the URL on the Mac.
+    case openOnMac
+    /// Open it in Android's browser.
+    case keepInAndroid
+    /// Drop the link.
+    case cancel
+}
+
+/// A `linkPrompt` integration event: the key window asks where a link
+/// goes (runtime-api.md §11.2). The prompt expires after about 60 s; a
+/// window that does not answer means Cancel.
+public struct LinkPrompt: Codable, Sendable, Equatable {
+    /// The prompt this answer belongs to.
+    public var promptID: UUID
+    /// The Unicode host shown to the user; never the path or query.
+    public var host: String
+    /// The registrable part of `host`, rendered bold in the prompt.
+    public var registrableDomain: String
+    /// `http`, `https`, or `mailto`.
+    public var scheme: String
+    /// The URL looks like a sign-in redirect; the prompt says so.
+    public var signInHint: Bool
+    /// The guest supports opening the link inside Android.
+    public var keepInAndroidAvailable: Bool
+    /// The prompt's expiry; no answer by then means Cancel.
+    public var expiresAt: Date
+
+    /// Creates a link prompt.
+    public init(
+        promptID: UUID,
+        host: String,
+        registrableDomain: String,
+        scheme: String,
+        signInHint: Bool,
+        keepInAndroidAvailable: Bool,
+        expiresAt: Date
+    ) {
+        self.promptID = promptID
+        self.host = host
+        self.registrableDomain = registrableDomain
+        self.scheme = scheme
+        self.signInHint = signInHint
+        self.keepInAndroidAvailable = keepInAndroidAvailable
+        self.expiresAt = expiresAt
+    }
+}
+
+/// The `resolveLinkPrompt` request body (runtime-api.md §11.2): a
+/// session-channel op for the window that holds the prompt.
+public struct RuntimeResolveLinkPromptControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The session whose window answers.
+    public var sessionID: UUID
+    /// The prompt being answered.
+    public var promptID: UUID
+    /// The user's choice.
+    public var choice: LinkChoice
+    /// Write the choice to `integrations.links` for the package.
+    public var remember: Bool
+
+    /// Creates a resolve request.
+    public init(
+        header: APIRequestHeader,
+        sessionID: UUID,
+        promptID: UUID,
+        choice: LinkChoice,
+        remember: Bool
+    ) {
+        self.header = header
+        self.sessionID = sessionID
+        self.promptID = promptID
+        self.choice = choice
+        self.remember = remember
+    }
+}
+
+/// The `resolveLinkPrompt` reply: `integration.promptTimedOut` when the
+/// prompt already expired or is unknown (runtime-api.md §11.2).
+public struct RuntimeResolveLinkPromptControlReply: Codable, Sendable {
+    /// The empty success body.
+    public var result: RuntimeEmpty?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates a resolve reply.
+    public init(result: RuntimeEmpty? = nil, error: RuntimeWireError? = nil) {
+        self.result = result
+        self.error = error
+    }
+}
+
+// MARK: - Integration status (runtime-api.md §11, desktop-integration.md §2.3)
+
+/// Why an integration request was denied (runtime-api.md §11,
+/// `WireIntegrationDecision.deny`).
+public enum IntegrationDenial: String, Codable, Sendable, Equatable {
+    /// The global switch `integrations.enabled.<name>` is off.
+    case globallyOff
+    /// `integrations.<name>` is off for the package.
+    case packageOff
+    /// The window is not key, or a link came without recent input.
+    case notFocused
+    /// The package has no session.
+    case noSession
+    /// The running image lacks the capability.
+    case notSupported
+    /// A rate limit, for example more than 3 links in 10 s.
+    case rateLimited
+    /// Any later, unknown reason.
+    case unknown
+}
+
+/// The policy decision reported by `integrationStatus` (runtime-api.md §11).
+/// Coded as `{"kind": "deny", "reason": "notFocused"}`; unit cases omit
+/// `reason`.
+public enum IntegrationStatusDecision: Codable, Sendable, Equatable {
+    /// The integration may proceed.
+    case allow
+    /// Ask the user; links only (desktop-integration.md §7).
+    case ask
+    /// The integration is refused.
+    case deny(IntegrationDenial)
+    /// Any later, unknown decision.
+    case unknown
+
+    private enum Kind: String, Codable {
+        case allow, ask, deny, unknown
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, reason
+    }
+
+    /// Decodes the kind/reason form.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decodeIfPresent(Kind.self, forKey: .kind) ?? .unknown
+        switch kind {
+        case .allow: self = .allow
+        case .ask: self = .ask
+        case .deny:
+            self = .deny(try container.decodeIfPresent(IntegrationDenial.self, forKey: .reason) ?? .unknown)
+        case .unknown: self = .unknown
+        }
+    }
+
+    /// Encodes the kind/reason form.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .allow: try container.encode(Kind.allow, forKey: .kind)
+        case .ask: try container.encode(Kind.ask, forKey: .kind)
+        case .deny(let reason):
+            try container.encode(Kind.deny, forKey: .kind)
+            try container.encode(reason, forKey: .reason)
+        case .unknown: try container.encode(Kind.unknown, forKey: .kind)
+        }
+    }
+}
+
+/// Where the reported `integrations.*` value comes from (`SettingSource`,
+/// runtime-api.md §11).
+public enum IntegrationSettingSource: String, Codable, Sendable, Equatable {
+    /// The global `integrations.enabled.*`/`defaults.*` switch decided it.
+    case globalSwitch
+    /// The package's own `settings.json` stores it.
+    case user
+    /// A compatibility-database recommendation set it.
+    case recommended
+    /// The documented default applies; nothing is stored.
+    case `default`
+    /// Any later, unknown source.
+    case unknown
+}
+
+/// The `JSONValue` subset used for `integrations.*` values: a flag or an
+/// enum word (`ask`, `off`, `ro`).
+public enum IntegrationValue: Codable, Sendable, Equatable {
+    /// A boolean setting.
+    case bool(Bool)
+    /// An enum-word setting.
+    case string(String)
+    /// No value.
+    case null
+
+    /// Decodes a bool, then a string, else null.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let flag = try? container.decode(Bool.self) {
+            self = .bool(flag)
+        } else if let word = try? container.decode(String.self) {
+            self = .string(word)
+        } else {
+            self = .null
+        }
+    }
+
+    /// Encodes the scalar form.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .bool(let flag): try container.encode(flag)
+        case .string(let word): try container.encode(word)
+        case .null: try container.encodeNil()
+        }
+    }
+
+    /// The string form used by `IntegrationPolicy`.
+    public var policyString: String? {
+        switch self {
+        case .bool(let flag): return flag ? "true" : "false"
+        case .string(let word): return word
+        case .null: return nil
+        }
+    }
+
+    /// Builds a value from a stored policy string.
+    public init?(policyString: String?) {
+        guard let policyString else { return nil }
+        switch policyString {
+        case "true": self = .bool(true)
+        case "false": self = .bool(false)
+        default: self = .string(policyString)
+        }
+    }
+}
+
+/// Whether the running image reports the capability a kind needs
+/// (runtime-api.md §11).
+public enum IntegrationSupport: String, Codable, Sendable, Equatable {
+    /// The capability is present.
+    case supported
+    /// The running image lacks the capability.
+    case unsupported
+    /// Unknown; no image is running or the kind needs none.
+    case unknown
+}
+
+/// One `integrations.*` line of `integrationStatus` (runtime-api.md §11).
+public struct IntegrationItemStatus: Codable, Sendable, Equatable {
+    /// The integration kind.
+    public var kind: IntegrationKind
+    /// The stored or default value.
+    public var value: IntegrationValue
+    /// Where `value` comes from.
+    public var source: IntegrationSettingSource
+    /// The §2.3 decision for the current context.
+    public var decision: IntegrationStatusDecision
+    /// The image support of the kind's capability.
+    public var support: IntegrationSupport
+    /// The missing capability when `support` is `unsupported`.
+    public var capability: String?
+    /// The macOS permission of the adapter, when the kind has one.
+    public var macPermission: String?
+
+    /// Creates one status line.
+    public init(
+        kind: IntegrationKind,
+        value: IntegrationValue,
+        source: IntegrationSettingSource,
+        decision: IntegrationStatusDecision,
+        support: IntegrationSupport,
+        capability: String? = nil,
+        macPermission: String? = nil
+    ) {
+        self.kind = kind
+        self.value = value
+        self.source = source
+        self.decision = decision
+        self.support = support
+        self.capability = capability
+        self.macPermission = macPermission
+    }
+}
+
+/// The `integrationStatus` reply body (runtime-api.md §11).
+public struct IntegrationStatus: Codable, Sendable, Equatable {
+    /// The queried package.
+    public var packageID: RuntimePackageID
+    /// One item per `IntegrationKind`.
+    public var items: [IntegrationItemStatus]
+    /// True while a microphone change needs a session restart.
+    public var microphoneNeedsRestart: Bool
+
+    /// Creates a status reply.
+    public init(packageID: RuntimePackageID, items: [IntegrationItemStatus], microphoneNeedsRestart: Bool = false) {
+        self.packageID = packageID
+        self.items = items
+        self.microphoneNeedsRestart = microphoneNeedsRestart
+    }
+}
+
+/// The `integrationStatus` request (runtime-api.md §11).
+public struct RuntimeIntegrationStatusControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The package to report on.
+    public var packageID: RuntimePackageID
+
+    /// Creates a status request.
+    public init(header: APIRequestHeader, packageID: RuntimePackageID) {
+        self.header = header
+        self.packageID = packageID
+    }
+}
+
+/// The `integrationStatus` reply (runtime-api.md §11).
+public struct RuntimeIntegrationStatusControlReply: Codable, Sendable {
+    /// The per-kind status on success.
+    public var status: IntegrationStatus?
+    /// The failure on error, for example `store.packageNotFound`.
+    public var error: RuntimeWireError?
+
+    /// Creates a status reply.
+    public init(status: IntegrationStatus? = nil, error: RuntimeWireError? = nil) {
+        self.status = status
+        self.error = error
+    }
+}
+
+// MARK: - File transfers (runtime-api.md §11.2, desktop-integration.md §6)
+
+/// One dropped file's metadata (`ImportFileInfo`, runtime-api.md §11.2).
+/// `fileIndex` points at the matching handle in the op's file array.
+public struct ImportFileInfo: Codable, Sendable, Equatable {
+    /// The index into the request's `files` handles.
+    public var fileIndex: Int
+    /// The file's display name.
+    public var name: String
+    /// Its size in bytes.
+    public var size: Int64
+    /// Its uniform type identifier.
+    public var uti: String
+
+    /// Creates a file entry.
+    public init(fileIndex: Int, name: String, size: Int64, uti: String) {
+        self.fileIndex = fileIndex
+        self.name = name
+        self.size = size
+        self.uti = uti
+    }
+}
+
+/// The `importFiles` request body (runtime-api.md §11.2): the window's drop,
+/// sent with the open `FileHandle`s it names by index.
+public struct RuntimeImportFilesSessionRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The session the drop landed on.
+    public var sessionID: UUID
+    /// 1–20 files (desktop-integration.md §6.2).
+    public var files: [ImportFileInfo]
+    /// The import target; `shareToApp` is the only v1 target.
+    public var target: String
+
+    /// Creates an import request.
+    public init(
+        header: APIRequestHeader, sessionID: UUID,
+        files: [ImportFileInfo], target: String = "shareToApp"
+    ) {
+        self.header = header
+        self.sessionID = sessionID
+        self.files = files
+        self.target = target
+    }
+}
+
+/// The `ImportResult` of runtime-api.md §11.2 / guest-protocol.md §7.4.
+public struct ImportResult: Codable, Sendable, Equatable {
+    /// The shared content URIs, one per file.
+    public var contentURIs: [String]
+    /// `shared` or `savedToDownloads` when the package had no send target.
+    public var disposition: String
+
+    /// Creates an import result.
+    public init(contentURIs: [String], disposition: String) {
+        self.contentURIs = contentURIs
+        self.disposition = disposition
+    }
+
+    /// Whether the files went to Downloads instead of the app.
+    public var savedToDownloads: Bool { disposition == "savedToDownloads" }
+}
+
+/// The `importFiles` reply.
+public struct RuntimeImportFilesSessionReply: Codable, Sendable {
+    /// The import result on success.
+    public var result: ImportResult?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates an import reply.
+    public init(result: ImportResult? = nil, error: RuntimeWireError? = nil) {
+        self.result = result
+        self.error = error
+    }
+}
+
+/// The `ExportOffer` a session event carries (`exportOffered`,
+/// runtime-api.md §11.2).
+public struct ExportOffer: Codable, Sendable, Equatable {
+    /// The offer identifier `acceptExport` answers.
+    public var offerID: String
+    /// The sanitized file name (wrapper.md §4.3).
+    public var name: String
+    /// The reported size, if Android knew it.
+    public var size: Int64?
+    /// The MIME type.
+    public var type: String
+
+    /// Creates an export offer.
+    public init(offerID: String, name: String, size: Int64?, type: String) {
+        self.offerID = offerID
+        self.name = name
+        self.size = size
+        self.type = type
+    }
+}
+
+/// The `acceptExport` request body (runtime-api.md §11.2): the save panel's
+/// answer, with 0 or 1 `FileHandle` beside it. A nil `fileIndex` is the
+/// panel's cancel.
+public struct RuntimeAcceptExportSessionRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The session answering.
+    public var sessionID: UUID
+    /// The offer being answered.
+    public var offerID: String
+    /// The index of the save handle in the op's file array, or nil to cancel.
+    public var fileIndex: Int?
+
+    /// Creates an accept request.
+    public init(header: APIRequestHeader, sessionID: UUID, offerID: String, fileIndex: Int?) {
+        self.header = header
+        self.sessionID = sessionID
+        self.offerID = offerID
+        self.fileIndex = fileIndex
+    }
+}
+
+/// The `acceptExport` reply (runtime-api.md §11.2).
+public struct RuntimeAcceptExportSessionReply: Codable, Sendable {
+    /// The empty success body.
+    public var result: RuntimeEmpty?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates an accept reply.
+    public init(result: RuntimeEmpty? = nil, error: RuntimeWireError? = nil) {
+        self.result = result
+        self.error = error
+    }
+}
+
+// MARK: - Shared folders (runtime-api.md §11.1, desktop-integration.md §6.4)
+
+/// A `SharedFolder` root record (runtime-api.md §11.1).
+public struct SharedFolder: Codable, Sendable, Equatable {
+    /// `shared` for the built-in folder, else a generated id.
+    public var id: String
+    /// The title shown in the picker and Settings.
+    public var name: String
+    /// The resolved path (display only).
+    public var path: String
+    /// The most the root grants (`readOnly` or `readWrite`).
+    public var access: String
+    /// The built-in root cannot be removed.
+    public var builtIn: Bool
+    /// `available`, `missing`, `privacyDenied`, `offline`, or `unknown`.
+    public var availability: String
+
+    /// Creates a folder record.
+    public init(
+        id: String, name: String, path: String, access: String,
+        builtIn: Bool, availability: String
+    ) {
+        self.id = id
+        self.name = name
+        self.path = path
+        self.access = access
+        self.builtIn = builtIn
+        self.availability = availability
+    }
+}
+
+/// The `sharedFolders` control request; has no parameters (runtime-api.md §11.1).
+public struct RuntimeSharedFoldersControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+
+    /// Creates the request.
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
+/// The `sharedFolders` reply (runtime-api.md §11.1).
+public struct RuntimeSharedFoldersControlReply: Codable, Sendable {
+    /// Every configured root on success.
+    public var result: [SharedFolder]?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates a list reply.
+    public init(result: [SharedFolder]? = nil, error: RuntimeWireError? = nil) {
+        self.result = result
+        self.error = error
+    }
+}
+
+/// The `addSharedFolder` request body (runtime-api.md §11.1): a security
+/// bookmark the client made, plus the root's maximum access.
+public struct RuntimeAddSharedFolderControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The folder's security-scoped bookmark.
+    public var bookmark: Data
+    /// `readOnly` (default) or `readWrite`.
+    public var access: String
+
+    /// Creates an add request.
+    public init(header: APIRequestHeader, bookmark: Data, access: String = "readOnly") {
+        self.header = header
+        self.bookmark = bookmark
+        self.access = access
+    }
+}
+
+/// The `addSharedFolder` / `setSharedFolderAccess` reply: the updated root.
+public struct RuntimeSharedFolderControlReply: Codable, Sendable {
+    /// The root on success.
+    public var result: SharedFolder?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates a folder reply.
+    public init(result: SharedFolder? = nil, error: RuntimeWireError? = nil) {
+        self.result = result
+        self.error = error
+    }
+}
+
+/// The `removeSharedFolder` request body (runtime-api.md §11.1).
+public struct RuntimeRemoveSharedFolderControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The root id to remove; `shared` is refused.
+    public var id: String
+
+    /// Creates a remove request.
+    public init(header: APIRequestHeader, id: String) {
+        self.header = header
+        self.id = id
+    }
+}
+
+/// The `removeSharedFolder` reply (runtime-api.md §11.1).
+public struct RuntimeRemoveSharedFolderControlReply: Codable, Sendable {
+    /// The empty success body.
+    public var result: RuntimeEmpty?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates a remove reply.
+    public init(result: RuntimeEmpty? = nil, error: RuntimeWireError? = nil) {
+        self.result = result
+        self.error = error
+    }
+}
+
+/// The `setSharedFolderAccess` request body (runtime-api.md §11.1).
+public struct RuntimeSetSharedFolderAccessControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The root id to change.
+    public var id: String
+    /// The new maximum access (`readOnly` or `readWrite`).
+    public var access: String
+
+    /// Creates a set-access request.
+    public init(header: APIRequestHeader, id: String, access: String) {
+        self.header = header
+        self.id = id
+        self.access = access
+    }
+}

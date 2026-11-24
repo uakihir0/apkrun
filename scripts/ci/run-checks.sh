@@ -17,8 +17,17 @@ checks+=(
     "scripts/check-lock.sh"
     "scripts/check-protos.sh"
     "scripts/check-docs.sh"
+    "scripts/check-compatibility-db.sh"
     "scripts/check-readback.sh"
+    "scripts/check-sepolicy.sh"
+    "scripts/check-raw-adb.sh"
+    "scripts/check-strings.sh"
+    "scripts/check-launcher.sh"
+    "scripts/check-licenses.sh"
 )
+if [[ -f "$repo_root/scripts/check-fixtures.sh" ]]; then
+    checks+=("scripts/check-fixtures.sh")
+fi
 
 names=()
 statuses=()

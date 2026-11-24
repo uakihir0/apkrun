@@ -1,0 +1,3 @@
+# ninja log v5
+0	48	1795258655544660149	CMakeFiles/hellosplit.dir/native-lib.cpp.o	5c98063a306fdc2d
+48	81	1795258655576835310	/Users/devin/repos/apkrun-81/Tests/Fixtures/AndroidApps/HelloSplit/build/intermediates/cxx/RelWithDebInfo/2l532z53/obj/arm64-v8a/libhellosplit.so	80b04584d3e8401b

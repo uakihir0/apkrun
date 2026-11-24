@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "source": null,
+      "destination": "/system_ext/priv-app/ApkRunGuest",
+      "kind": "directory",
+      "mode": "0755",
+      "owner": {
+        "uid": 0,
+        "gid": 0
+      },
+      "label": "u:object_r:system_file:s0"
+    },
+    {
+      "source": "prebuilt/ApkRunGuest.apk",
+      "destination": "/system_ext/priv-app/ApkRunGuest/ApkRunGuest.apk",
+      "kind": "regular file",
+      "mode": "0644",
+      "owner": {
+        "uid": 0,
+        "gid": 0
+      },
+      "label": "u:object_r:system_file:s0"
+    },
+    {
+      "source": "permissions/privapp-permissions-apkrun.xml",
+      "destination": "/system_ext/etc/permissions/privapp-permissions-apkrun.xml",
+      "kind": "regular file",
+      "mode": "0644",
+      "owner": {
+        "uid": 0,
+        "gid": 0
+      },
+      "label": "u:object_r:system_file:s0"
+    },
+    {
+      "source": "init/apkrun.rc",
+      "destination": "/system_ext/etc/init/apkrun.rc",
+      "kind": "regular file",
+      "mode": "0644",
+      "owner": {
+        "uid": 0,
+        "gid": 0
+      },
+      "label": "u:object_r:system_file:s0"
+    },
+    {
+      "source": "prebuilt/apkrun_vsockd",
+      "destination": "/system_ext/bin/apkrun_vsockd",
+      "kind": "regular file",
+      "mode": "0755",
+      "owner": {
+        "uid": 0,
+        "gid": 0
+      },
+      "label": "u:object_r:apkrun_vsockd_exec:s0"
+    }
+  ]
+}

@@ -113,6 +113,7 @@ enum ResourceTableFailure: Error, Equatable, Sendable {
 ///
 /// The table is confined to the device queue. It never calls the renderer, so
 /// host memory is only estimated here. The renderer owns the GPU side.
+/// SECURITY: untrusted create/attach requests; fuzzed by `resource-table` (#92).
 struct ResourceTable: Sendable {
     /// The virtio-gpu format codes of the 32-bit 2D formats the device accepts (graphics.md §6.2).
     static let supported2DFormats: Set<UInt32> = [

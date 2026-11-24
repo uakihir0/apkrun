@@ -12,8 +12,10 @@ import java.io.RandomAccessFile
  * notification, or typed text.
  */
 object AgentLog {
-    /** The logcat tag of every agent line (guest-components.md §9). */
+    /** The default logcat tag (guest-components.md §9). The Store Agent logs as `ApkRunStore`. */
     const val TAG = "ApkRunGuest"
+
+    @Volatile private var tag = TAG
 
     /** The size limit of one log file: 1 MiB. */
     const val MAXIMUM_FILE_BYTES = 1L * 1024 * 1024
@@ -23,8 +25,10 @@ object AgentLog {
 
     @Volatile private var ring: RingFile? = null
 
-    /** Starts writing the agent log to [file] and its rotated sibling. */
-    fun install(file: File) {
+    /** Starts writing the agent log to [file] and its rotated sibling, under [logcatTag]. */
+    @JvmOverloads
+    fun install(file: File, logcatTag: String = TAG) {
+        tag = logcatTag
         ring = RingFile(file)
     }
 
@@ -42,7 +46,7 @@ object AgentLog {
 
     private fun write(level: Int, message: String) {
         try {
-            Log.println(level, TAG, message)
+            Log.println(level, tag, message)
         } catch (error: RuntimeException) {
             // The logcat path is absent under plain JVM tests. The file below still records the
             // line.

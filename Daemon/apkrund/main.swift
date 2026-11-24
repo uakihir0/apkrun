@@ -27,7 +27,7 @@ enum APKRunDaemon {
             exit(64)
         }
 
-        let host = RuntimeHost(buildInfo: buildInfo)
+        let host = RuntimeHost(buildInfo: buildInfo, enforceProvisioning: true)
         let termination = DaemonTerminationCoordinator(host: host)
         signal(SIGTERM, SIG_IGN)
         signal(SIGINT, SIG_IGN)

@@ -1,0 +1,19 @@
+OVERVIEW: Check for, list, and manage Android app updates.
+
+`apkrun update [<package>] [--file <file> …] [--check-only] [--now] [--json]`
+checks managed packages for updates and installs them; see `apkrun help update
+check`.
+
+USAGE: update <subcommand>
+
+OPTIONS:
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  policy                  Set the update mode and provider of an Android app.
+  authority               Set the update authority of an Android app.
+  history                 Show the update history of Android apps.
+  skip                    Skip an update version so it is not offered again.
+  unskip                  Offer a skipped update version again.
+
+  See 'update help <subcommand>' for detailed help.

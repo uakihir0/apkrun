@@ -44,6 +44,20 @@
       "upstream": { "watch": "commits", "branch": "development" }
     },
     {
+      "name": "sparkle",
+      "group": "swift-runtime",
+      "kind": "swiftpm",
+      "repository": "https://github.com/sparkle-project/Sparkle.git",
+      "commit": "ab7d71291238df6e0492143b120c9b696a35f603",
+      "version": "2.10.1",
+      "license": "MIT",
+      "licenseFiles": ["LICENSE"],
+      "buildFlags": [],
+      "patches": [],
+      "ships": "app",
+      "upstream": { "watch": "tags", "branch": "2.x" }
+    },
+    {
       "name": "bundletool-all",
       "group": "fixture-tooling",
       "kind": "prebuilt",

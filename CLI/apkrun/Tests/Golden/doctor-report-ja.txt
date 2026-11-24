@@ -1,0 +1,3 @@
+✕ apkrund.reachable — Background service
+修復: Guest Agent restart
+✓ vm.virtualizationSupported — Virtualization

@@ -11,6 +11,7 @@
             subcommands: [
                 DevLinuxCommand.self, DevConsoleCommand.self, DevBootCommand.self,
                 DevImageCommand.self, DevAdbCommand.self, DevLaunchCommand.self, DevDisplaysCommand.self,
+                DevPowerCommand.self,
             ]
         )
     }

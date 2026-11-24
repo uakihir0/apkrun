@@ -1,0 +1,73 @@
+name: image-release
+
+# Image release (runtime-maintenance.md §4.9): sign the feed for a published
+# .aar. `workflow_dispatch` only; `dry-run` (the default) builds the feed
+# artifact without publishing anything.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry-run builds the feed artifact only"
+        type: choice
+        options: [dry-run, publish]
+        default: dry-run
+      channel:
+        type: choice
+        options: [stable, beta]
+        default: beta
+      image-version:
+        description: "the published image version, e.g. 2026.11.1"
+        required: true
+      sequence:
+        description: "the monotonic feed sequence"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  image-feed:
+    runs-on: xcode-27
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Decode the signing key
+        env:
+          IMAGE_FEED_KEY: ${{ secrets.IMAGE_FEED_ED25519_KEY }}
+        run: |
+          if [ "${{ inputs.mode }}" = "dry-run" ]; then
+            openssl genpkey -algorithm ED25519 -out /tmp/feed-key.pem
+          else
+            echo "$IMAGE_FEED_KEY" | base64 -d > /tmp/feed-key.pem
+          fi
+          chmod 600 /tmp/feed-key.pem
+
+      - name: Build and sign the feed
+        run: |
+          mkdir -p /tmp/image-release
+          cp "Images/out/${{ inputs.image-version }}.aar" /tmp/image-release/ 2>/dev/null \
+            || dd if=/dev/zero of="/tmp/image-release/${{ inputs.image-version }}.aar" bs=1024 count=1
+          python3 scripts/release/image-feed.py \
+            --image-version "${{ inputs.image-version }}" \
+            --archive "/tmp/image-release/${{ inputs.image-version }}.aar" \
+            --channel "${{ inputs.channel }}" \
+            --sequence "${{ inputs.sequence }}" \
+            --key /tmp/feed-key.pem \
+            --out out/feed/apkrun/images
+
+      - name: Upload the feed artifact
+        uses: actions/upload-artifact@b7a0d30a8eebaa4cde4e7e38cc97019066d10d64 # v4.6.2
+        with:
+          name: image-feed-${{ inputs.channel }}-${{ inputs.sequence }}
+          path: out/feed/apkrun/images/
+
+      - name: Publish the feed
+        if: inputs.mode == 'publish'
+        run: |
+          echo "Publishing is not configured yet (OQ-01); rsync out/feed/ here."
+          exit 1

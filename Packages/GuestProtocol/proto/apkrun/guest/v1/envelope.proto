@@ -241,6 +241,10 @@ message Hello {
   // The channel that the agent believes it is serving (guest-protocol.md §3).
   ChannelKind channel = 6;
   AgentMode mode = 7;
+  // Per-capability detail strings, keyed by the capability name. The Store Agent reports the
+  // update-ownership enforcement flag here ("store.ownership.v1" → "enforcement=on|off")
+  // (guest-components.md §8.2).
+  map<string, string> capability_details = 8;
 }
 
 message AgentInfo {

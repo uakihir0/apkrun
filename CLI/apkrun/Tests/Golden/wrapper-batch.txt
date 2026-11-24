@@ -1,0 +1,3 @@
+Updated 1 Mac app(s).
+Skipped com.example.busy (the app is running).
+Failed com.example.broken: APKRun's background service failed.

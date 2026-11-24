@@ -247,6 +247,32 @@ func instanceStoreProvisionsLoadsAndDetectsAMissingDisk() async throws {
     }
 }
 
+@Test
+func instanceStoreCreatesARecoveryPointOfTheUserdataDisk() async throws {
+    let bundle = try FixtureBundle.make()
+    defer { bundle.remove() }
+    let store = InstanceStore(paths: bundle.paths, diagnostics: .testing())
+    let sizing = InstanceSizing(cpuCount: 2, memoryBytes: 2 << 30, userdataBytes: 64 * 1024 * 1024)
+    _ = try await store.provision(image: bundle.image, sizing: sizing)
+
+    let destination = try await store.createRecoveryPoint(image: bundle.image)
+
+    #expect(
+        FileManager.default.fileExists(
+            atPath: destination.appendingPathComponent("userdata.img").path))
+    #expect(
+        FileManager.default.fileExists(
+            atPath: destination.appendingPathComponent("instance.json").path))
+    #expect(destination.path.contains("recovery-points"))
+    #expect(destination.lastPathComponent.hasSuffix(bundle.image.version.description))
+
+    // Reset Android keeps the recovery point out of the fresh instance.
+    _ = try await store.resetAndroid(image: bundle.image, sizing: sizing)
+    #expect(
+        FileManager.default.fileExists(
+            atPath: destination.appendingPathComponent("userdata.img").path))
+}
+
 private var repositoryRoot: URL {
     var url = URL(fileURLWithPath: #filePath)
     for _ in 0..<5 {

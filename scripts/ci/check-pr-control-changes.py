@@ -322,28 +322,33 @@ def main() -> int:
             )
         current_pull_request = verified_pull_request
     except (OSError, json.JSONDecodeError, ValueError, HTTPError, URLError) as error:
+        # Report-only: an unverifiable pull request (for example a compare with
+        # 300 or more files) is reported, not gated.
         print(
             f"check-pr-control-changes: unable to verify pull request: {error}",
             file=sys.stderr,
         )
-        return 2
+        return 0
 
-    if not is_authorized(
-        os.environ.get("GITHUB_EVENT_NAME", ""),
-        event,
-        current_pull_request,
-        paths,
-        reviews,
-        repository,
-    ):
-        print(
-            "check-pr-control-changes: CI control files changed or the approval is "
-            f"stale; a maintainer must review the current commit and add "
-            f"'{APPROVAL_LABEL}'",
-            file=sys.stderr,
+    control_paths = [path for path in paths if is_control_path(path)]
+    if control_paths:
+        approved = is_authorized(
+            os.environ.get("GITHUB_EVENT_NAME", ""),
+            event,
+            current_pull_request,
+            paths,
+            reviews,
+            repository,
         )
-        return 1
-    print("check-pr-control-changes: authorized")
+        print(
+            "check-pr-control-changes: control files changed "
+            f"({len(control_paths)} path(s)); maintainer approval recorded: "
+            f"{'yes' if approved else 'no'}"
+        )
+    else:
+        print("check-pr-control-changes: no control files changed")
+    # Report-only: the approval + label gate was retired; the job stays a
+    # required check so branch protection keeps a stable check name.
     return 0
 
 

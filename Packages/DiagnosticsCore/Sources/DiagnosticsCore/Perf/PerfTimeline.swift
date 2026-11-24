@@ -79,6 +79,15 @@ public final class PerfTimeline: Sendable {
         }
     }
 
+    /// Drops every retained event (`perfStatistics` reset, diagnostics.md §9.3).
+    public func clear() {
+        state.withLock { state in
+            state.events = [PerfEvent?](repeating: nil, count: PerfTimeline.capacity)
+            state.nextIndex = 0
+            state.count = 0
+        }
+    }
+
     func append(_ event: PerfEvent) {
         state.withLock { state in
             state.events[state.nextIndex] = event

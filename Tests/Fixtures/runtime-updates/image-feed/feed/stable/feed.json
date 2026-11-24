@@ -1,0 +1,36 @@
+{
+  "channel": "stable",
+  "expiresAt": "2026-12-21T19:12:44Z",
+  "generatedAt": "2026-11-21T19:12:44Z",
+  "images": [
+    {
+      "archive": {
+        "sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+        "size": 65536,
+        "url": "https://images.apkrun.io/apkrun/images/stable/2026.11.1.aar"
+      },
+      "critical": false,
+      "expandedSize": 131072,
+      "imageVersion": "2026.11.1",
+      "kind": "apkrun",
+      "minimumSourceVersion": "0.0",
+      "publishedAt": "2026-11-21T19:12:44Z",
+      "requirements": {
+        "guestProtocol": {
+          "max": 1,
+          "min": 1
+        },
+        "minimumRuntimeVersion": "1.0"
+      },
+      "rolloutPercent": 100,
+      "userdata": {
+        "schemaVersion": 1,
+        "upgradableFrom": [
+          1
+        ]
+      }
+    }
+  ],
+  "schemaVersion": 1,
+  "sequence": 1
+}

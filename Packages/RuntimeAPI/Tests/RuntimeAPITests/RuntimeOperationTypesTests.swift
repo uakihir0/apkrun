@@ -158,11 +158,16 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
         header: header,
         request: uninstallRequest
     )
+    let beginRepairRequest = RuntimeBeginRepairPackageControlRequest(
+        header: header,
+        request: RuntimePackageRequest(packageID: packageID)
+    )
     let cancelRequest = RuntimeCancelOperationControlRequest(header: header, operationID: operationID)
     let listRequest = RuntimeListOperationsControlRequest(header: header)
     let statusRequest = RuntimeOperationStatusControlRequest(header: header, operationID: operationID)
     let handle = OperationHandle(operationID: operationID, kind: .install)
     let uninstallHandle = OperationHandle(operationID: operationID, kind: .uninstall)
+    let repairHandle = OperationHandle(operationID: operationID, kind: .repair)
     let snapshot = OperationSnapshot(
         operationID: operationID,
         kind: .install,
@@ -175,6 +180,7 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
 
     #expect(try roundTrip(beginRequest) == beginRequest)
     #expect(try roundTrip(beginUninstallRequest) == beginUninstallRequest)
+    #expect(try roundTrip(beginRepairRequest) == beginRepairRequest)
     #expect(try roundTrip(cancelRequest) == cancelRequest)
     #expect(try roundTrip(listRequest) == listRequest)
     #expect(try roundTrip(statusRequest) == statusRequest)
@@ -190,6 +196,12 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     #expect(
         try roundTrip(RuntimeBeginUninstallPackageControlReply(error: failure))
             == RuntimeBeginUninstallPackageControlReply(error: failure))
+    #expect(
+        try roundTrip(RuntimeBeginRepairPackageControlReply(result: repairHandle))
+            == RuntimeBeginRepairPackageControlReply(result: repairHandle))
+    #expect(
+        try roundTrip(RuntimeBeginRepairPackageControlReply(error: failure))
+            == RuntimeBeginRepairPackageControlReply(error: failure))
     #expect(
         try roundTrip(RuntimeCancelOperationControlReply(result: .cancelling))
             == RuntimeCancelOperationControlReply(result: .cancelling))
@@ -212,11 +224,81 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     for requestHeader in [
         beginRequest.header,
         beginUninstallRequest.header,
+        beginRepairRequest.header,
         cancelRequest.header,
         listRequest.header,
         statusRequest.header,
     ] {
-        #expect(requestHeader.apiVersion == APIVersion(major: 1, minor: 11))
+        #expect(requestHeader.apiVersion == .current)
         #expect(requestHeader.clientKind == .cli)
     }
+}
+
+@Test func distributionWrapperDTOsRoundTrip() throws {
+    let packageID = try #require(RuntimePackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let request = DistributionWrapperRequest(
+        packageID: packageID,
+        outputDirectory: URL(fileURLWithPath: "/tmp/out"),
+        fileName: "Hello",
+        displayName: "Hello Text",
+        icon: nil,
+        identity: "Developer ID Application: APKRun Tests (ABCDE12345)",
+        notarize: true,
+        keychainProfile: "apkrun-notary",
+        redistributionConfirmed: true
+    )
+    let result = DistributionWrapperResult(
+        appURL: URL(fileURLWithPath: "/tmp/out/Hello.app"),
+        zipURL: URL(fileURLWithPath: "/tmp/out/Hello.zip"),
+        bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+        cdhash: String(repeating: "ab", count: 20),
+        teamID: "ABCDE12345",
+        notarized: true,
+        submissionID: "SUB-1",
+        assessment: "source=Notarized Developer ID"
+    )
+
+    #expect(try roundTrip(request) == request)
+    #expect(try roundTrip(result) == result)
+    #expect(
+        try roundTrip(OperationOutput.distributionWrapper(result))
+            == .distributionWrapper(result))
+}
+
+/// API 1.37: the compatibility verdict round-trips on details and
+/// previews, and older payloads without the field still decode (#91).
+@Test func compatibilityWireDTOsRoundTrip() throws {
+    let info = RuntimeCompatibilityInfo(
+        level: "compatibilityMode",
+        label: "Works with limitations",
+        issues: [
+            RuntimeCompatibilityIssue(
+                id: "IME-1",
+                title: ["en": "IME overlay drifts", "ja": "IMEずれ"],
+                workaround: ["en": "Use compatibility window mode"])
+        ],
+        recommendedKeys: ["window.displayMode"])
+    #expect(try roundTrip(info) == info)
+
+    let summary = RuntimePackageSummary(
+        packageID: RuntimePackageID(rawValue: "com.example")!,
+        displayName: "Hello Text",
+        versionCode: 7,
+        state: .installed
+    )
+    let details = RuntimePackageDetails(
+        summary: summary, files: [], artifactBytes: 0, compatibility: info)
+    #expect(try roundTrip(details) == details)
+
+    // A payload written by an older daemon (no `compatibility` key)
+    // still decodes as nil.
+    let object: [String: Any?] = [
+        "summary": try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(summary)),
+        "files": [String](),
+        "artifactBytes": 0,
+    ]
+    let data = try JSONSerialization.data(withJSONObject: object)
+    let decoded = try JSONDecoder().decode(RuntimePackageDetails.self, from: data)
+    #expect(decoded.compatibility == nil)
 }

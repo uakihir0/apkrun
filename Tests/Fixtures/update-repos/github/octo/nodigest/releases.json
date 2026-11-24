@@ -1,0 +1,20 @@
+[
+ {
+  "id": 200,
+  "tag_name": "v1.0",
+  "name": "NoDigest",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2026-01-01T00:00:00Z",
+  "body": "",
+  "assets": [
+   {
+    "id": 21,
+    "name": "app-universal.apk",
+    "size": 2106430,
+    "browser_download_url": "__BASE__/github-assets/app-universal.apk",
+    "updated_at": "2026-01-01T00:00:00Z"
+   }
+  ]
+ }
+]

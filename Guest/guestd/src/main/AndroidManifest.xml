@@ -1,6 +1,97 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.CHANGE_CONFIGURATION" />
     <uses-permission android:name="android.permission.FORCE_STOP_PACKAGES" />
+    <uses-permission android:name="android.permission.SET_TIME_ZONE" />
+    <uses-permission android:name="android.permission.SET_TIME" />
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
 
-    <application android:label="APKRun Guest Agent" android:hasCode="true" />
+    <application android:label="APKRun Guest Agent" android:hasCode="true">
+        <!-- The development IME (input.md §5.6): no input view, driven over @apkrun-guest-ime. -->
+        <service
+            android:name=".ime.ApkRunInputMethodService"
+            android:label="APKRun IME"
+            android:permission="android.permission.BIND_INPUT_METHOD"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/method" />
+        </service>
+        <!-- The notification listener (desktop-integration.md §5.1): granted by DeviceSetup. -->
+        <!-- Development mode runs the daemon under app_process, a different
+             process (and uid) from this app, so the static NotificationBridge
+             cannot reach the listener. The listener stays disabled here;
+             the PRIVILEGED_APP agent enables it (guest-components.md §4.1).
+             TODO(#36): enable the listener component in PRIVILEGED_APP mode. -->
+        <service
+            android:name=".daemon.ApkRunNotificationListener"
+            android:label="APKRun Notification Listener"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true"
+            android:enabled="false">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+        <!-- The link intercept (desktop-integration.md §7.1): holds the browser
+             role in PRIVILEGED_APP mode. Disabled in development like the
+             listener; the privileged agent enables it (TODO(#36)). -->
+        <activity
+            android:name=".url.UrlRedirectActivity"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:enabled="false">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+                <data android:scheme="mailto" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SENDTO" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="mailto" />
+            </intent-filter>
+        </activity>
+        <!-- Read-only transfer files for the clipboard image path (issue #81) and
+             the import drops of the files integration (desktop-integration.md §6.1). -->
+        <provider
+            android:name=".daemon.TransferFileProvider"
+            android:authorities="io.apkrun.guest.files"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+        <!-- The "Save to Mac" share target (desktop-integration.md §6.2): any app can
+             share files to it; the daemon relays them as export offers. Disabled in
+             development like the other components (TODO(#36)). -->
+        <activity
+            android:name=".files.SaveToMacActivity"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:enabled="false">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+        <!-- The shared-folders provider (desktop-integration.md §6.4,
+             guest-protocol.md §12): roots and documents come from Host* requests on
+             the bulk channel. -->
+        <provider
+            android:name=".files.MacFilesProvider"
+            android:authorities="io.apkrun.guest.macfiles"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.provider.action.PROVIDER_INTERFACE" />
+            </intent-filter>
+        </provider>
+    </application>
 </manifest>

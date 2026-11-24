@@ -18,6 +18,9 @@ public enum GuestProtocolFailure: Error, Equatable, Sendable {
     case remote(code: GPGuestErrorCode, message: String, operation: String)
     /// A frame is above the 4 MiB limit. This is a protocol violation.
     case frameTooLarge
+    /// The host failed to read or write the payload of a bulk transfer (desktop-integration.md §6.2:
+    /// file payloads stream rather than load in memory, so reading them can fail).
+    case transferIOFailed(detail: String)
     /// Any other protocol violation (guest-protocol.md §12.2).
     case malformedFrame
     /// The agent does not offer a capability that the request needs.

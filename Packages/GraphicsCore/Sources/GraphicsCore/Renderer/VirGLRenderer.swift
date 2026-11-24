@@ -236,12 +236,16 @@ extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
 
     func submit(context: UInt32, commands: [UInt8]) throws(GraphicsFailure) {
         let renderer = try live(operation: "submit")
+        let callbackContext = retainedCallbackContext.map {
+            Unmanaged<GraphicsRendererCallbackContext>.fromOpaque($0).takeUnretainedValue()
+        }
+        callbackContext?.probe.begin(context: context, diagnostic: callbackContext?.activeCommandDiagnostic)
+        var virglResult = Int32.min
         #if APKRUN_TEST_READBACK
             submitOrdinal &+= 1
             let ordinal = submitOrdinal
             let sink = messageSink
             _ = sink?.takeMessages()
-            var virglResult = Int32.min
             let status = commands.withUnsafeBytes { bytes in
                 gb_submit_with_result(renderer, context, bytes.baseAddress, bytes.count, &virglResult)
             }
@@ -257,9 +261,10 @@ extension VirGLRenderer: VirGLEngine, @unchecked Sendable {
             }
         #else
             let status = commands.withUnsafeBytes { bytes in
-                gb_submit(renderer, context, bytes.baseAddress, bytes.count)
+                gb_submit_with_result(renderer, context, bytes.baseAddress, bytes.count, &virglResult)
             }
         #endif
+        callbackContext?.probe.finish(status: status, result: virglResult, logger: logger)
         try check(status, operation: "submit")
     }
 
@@ -374,6 +379,7 @@ final class GraphicsRendererCallbackContext: @unchecked Sendable {
     let logger: APKLogger
     let onFenceCompleted: @Sendable (UInt32) -> Void
     var activeCommandDiagnostic: VirGLCommandDiagnostic?
+    let probe = Issue105CallbackProbe()
     #if APKRUN_TEST_READBACK
         let messageSink = VirGLMessageSink()
     #endif
@@ -433,19 +439,7 @@ private let graphicsRendererLog:
         let context = Unmanaged<GraphicsRendererCallbackContext>
             .fromOpaque(contextPointer)
             .takeUnretainedValue()
-        context.logCorrelation(for: level)
-        let message = String(cString: messagePointer)
-        #if APKRUN_TEST_READBACK
-            context.messageSink.record(message)
-        #endif
-        switch Int(level) {
-        case GB_LOG_ERROR:
-            context.logger.error("VirGL: \(message, .private)")
-        case GB_LOG_WARNING, GB_LOG_INFO:
-            context.logger.info("VirGL: \(message, .private)")
-        default:
-            context.logger.debug("VirGL: \(message, .private)")
-        }
+        context.probe.record(messagePointer, level: level)
     }
 
 /// A present target of the bridge. The renderer that made it destroys it through `gb_present_target_destroy`.

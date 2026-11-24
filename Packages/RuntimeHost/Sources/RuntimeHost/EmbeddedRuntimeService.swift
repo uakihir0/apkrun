@@ -1038,7 +1038,6 @@ extension DevelopmentGuestAgent: EmbeddedSessionGuestAgent {
         }
     }
 
-
     func addResynchronizationHandler(
         _ handler: @escaping @Sendable (GuestSnapshotState) async -> Void
     ) async -> UUID {

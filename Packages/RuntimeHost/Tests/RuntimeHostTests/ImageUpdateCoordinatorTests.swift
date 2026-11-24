@@ -62,7 +62,7 @@ private actor ApplyGate {
 
     func enter() {
         entered = true
-        entryWaiters.forEach { $0.resume() }
+        for waiter in entryWaiters { waiter.resume() }
         entryWaiters.removeAll()
     }
 
@@ -73,7 +73,7 @@ private actor ApplyGate {
 
     func release() {
         released = true
-        releaseWaiters.forEach { $0.resume() }
+        for waiter in releaseWaiters { waiter.resume() }
         releaseWaiters.removeAll()
     }
 

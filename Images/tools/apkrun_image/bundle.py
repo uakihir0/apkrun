@@ -194,7 +194,9 @@ def render_notice(manifest: Mapping[str, Any], source_offer: Path) -> str:
         module = html.escape(str(entry["module"]))
         license_ = html.escape(str(entry["license"]))
         revision = html.escape(str(entry["revision"]))
-        rows.append(f"<tr><td>{module}</td><td>{license_}</td><td>{cell}</td><td>{revision}</td></tr>")
+        rows.append(
+            f"<tr><td>{module}</td><td>{license_}</td><td>{cell}</td><td>{revision}</td></tr>"
+        )
     offer = (
         "<h2>Source offers</h2><table><tr><th>Component</th><th>License</th>"
         f"<th>Project</th><th>Revision</th></tr>{''.join(rows)}</table>"

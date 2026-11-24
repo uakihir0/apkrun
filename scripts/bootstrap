@@ -7,6 +7,14 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 # shellcheck disable=SC1091
 source "$script_dir/tool-versions.env"
 
+# Anonymous GitHub clones from shared CI runners are rate-limited (401).
+# Authenticate every git fetch in this script when a token is available.
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    export GIT_CONFIG_COUNT=1
+    export GIT_CONFIG_KEY_0="url.https://x-access-token:${GITHUB_TOKEN}@github.com/.insteadOf"
+    export GIT_CONFIG_VALUE_0="https://github.com/"
+fi
+
 check_only=0
 case "${1:-}" in
     "")
@@ -215,8 +223,14 @@ fetch_pinned_archive() {
     local expected_sha="$3"
     local archive="$4"
 
+    local curl_auth=()
+    # Anonymous GitHub requests from shared CI runners are rate-limited (401);
+    # authenticate when a token is available (GITHUB_TOKEN in CI).
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        curl_auth=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+    fi
     if ! curl --fail --location --retry 4 --retry-all-errors \
-        --connect-timeout 20 --max-time 240 "$url" --output "$archive"; then
+        --connect-timeout 20 --max-time 240 "${curl_auth[@]}" "$url" --output "$archive"; then
         report FAIL "$name" "download failed"
         failures=$((failures + 1))
         return 1

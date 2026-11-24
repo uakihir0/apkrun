@@ -1,0 +1,1744 @@
+{
+  "errors": {
+    "cli.confirmationRequired": {
+      "message": "このコマンドには確認が必要ですが、応答できる端末がありません。",
+      "remediation": "{flag} を付けて再度実行してください。"
+    },
+    "cli.declined": {
+      "message": "何も変更されませんでした。"
+    },
+    "cli.devConsoleRequiresTerminal": {
+      "message": "`apkrun dev console` には対話端末が必要です。",
+      "remediation": "ターミナルなどの対話端末から実行してください。"
+    },
+    "cli.developerModeRequired": {
+      "message": "{command} には開発者モードが必要です。",
+      "remediation": "設定 → 詳細設定で開発者モードをオンにするか、`apkrun config set developer.mode true` を実行してください。"
+    },
+    "cli.displayStatusUnavailable": {
+      "message": "Android のディスプレイ詳細はまだランタイムサービスから取得できません。",
+      "remediation": "`apkrun runtime status` で利用可能なランタイム詳細を確認してください。"
+    },
+    "cli.fileNotAccessible": {
+      "message": "apkrun は {file} を開けません。",
+      "remediation": "パスと権限を確認してください。"
+    },
+    "cli.invalidArgument": {
+      "message": "{argument} の値が不正です（{reason}）。",
+      "remediation": "--help を付けて実行し、許可される値を確認してください。"
+    },
+    "cli.invalidArguments": {
+      "message": "コマンド引数が不正です。",
+      "remediation": "--help を付けて実行し、許可される値を確認してください。"
+    },
+    "cli.invalidPackageName": {
+      "message": "{package} は有効な Android パッケージ名ではありません。",
+      "remediation": "com.example.app のようなパッケージ名を使用してください。`apkrun list` で一覧を確認できます。"
+    },
+    "cli.invalidSourceSpec": {
+      "message": "このアップデート元は不正です。",
+      "remediation": "local:、direct:、fdroid、github: のいずれかの形式を使用してください。`apkrun update policy` を参照してください。"
+    },
+    "cli.logsUnavailable": {
+      "message": "APKRun のログを読み取れませんでした。",
+      "remediation": "もう一度お試しください。再度失敗する場合は診断レポートを作成してください。"
+    },
+    "cli.malformedReply": {
+      "message": "apkrun は APKRun のバックグラウンドサービス（{operation}）の応答を読み取れませんでした。",
+      "remediation": "apkrun がインストール先の APKRun と一致しているか確認してください。"
+    },
+    "cli.versionSkew": {
+      "message": "この apkrun（{version}）は APKRun（{found}）と一致しません。",
+      "remediation": "apkrun をインストール済みの APKRun にリンクしてください（設定 → 詳細設定）。"
+    },
+    "diagnostics.appNotInApplications": {
+      "message": "APKRun が /Applications にインストールされていません。",
+      "remediation": "APKRun.app を /Applications に移動してください。"
+    },
+    "diagnostics.appSignatureInvalid": {
+      "message": "APKRun.app の署名が不正です。",
+      "remediation": "署名済みのダウンロードから APKRun を再インストールしてください。"
+    },
+    "diagnostics.componentVersionMismatch": {
+      "message": "APKRun のコンポーネントのバージョンがアプリと異なります。",
+      "remediation": "APKRun をアップデートまたは再インストールしてください。"
+    },
+    "diagnostics.crashLoop": {
+      "message": "apkrund が繰り返しクラッシュしています。",
+      "remediation": "APKRun を再インストールしてください。続く場合は診断バンドルを収集してください。"
+    },
+    "diagnostics.failed": {
+      "message": "診断レポートを収集できませんでした。",
+      "remediation": "もう一度お試しください。続く場合はホストログを手動で収集してください。"
+    },
+    "diagnostics.fixFailed": {
+      "message": "自動修復が完了しませんでした。",
+      "remediation": "チェックに表示された対処法に従ってください。"
+    },
+    "diagnostics.fixNotAvailable": {
+      "message": "このチェックに対する自動修復はありません。",
+      "remediation": "チェックに表示された対処法に従ってください。"
+    },
+    "diagnostics.lowDiskSpace": {
+      "message": "データボリュームの空き容量が不足しています。",
+      "remediation": "ディスク容量を空けるか、未使用のイメージやパッケージを削除してください。"
+    },
+    "diagnostics.lowMemory": {
+      "message": "Mac のメモリが不足しています。",
+      "remediation": "他のアプリを閉じてメモリを空けてください。"
+    },
+    "diagnostics.unknownHealthCheck": {
+      "message": "リクエストで指定されたヘルスチェックは登録されていません。",
+      "remediation": "APKRun をアップデートしてください。チェック ID が異なります。"
+    },
+    "diagnostics.writeFailed": {
+      "message": "診断レポートを書き込めませんでした。",
+      "remediation": "出力フォルダと空き容量を確認してからもう一度お試しください。"
+    },
+    "graphics.configUpdateFailed": {
+      "message": "Android がディスプレイ変更を適用できませんでした。",
+      "remediation": "Android を再起動してください。"
+    },
+    "graphics.deviceNotReady": {
+      "message": "Android のディスプレイの準備がまだできていません。",
+      "remediation": "しばらくしてからもう一度お試しください。"
+    },
+    "graphics.deviceSetupFailed": {
+      "message": "仮想 GPU をセットアップできませんでした。",
+      "remediation": "ランタイムを再起動してください。続く場合は APKRun を再インストールしてください。"
+    },
+    "graphics.libraryMissing": {
+      "message": "APKRun の一部が見つからないか破損しています。",
+      "remediation": "APKRun を再インストールしてください。"
+    },
+    "graphics.memoryLimitReached": {
+      "message": "グラフィックスメモリの上限に達しました。",
+      "remediation": "一部の Android アプリウインドウを閉じてからもう一度お試しください。"
+    },
+    "graphics.modeUnsupported": {
+      "message": "Android のディスプレイ構成が不正です。",
+      "remediation": "問題を報告してください。"
+    },
+    "graphics.poolAllocationFailed": {
+      "message": "このウインドウ用のグラフィックスメモリが不足しています。",
+      "remediation": "他のアプリやウインドウを閉じてからもう一度お試しください。"
+    },
+    "graphics.presentationSlowPath": {
+      "message": "フレーム表示が低速パスにフォールバックしました。",
+      "remediation": "ランタイムを再起動してください。続く場合は問題を報告してください。"
+    },
+    "graphics.rendererInitFailed": {
+      "message": "グラフィックスの起動に失敗しました。",
+      "remediation": "グラフィックスセーフモードで Android を起動してください。改善しない場合は macOS と APKRun をアップデートしてください。"
+    },
+    "graphics.rendererLost": {
+      "message": "Android のグラフィックスが停止しました。",
+      "remediation": "Android は自動的に再起動します。頻発する場合はグラフィックスセーフモードで起動してください。"
+    },
+    "graphics.rendererOperationFailed": {
+      "message": "グラフィックス操作を完了できませんでした。",
+      "remediation": "Android を再起動してください。問題が続く場合は診断レポートを作成してください。"
+    },
+    "graphics.safeModeOn": {
+      "message": "グラフィックスセーフモードがオンです。",
+      "remediation": "設定 → 詳細設定でセーフモードをオフにしてからランタイムを再起動してください。"
+    },
+    "graphics.scanoutInvalid": {
+      "message": "Android のディスプレイ構成が不正です。",
+      "remediation": "問題を報告してください。"
+    },
+    "graphics.softwareRendering": {
+      "message": "グラフィックスが低速なソフトウェアレンダリングで動作しています。",
+      "remediation": "GPU デバイスが使用されるようランタイムを再起動してください。"
+    },
+    "image.bootconfigConflict": {
+      "message": "Android の起動構成が不正です。",
+      "remediation": "問題を報告してください。"
+    },
+    "image.bootconfigTooLarge": {
+      "message": "Android の起動構成が不正です。",
+      "remediation": "問題を報告してください。"
+    },
+    "image.cloneFailed": {
+      "message": "Android のディスクを作成できませんでした。",
+      "remediation": "空き容量を確認してからもう一度お試しください。再度失敗する場合は診断レポートを作成してください。"
+    },
+    "image.cloneUnsupported": {
+      "message": "APKRun のデータが APFS ボリューム上にありません。",
+      "remediation": "APKRun のデータを APFS ボリュームに移動してください。"
+    },
+    "image.cmdlineTooLong": {
+      "message": "Android の起動構成が不正です。",
+      "remediation": "問題を報告してください。"
+    },
+    "image.downgradeRejected": {
+      "message": "Android {to} はインストール済みの Android {from} より古いため、インストールされませんでした。",
+      "remediation": "より新しい Android をインストールしてください。"
+    },
+    "image.hashMismatch": {
+      "message": "一部の Android システムファイルが破損しています。",
+      "remediation": "設定 → ストレージから Android を再インストールしてください。全ファイルを確認するには `apkrun image verify` を実行してください。"
+    },
+    "image.imageArchiveHashMismatch": {
+      "message": "Android システムのダウンロードが検証に失敗しました。",
+      "remediation": "もう一度お試しください。ダウンロードはやり直されます。"
+    },
+    "image.imageArchiveSizeMismatch": {
+      "message": "Android システムのダウンロードのサイズが正しくありません。",
+      "remediation": "もう一度お試しください。"
+    },
+    "image.imageArchiveUnsafeEntry": {
+      "message": "Android イメージのアーカイブに安全でないエントリが含まれています: {path}。",
+      "remediation": "このアーカイブはインストールしないでください。正規の提供元から取得してください。"
+    },
+    "image.imageDownloadFailed": {
+      "message": "Android システムのダウンロードに失敗しました。",
+      "remediation": "ネットワークを確認してもう一度お試しください。"
+    },
+    "image.imageFeedExpired": {
+      "message": "Android システムのアップデートフィードの有効期限が切れています。",
+      "remediation": "あとでもう一度お試しください。"
+    },
+    "image.imageFeedInvalid": {
+      "message": "Android システムのアップデートフィードが不正です。",
+      "remediation": "APKRun をアップデートしてください。続く場合は問題を報告してください。"
+    },
+    "image.imageFeedReplayed": {
+      "message": "Android システムのアップデートフィードがすでに受理済みのものより古いです。",
+      "remediation": "あとでもう一度お試しください。"
+    },
+    "image.imageFeedSignatureInvalid": {
+      "message": "Android システムのアップデートフィードを検証できませんでした。",
+      "remediation": "APKRun をアップデートしてください。続く場合は問題を報告してください。"
+    },
+    "image.imageNotInstalled": {
+      "message": "Android {version} はインストールされていません。",
+      "remediation": "先にその Android システムをインストールするか、インストール済みのものを選択してください。"
+    },
+    "image.imageRejected": {
+      "message": "この Android イメージは拒否されました。",
+      "remediation": "互換性または移行後チェックに失敗しました。より新しいイメージをインストールしてください。"
+    },
+    "image.imageUpdateBusy": {
+      "message": "Android イメージのアップデートがすでに進行中です。",
+      "remediation": "現在のイメージ処理が終わってからもう一度お試しください。"
+    },
+    "image.incompatibleProtocol": {
+      "message": "Android はゲストプロトコル {minimum}–{maximum} を必要としますが、この APKRun は {hostMinimum}–{hostMaximum} を話します。",
+      "remediation": "APKRun と Android を互換性のあるバージョンにアップデートしてください。"
+    },
+    "image.incompatibleRuntime": {
+      "message": "Android は APKRun {minimum} 以降を必要としますが、現在は {found} です。",
+      "remediation": "APKRun をアップデートしてから Android システムをインストールしてください。"
+    },
+    "image.instanceCorrupt": {
+      "message": "Android のデータが破損しています。",
+      "remediation": "設定 → トラブルシューティングで Android をリセットするか、復元ポイントに戻してください。"
+    },
+    "image.instanceMissing": {
+      "message": "Android のデータが見つかりません。",
+      "remediation": "設定 → トラブルシューティングで Android をリセットするか、復元ポイントに戻してください。"
+    },
+    "image.insufficientSpace": {
+      "message": "Android は {needed} の空き容量を必要としますが、{available} しかありません。",
+      "remediation": "ディスク容量を空けてからもう一度お試しください。"
+    },
+    "image.manifestInvalid": {
+      "message": "この Android システムは不正です。",
+      "remediation": "設定 → ストレージから Android を再インストールしてください。"
+    },
+    "image.migrationHealthFailed": {
+      "message": "アップデート後に Android が正常に起動しなかったため、以前のシステムを復元しました。",
+      "remediation": "問題を報告してください。"
+    },
+    "image.migrationInterrupted": {
+      "message": "Android のアップデートが中断されたため、以前の Android システムを復元しました。",
+      "remediation": "対応は不要です。アップデートはやり直せます。"
+    },
+    "image.migrationSourceTooOld": {
+      "message": "Android {source} は直接アップデートするには古すぎます。{minimum} 以降が必要です。",
+      "remediation": "まず Android を {minimum} にアップデートしてください。"
+    },
+    "image.missingFile": {
+      "message": "一部の Android システムファイルが見つかりません。",
+      "remediation": "設定 → ストレージから Android を再インストールしてください。"
+    },
+    "image.noCompatibleImage": {
+      "message": "このバージョンの APKRun で実行できる Android イメージアップデートはありません。",
+      "remediation": "以前の APKRun リリースをインストールしてください。"
+    },
+    "image.noCurrentImage": {
+      "message": "Android システムがまだインストールされていません。",
+      "remediation": "設定 → ストレージから Android システムをインストールしてください。開発者は `apkrun image install` を実行します。"
+    },
+    "image.noRecoveryPoint": {
+      "message": "ロールバック先の復元ポイントがありません。",
+      "remediation": "ロールバックは Android システムのアップデート直後のみ可能です。"
+    },
+    "image.signatureInvalid": {
+      "message": "この Android システムの署名が内容と一致しません。",
+      "remediation": "正規の提供元から Android を再インストールしてください。"
+    },
+    "image.unexpectedFile": {
+      "message": "この Android システムに含まれないファイルがあります。",
+      "remediation": "正規の提供元から Android を再インストールしてください。"
+    },
+    "image.untrustedKey": {
+      "message": "この Android システムはこの Mac が信頼しない鍵で署名されています。",
+      "remediation": "正規の提供元から Android を再インストールしてください。"
+    },
+    "image.userdataSchemaUnsupported": {
+      "message": "Android はこのデバイスのデータレイアウト（スキーマ {schema}）を起動できません。サポートは {supported} です。",
+      "remediation": "Android をリセットしてください。"
+    },
+    "integration.clipboardTooLarge": {
+      "message": "コピーされた項目が Android に対して大きすぎます（{bytes}。上限は {limit}）。",
+      "remediation": "より小さい項目をコピーしてください。"
+    },
+    "integration.disabled": {
+      "message": "{app} で {integration} がオフになっています。",
+      "remediation": "APKRun のアプリ設定でオンにしてください。"
+    },
+    "integration.fileTooLarge": {
+      "message": "{file} は Android にドロップするには大きすぎます（{bytes}）。",
+      "remediation": "1 ファイル 2 GB まで、合計 4 GB までのファイルをドロップしてください。"
+    },
+    "integration.folderRefused": {
+      "message": "APKRun は {file} を共有しません。"
+    },
+    "integration.folderUnavailable": {
+      "message": "APKRun は共有フォルダ {file} にアクセスできません。"
+    },
+    "integration.guestUnavailable": {
+      "message": "Android 内の Guest Agent が接続されていません。",
+      "remediation": "APKRun が自動的に再接続します。しばらくしてからもう一度お試しください。"
+    },
+    "integration.linkRejected": {
+      "message": "APKRun は {app} からのリンクを開きませんでした。"
+    },
+    "integration.microphoneNeedsRestart": {
+      "message": "マイクの変更には Android の再起動が必要です。",
+      "remediation": "アプリの連携設定から Android を再起動してください。"
+    },
+    "integration.microphonePermissionDenied": {
+      "message": "APKRun にマイクのアクセス権がありません。",
+      "remediation": "システム設定 → プライバシーとセキュリティ → マイクで APKRun を許可してください。"
+    },
+    "integration.notSupportedOnImage": {
+      "message": "このバージョンの Android はこの機能（{capability}）をサポートしていません。",
+      "remediation": "Android をアップデートしてください。"
+    },
+    "integration.notificationAccessMissing": {
+      "message": "Android が通知へのアクセスを失いました。",
+      "remediation": "Guest Agent が自動的に復元します。"
+    },
+    "integration.pathRejected": {
+      "message": "Android が APKRun の共有していないファイルを要求しました。"
+    },
+    "integration.promptTimedOut": {
+      "message": "質問に回答されなかったため、{app} からのリンクはキャンセルされました。"
+    },
+    "integration.readOnly": {
+      "message": "{app} は共有フォルダ内のファイルを読み取りのみできます。",
+      "remediation": "変更を許可するには、アプリの設定で共有フォルダを「読み書き」にしてください。"
+    },
+    "integration.tooManyFiles": {
+      "message": "一度にドロップするファイルが多すぎます（{count} 件）。",
+      "remediation": "一度に最大 20 件までドロップしてください。"
+    },
+    "integration.transferFailed": {
+      "message": "ファイル転送が完了しませんでした。",
+      "remediation": "もう一度お試しください。"
+    },
+    "maintenance.cancelled": {
+      "message": "アップデートがキャンセルされました。",
+      "remediation": "準備ができたらアップデートを再度開始してください。"
+    },
+    "maintenance.criticalUpdateWaiting": {
+      "message": "重要な APKRun アップデートが 3 日以上待機しています。",
+      "remediation": "APKRun を開いてアップデートをインストールしてください。"
+    },
+    "maintenance.dataCreatedByNewerVersion": {
+      "message": "このデータはより新しいバージョンの APKRun で作成されました。",
+      "remediation": "最新バージョンの APKRun をインストールしてください。"
+    },
+    "maintenance.hostDowngraded": {
+      "message": "ディスク上の APKRun.app が実行中のバックグラウンドサービスより古いです。",
+      "remediation": "新しい APKRun ビルドを再インストールしてください。"
+    },
+    "maintenance.hostUpdateAbandoned": {
+      "message": "APKRun のアップデートが完了前に中断されました。",
+      "remediation": "APKRun を再起動してください。失敗が続く場合は診断レポートを作成してください。"
+    },
+    "maintenance.schemaMigrationFailed": {
+      "message": "APKRun が保存データを新しい形式に更新できませんでした。",
+      "remediation": "問題を報告してください。元のファイルは保持されています。"
+    },
+    "maintenance.selfUpdateCheckOverdue": {
+      "message": "APKRun は 1 週間以上アップデートを確認していません。",
+      "remediation": "APKRun を開くか `apkrun self-update check` を実行してください。"
+    },
+    "maintenance.selfUpdateFeedInvalid": {
+      "message": "アップデートフィードが APKRun の利用できない内容を返しました。",
+      "remediation": "あとでもう一度お試しください。失敗が続く場合は診断レポートを作成してください。"
+    },
+    "maintenance.selfUpdateFeedUnreachable": {
+      "message": "APKRun がアップデートフィードに到達できませんでした。",
+      "remediation": "インターネット接続を確認してもう一度お試しください。"
+    },
+    "maintenance.selfUpdateNotNewer": {
+      "message": "そのアップデートは実行中のビルドより新しくありません。",
+      "remediation": "より新しいアップデートを選んでください。"
+    },
+    "maintenance.serviceVersionMismatch": {
+      "message": "APKRun.app が置き換えられましたが、バックグラウンドサービスは古いビルドのままです。",
+      "remediation": "`apkrun self-update` を実行してください。"
+    },
+    "runtime.adbCommandFailed": {
+      "message": "Android のデバッグコマンド {command} が失敗しました。",
+      "remediation": "もう一度お試しください。再度失敗する場合は Android を再起動してください。"
+    },
+    "runtime.adbCommandTimedOut": {
+      "message": "Android のデバッグコマンド {command} が {seconds} 秒以内に完了しませんでした。",
+      "remediation": "もう一度お試しください。失敗が続く場合は Android を再起動してください。"
+    },
+    "runtime.adbConnectionUnavailable": {
+      "message": "APKRun は ADB 経由で Android に到達できませんでした。",
+      "remediation": "`apkrun dev boot` で開発者モードの Android を起動してください。"
+    },
+    "runtime.adbEnabledUnexpectedly": {
+      "message": "本番モードでは不要な ADB が Android で有効になっています。",
+      "remediation": "ゲスト内で ADB を無効にしてください。"
+    },
+    "runtime.adbExecutableMissing": {
+      "message": "APKRun は Android デバッグブリッジ（adb）を見つけられません。",
+      "remediation": "Android SDK platform-tools をインストールしてください。"
+    },
+    "runtime.adbInvalidArgument": {
+      "message": "APKRun は Android デバッグコマンド {command} の不正な引数を拒否しました。",
+      "remediation": "問題を報告してください。"
+    },
+    "runtime.adbLaunchFailed": {
+      "message": "APKRun は Android デバッグブリッジ（adb）を起動できませんでした。",
+      "remediation": "platform-tools フォルダのパスと権限を確認してください。"
+    },
+    "runtime.adbPackageRejected": {
+      "message": "Android はパッケージコマンド {command} を完了しませんでした: {reason}。",
+      "remediation": "理由を確認し、アプリを修正してからもう一度お試しください。"
+    },
+    "runtime.adbUnexpectedOutput": {
+      "message": "Android はデバッグコマンド {command} に予期しない応答を返しました。",
+      "remediation": "もう一度お試しください。再発する場合は問題を報告してください。"
+    },
+    "runtime.androidBootFailed": {
+      "message": "Android の起動に失敗しました。",
+      "remediation": "Android を再起動してください。再発する場合は診断レポートを作成してください。"
+    },
+    "runtime.apiVersionMismatch": {
+      "message": "APKRun を再起動する必要があります。",
+      "remediation": "APKRun を終了して開き直してください。"
+    },
+    "runtime.bootStalled": {
+      "message": "Android の起動が途中（{phase}）で止まりました。",
+      "remediation": "Android を再起動してください。再発する場合は診断レポートを作成してください。"
+    },
+    "runtime.bootTimedOut": {
+      "message": "Android の起動に時間がかかりすぎました（{phase} で停止）。",
+      "remediation": "Android を再起動してください。再発する場合は診断レポートを作成してください。"
+    },
+    "runtime.busy": {
+      "message": "APKRun のバックグラウンドサービスがビジーです。",
+      "remediation": "しばらくしてからもう一度お試しください。"
+    },
+    "runtime.cancelled": {
+      "message": "操作がキャンセルされました。"
+    },
+    "runtime.devConsoleCleanupPending": {
+      "message": "APKRun は Linux VM を解放できませんでした。クリーンアップが続く間インスタンスロックを保持しています。",
+      "remediation": "クリーンアップの完了を待ってください。"
+    },
+    "runtime.devConsoleGuestFailed": {
+      "message": "対話コンソールセッション中に Linux ゲストが失敗しました。",
+      "remediation": "VM のコンソールログを確認してください。"
+    },
+    "runtime.devConsoleInputFailed": {
+      "message": "対話セッション中にコンソール入力を送信できませんでした。",
+      "remediation": "端末を確認してからもう一度お試しください。"
+    },
+    "runtime.devConsoleNotRunning": {
+      "message": "`apkrun dev boot` が実行されていないため、Android {console} コンソールは開いていません。",
+      "remediation": "まず `apkrun dev boot` で Android を起動してください。"
+    },
+    "runtime.devConsoleOutputDropped": {
+      "message": "対話コンソールが {bytes} バイト以上を破棄したため、端末出力が不完全です。",
+      "remediation": "もう一度お試しください。"
+    },
+    "runtime.devConsoleSocketUnavailable": {
+      "message": "APKRun は Android の開発者コンソールソケットを開けませんでした。",
+      "remediation": "権限を確認してください。"
+    },
+    "runtime.devLinuxArtifactDirectoryMustBeAbsolute": {
+      "message": "Linux ゲストのアーティファクトディレクトリは絶対パスである必要があります。",
+      "remediation": "絶対パスを使用してください。"
+    },
+    "runtime.devLinuxCheckFailed": {
+      "message": "Linux テストゲストのチェックが失敗しました。",
+      "remediation": "ゲストのコンソール出力を確認し、修正してから再試行してください。"
+    },
+    "runtime.devLinuxDidNotFinish": {
+      "message": "Linux テストゲストがチェックを完了する前に終了しました。",
+      "remediation": "ゲストのコンソール出力を確認してください。"
+    },
+    "runtime.devLinuxInvalidOptions": {
+      "message": "Linux 開発コマンドのオプションが不正です。",
+      "remediation": "タイムアウトは 1〜86400 秒の範囲で指定してください。"
+    },
+    "runtime.devLinuxTimedOut": {
+      "message": "Linux テストゲストが {seconds} 秒以内に完了しませんでした。",
+      "remediation": "ゲストのコンソール出力を確認してください。"
+    },
+    "runtime.developerModeRequired": {
+      "message": "このリクエストには開発者モードが必要です。",
+      "remediation": "設定 → 詳細設定で開発者モードをオンにしてください。"
+    },
+    "runtime.gpuProfileUnavailable": {
+      "message": "Android はこのバージョンの APKRun で {profile} グラフィックスプロファイルを使用できません。",
+      "remediation": "Android を起動してください。"
+    },
+    "runtime.guestAgentBundleMissing": {
+      "message": "APKRun は Android 用 Guest Agent を見つけられません。",
+      "remediation": "`scripts/build-guest.sh` で Guest Agent をビルドしてください。"
+    },
+    "runtime.guestAgentConnectTimedOut": {
+      "message": "APKRun は 30 秒以内に Guest Agent に接続できませんでした。",
+      "remediation": "`apkrun dev boot` で Android を再起動してください。"
+    },
+    "runtime.guestAgentHandshakeFailed": {
+      "message": "Guest Agent が接続を拒否しました: {reason}。",
+      "remediation": "APKRun と Android の両方をアップデートしてください。"
+    },
+    "runtime.guestAgentInstallFailed": {
+      "message": "Android は Guest Agent をインストールしませんでした: {reason}。",
+      "remediation": "理由を確認し、デバイスを修正してからもう一度お試しください。"
+    },
+    "runtime.guestAgentOperationFailed": {
+      "message": "Guest Agent がリクエストを完了しませんでした: {reason}。",
+      "remediation": "もう一度お試しください。再度失敗する場合は Android を再起動してください。"
+    },
+    "runtime.guestAgentStartFailed": {
+      "message": "Guest Agent が起動しませんでした。",
+      "remediation": "`apkrun dev boot` で Android を再起動してください。再発する場合は診断レポートを作成してください。"
+    },
+    "runtime.guestAgentStopped": {
+      "message": "エージェントが応答する前に Guest Agent の起動が停止されました。",
+      "remediation": "`apkrun dev boot` で Android を再度起動してください。"
+    },
+    "runtime.hostRequirementsNotMet": {
+      "message": "この Mac では APKRun を実行できません。",
+      "remediation": "報告された各要件の指示に従ってください。"
+    },
+    "runtime.hostShuttingDown": {
+      "message": "APKRun のバックグラウンドサービスが停止中です。",
+      "remediation": "しばらくしてからもう一度お試しください。"
+    },
+    "runtime.hostStartupFailed": {
+      "message": "APKRun のバックグラウンドサービスの一部を起動できませんでした。",
+      "remediation": "詳細は `apkrun runtime status` を実行してください。"
+    },
+    "runtime.hostUpdating": {
+      "message": "APKRun がアップデート完了のため再起動しています。",
+      "remediation": "しばらくしてからもう一度お試しください。"
+    },
+    "runtime.inputDegraded": {
+      "message": "入力注入が劣化しており、イベントが拒否されています。",
+      "remediation": "ランタイムを再起動してください。続く場合は問題を報告してください。"
+    },
+    "runtime.inputMethodNotSelected": {
+      "message": "APKRun の入力方式が Android で選択されていません。",
+      "remediation": "`apkrun doctor --fix` を実行するか、入力方式を選び直してください。"
+    },
+    "runtime.inputNotBound": {
+      "message": "ポインタとキーボード入力が Android にバインドされていません。{cause}",
+      "remediation": "ポインタとキーボード入力は現在オフのままです。"
+    },
+    "runtime.instanceLockFailed": {
+      "message": "APKRun は Android インスタンスを確保できませんでした。",
+      "remediation": "APKRun のデータフォルダの権限を確認してください。"
+    },
+    "runtime.instanceLocked": {
+      "message": "別の APKRun プロセスが Android を使用中です。",
+      "remediation": "終了してからもう一度お試しください。"
+    },
+    "runtime.internal": {
+      "message": "APKRun のバックグラウンドサービスで問題が発生しました。",
+      "remediation": "もう一度お試しください。再発する場合は問題を報告してください。"
+    },
+    "runtime.invalidConfigValue": {
+      "message": "{value} は {key} の有効な値ではありません。",
+      "remediation": "設定リファレンスで許可される値を確認してください。"
+    },
+    "runtime.invalidSettingValue": {
+      "message": "{key} の値が不正です。",
+      "remediation": "この設定には真偽値または null を送信してください。"
+    },
+    "runtime.kernelPanic": {
+      "message": "Android のシステムが起動中にクラッシュしました。",
+      "remediation": "Android を再起動してください。再発する場合は診断レポートを作成してください。"
+    },
+    "runtime.malformedRequest": {
+      "message": "APKRun のバックグラウンドサービスがリクエストを読み取れませんでした。",
+      "remediation": "問題を報告してください。"
+    },
+    "runtime.notAuthorized": {
+      "message": "APKRun のこの部分はランタイムの制御を許可されていません。",
+      "remediation": "問題を報告してください。"
+    },
+    "runtime.notProvisioned": {
+      "message": "APKRun のセットアップを完了する必要があります。",
+      "remediation": "APKRun を開いてセットアップを完了するか、`apkrun setup` を実行してください。"
+    },
+    "runtime.operationNotFound": {
+      "message": "その操作は存在しないか期限切れです。",
+      "remediation": "`apkrun operations list` で現在の操作を確認してください。"
+    },
+    "runtime.operationResultUnknown": {
+      "message": "APKRun はインストールが完了したか確認できませんでした。",
+      "remediation": "まず `apkrun info <package>` で確認してください。"
+    },
+    "runtime.requestTimedOut": {
+      "message": "APKRun のバックグラウンドサービスが時間内に応答しませんでした。",
+      "remediation": "もう一度お試しください。"
+    },
+    "runtime.requiredAgentUnavailable": {
+      "message": "Android 内の {agent} が利用できません。",
+      "remediation": "Android を再起動してください。"
+    },
+    "runtime.serviceUnavailable": {
+      "message": "APKRun のバックグラウンドサービスが動作していません。",
+      "remediation": "APKRun を一度開くか、バックグラウンドサービスを再起動してください。"
+    },
+    "runtime.timeSyncFailed": {
+      "message": "Android のロケールや時刻設定がこの Mac と異なる場合があります。",
+      "remediation": "設定 → 言語と地域を確認してください。"
+    },
+    "runtime.unknownConfigKey": {
+      "message": "不明な設定 {key} です。",
+      "remediation": "`apkrun config get` で設定キーの一覧を確認してください。"
+    },
+    "runtime.unknownResult": {
+      "message": "操作が結果なしで終了しました。",
+      "remediation": "もう一度お試しください。続く場合は操作 ID を添えて報告してください。"
+    },
+    "runtime.unknownSetting": {
+      "message": "不明な設定 {key} です。",
+      "remediation": "設定リファレンスで設定名を確認してください。"
+    },
+    "store.alreadyInstalled": {
+      "message": "{app} {version} はすでにインストールされています。",
+      "remediation": "対応は不要です。"
+    },
+    "store.archiveLimitExceeded": {
+      "message": "このファイルには APKRun が安全に展開できる量を超える内容が含まれています。"
+    },
+    "store.downgradeRefused": {
+      "message": "バージョン {candidate} はインストール済みの {installed} より古いです。",
+      "remediation": "より新しい APK を選ぶか、先にアンインストールしてください。"
+    },
+    "store.duplicateSplit": {
+      "message": "スプリット {split} が複数回含まれています。",
+      "remediation": "各スプリット APK は一度だけ追加してください。"
+    },
+    "store.expansionFilesNotSupported": {
+      "message": "このファイルには APKRun がまだサポートしない拡張ファイル（OBB）が含まれています。",
+      "remediation": "拡張ファイルのないビルドを入手してください。"
+    },
+    "store.incompleteSplitSet": {
+      "message": "このセットにはアプリに必要な部分が不足しています: {split}。",
+      "remediation": "完全な .apks、.xapk、または .apkm を使用してください。"
+    },
+    "store.inconsistentSplits": {
+      "message": "このセットの APK は同一バージョンのものではありません。",
+      "remediation": "同一提供元の同一バージョンの APK を追加してください。"
+    },
+    "store.invalidSettingValue": {
+      "message": "{key} にはその値を設定できません。",
+      "remediation": "許可される値: {allowed}"
+    },
+    "store.invalidSignature": {
+      "message": "{file} の署名が不正です。",
+      "remediation": "署名後に変更された可能性があります。再度ダウンロードしてください。"
+    },
+    "store.legacySignatureNotAllowed": {
+      "message": "このアプリは Android が受け付けない古い署名形式を使用しています。",
+      "remediation": "新しい署名形式で署名されたビルドを入手してください。"
+    },
+    "store.minSdkTooHigh": {
+      "message": "このアプリは Android API {required} 以降を必要としますが、APKRun の Android は API {guest} です。",
+      "remediation": "Android をアップデートするか、対応するビルドを入手してください。"
+    },
+    "store.missingBase": {
+      "message": "このセットにベース APK が含まれていません。",
+      "remediation": "ベース APK も追加するか、完全な .apks、.xapk、.apkm を使用してください。"
+    },
+    "store.multipleBases": {
+      "message": "このセットには複数のベース APK が含まれています。",
+      "remediation": "同一バージョンの APK のみを追加してください。"
+    },
+    "store.notAnAPK": {
+      "message": "{file} は Android アプリ（APK）ではありません。",
+      "remediation": "アプリの .apk、.apks、.xapk、または .apkm ファイルを選択してください。"
+    },
+    "store.notRepairable": {
+      "message": "APKRun が修復できるのは破損としてマークされたパッケージのみで、保持された APK ファイルが必要です。",
+      "remediation": "パッケージをアンインストールしてから再インストールしてください。"
+    },
+    "store.packageAlreadyManaged": {
+      "message": "このパッケージはすでに APKRun が管理しています。",
+      "remediation": "adopt は不要です。`apkrun list` で確認できます。"
+    },
+    "store.packageInUse": {
+      "message": "{app} が使用中です。",
+      "remediation": "アプリのウインドウを閉じてからアップデートをやり直してください。"
+    },
+    "store.packageNotFound": {
+      "message": "そのパッケージは APKRun が管理していません。",
+      "remediation": "`apkrun list` で管理対象を確認してください。"
+    },
+    "store.reservedPackage": {
+      "message": "{package} は Android または APKRun の一部のため、アプリとして追加できません。",
+      "remediation": "対応は不要です。"
+    },
+    "store.resourcesArscNotAligned": {
+      "message": "{file} は API 30 以降を対象とするアプリに Android が要求する形式でパッケージ化されていません。",
+      "remediation": "正しくパッケージ化されたビルドを入手してください。"
+    },
+    "store.rollbackUnavailable": {
+      "message": "以前のバージョンを自動で復元できません。",
+      "remediation": "ロールバックはアップデート直後のみ可能です。"
+    },
+    "store.signerMismatch": {
+      "message": "このファイルはインストール済みのアプリとは別の開発者が署名しています。",
+      "remediation": "同一提供元の {app} のアップデートをインストールしてください。"
+    },
+    "store.stagedUpdateMissing": {
+      "message": "このパッケージに検証済みの保留アップデートはありません。",
+      "remediation": "`apkrun update check` でダウンロードして保留してください。"
+    },
+    "store.targetSdkTooLow": {
+      "message": "このアプリは API {target} を対象としています。APKRun の Android は API {floor} 以降を対象とするアプリのみインストールします。",
+      "remediation": "新しい対象 API のビルドを入手してください。"
+    },
+    "store.tooLarge": {
+      "message": "このアプリは大きすぎます（{bytes}。上限は {limit}）。",
+      "remediation": "より小さいビルドを入手してください。"
+    },
+    "store.unknownSetting": {
+      "message": "{key} というアプリ設定はありません。",
+      "remediation": "`apkrun settings <package> list` で設定一覧を確認してください。"
+    },
+    "store.unreadableArchive": {
+      "message": "このファイルを読み取れませんでした。破損または不完全な可能性があります。",
+      "remediation": "ファイルを再度ダウンロードしてください。"
+    },
+    "store.unsignedAPK": {
+      "message": "{file} は署名されていません。",
+      "remediation": "Android は署名済みアプリのみインストールします。開発者から署名済みのコピーを入手してください。"
+    },
+    "store.unsupportedABI": {
+      "message": "このアプリは {found} 専用にビルドされていますが、APKRun の Android は {supported} を必要とします。",
+      "remediation": "arm64 対応のビルドを入手してください。"
+    },
+    "store.unsupportedContainer": {
+      "message": "APKRun はこの種類のファイルを追加できません。",
+      "remediation": "APKRun が追加できるのは .apk、.apks、.xapk、.apkm ファイルです。"
+    },
+    "update.ambiguousAsset": {
+      "message": "アップデート提供元に複数の一致アセットがあります: {detail}。",
+      "remediation": "提供元のアセットパターンを絞ってください。"
+    },
+    "update.authorityDoesNotAllowUpdates": {
+      "message": "このパッケージのアップデート権限は APKRun によるアップデートを許可していません。",
+      "remediation": "アプリ自身の方法でアップデートしてください。"
+    },
+    "update.cancelled": {
+      "message": "アップデートがキャンセルされました。",
+      "remediation": "アップデートを再試行してください。"
+    },
+    "update.downloadFailed": {
+      "message": "アップデートのダウンロードに失敗しました: {reason}。",
+      "remediation": "ネットワーク接続を確認してもう一度お試しください。"
+    },
+    "update.hashMismatch": {
+      "message": "ダウンロードした {artifact} が宣言されたハッシュと一致しません。",
+      "remediation": "このアップデートはインストールしないでください。"
+    },
+    "update.healthCheckFailed": {
+      "message": "アップデート後のアプリがヘルスチェックに失敗しました: {detail}。",
+      "remediation": "アップデートは自動的にロールバックされます。"
+    },
+    "update.installFailed": {
+      "message": "アップデートのインストールに失敗しました: {detail}。",
+      "remediation": "詳細は `apkrun update history` を確認してください。"
+    },
+    "update.noCompatibleArtifact": {
+      "message": "アップデート提供元に互換性のあるアーティファクトがありません（{reason}）。",
+      "remediation": "提供元が対応するアセットを提供しているか確認してください。"
+    },
+    "update.providerHTTPStatus": {
+      "message": "アップデート提供元が HTTP {status} を返しました。",
+      "remediation": "あとで再試行してください。続く場合は提供元の設定を確認してください。"
+    },
+    "update.providerMetadataInvalid": {
+      "message": "アップデート提供元のメタデータが不正です: {detail}。",
+      "remediation": "提供元の設定を確認してください。"
+    },
+    "update.providerNotConfigured": {
+      "message": "このパッケージにはアップデート提供元が設定されていません。",
+      "remediation": "`apkrun update policy` で提供元を設定してください。"
+    },
+    "update.providerRateLimited": {
+      "message": "アップデート提供元がリクエストをレート制限しています。",
+      "remediation": "次の定期確認を待ってください。"
+    },
+    "update.providerSignatureInvalid": {
+      "message": "アップデートの署名チェックに失敗しました: {detail}。",
+      "remediation": "このアップデートはインストールしないでください。"
+    },
+    "update.providerUnreachable": {
+      "message": "アップデート提供元に到達できません: {reason}。",
+      "remediation": "ネットワーク接続を確認してもう一度お試しください。"
+    },
+    "update.rollbackFailed": {
+      "message": "アップデートのロールバックに失敗しました: {detail}。",
+      "remediation": "アプリを再インストールして復旧してください。"
+    },
+    "update.tooLarge": {
+      "message": "アップデートは {bytes} バイトで、上限 {limit} バイトを超えています。",
+      "remediation": "ディスク容量を空けるか、より小さいアセットの提供元を使用してください。"
+    },
+    "update.validation": {
+      "message": "アップデートが検証を通過しませんでした: {detail}。",
+      "remediation": "このアップデートはインストールしないでください。"
+    },
+    "vm.commandLineInvalid": {
+      "message": "Android の構成が不正です。",
+      "remediation": "問題を報告してください。コード番号が失敗した規則を示します。"
+    },
+    "vm.configurationInvalid": {
+      "message": "Android の構成が不正です。",
+      "remediation": "問題を報告してください。コード番号が失敗した規則を示します。"
+    },
+    "vm.consoleLogWriteFailed": {
+      "message": "APKRun は Android のコンソールログを書き込めませんでした。",
+      "remediation": "空き容量を確認してください。設定 → ストレージで確認できます。"
+    },
+    "vm.cpuCountOutOfRange": {
+      "message": "Android は CPU 数 {requested} を使用できません。許可範囲は {allowed} です。",
+      "remediation": "問題を報告してください。"
+    },
+    "vm.customDeviceInvalid": {
+      "message": "カスタムデバイス {name} が不正です。",
+      "remediation": "問題を報告してください。"
+    },
+    "vm.diskIdentifierInvalid": {
+      "message": "Android の構成が不正です。",
+      "remediation": "問題を報告してください。"
+    },
+    "vm.diskIsAndroidSparse": {
+      "message": "{role} ディスクは Android の未サポートのスパースイメージ形式です。",
+      "remediation": "問題を報告してください。"
+    },
+    "vm.diskMissing": {
+      "message": "{role} ディスクファイルが見つかりません。",
+      "remediation": "APKRun を終了して開き直してください。再発する場合は設定で Android をリセットしてください。"
+    },
+    "vm.diskNotReadable": {
+      "message": "APKRun は {role} ディスクを読み取れません。",
+      "remediation": "APKRun を終了して開き直してください。再発する場合は設定で Android をリセットしてください。"
+    },
+    "vm.diskNotWritable": {
+      "message": "APKRun は {role} ディスクに書き込めません。",
+      "remediation": "APKRun を終了して開き直してください。再発する場合は設定で Android をリセットしてください。"
+    },
+    "vm.diskSyncModeTestOnly": {
+      "message": "{role} ディスクはテスト専用の同期モードを使用しています。",
+      "remediation": "問題を報告してください。"
+    },
+    "vm.duplicateDisk": {
+      "message": "{role} ディスクが複数回登録されています。",
+      "remediation": "問題を報告してください。"
+    },
+    "vm.frameworkRejected": {
+      "message": "Android の構成が不正です。",
+      "remediation": "問題を報告してください。"
+    },
+    "vm.initrdMissing": {
+      "message": "Android に必要なファイルが見つからないか、APKRun が読み書きできません。",
+      "remediation": "APKRun を終了して開き直してください。"
+    },
+    "vm.initrdTooLarge": {
+      "message": "Android の構成が不正です。",
+      "remediation": "問題を報告してください。"
+    },
+    "vm.invalidMACAddress": {
+      "message": "Android の構成が不正です。",
+      "remediation": "問題を報告してください。"
+    },
+    "vm.invalidTransition": {
+      "message": "Android が予期しない状態です。",
+      "remediation": "Android を再起動してください。再発する場合は問題を報告してください。"
+    },
+    "vm.kernelMissing": {
+      "message": "Android に必要なファイルが見つからないか、APKRun が読み書きできません。",
+      "remediation": "APKRun を終了して開き直してください。"
+    },
+    "vm.kernelNotUncompressedImage": {
+      "message": "カーネルイメージが未サポートの形式です（{detected}）。",
+      "remediation": "問題を報告してください。"
+    },
+    "vm.loopbackListenFailed": {
+      "message": "APKRun はこの Mac で開発者デバッグポート {port} を開けませんでした。",
+      "remediation": "セキュリティツールがブロックしていないか確認してください。"
+    },
+    "vm.loopbackPortInUse": {
+      "message": "開発者デバッグポート {port} は別のプログラムが使用中のため開けません。",
+      "remediation": "そのプログラムを終了してください。"
+    },
+    "vm.machineIdentifierInvalid": {
+      "message": "Android の構成が不正です。",
+      "remediation": "問題を報告してください。"
+    },
+    "vm.memoryExceedsHostCap": {
+      "message": "Android のメモリ割り当てがこの Mac の上限 {cap} を超えています。",
+      "remediation": "設定で Android のメモリを減らしてください。"
+    },
+    "vm.memoryOutOfRange": {
+      "message": "Android の構成が不正です。",
+      "remediation": "問題を報告してください。"
+    },
+    "vm.microphoneUsageDescriptionMissing": {
+      "message": "Android の構成が不正です。",
+      "remediation": "問題を報告してください。"
+    },
+    "vm.missingSystemConsole": {
+      "message": "Android の構成が不正です。",
+      "remediation": "問題を報告してください。"
+    },
+    "vm.networkAttachmentLost": {
+      "message": "Android がネットワーク接続を失いました。",
+      "remediation": "Android を再起動してください。再発する場合は診断レポートを作成してください。"
+    },
+    "vm.pauseFailed": {
+      "message": "Android を一時停止できませんでした。",
+      "remediation": "アプリが応答しなくなった場合は Android を再起動してください。"
+    },
+    "vm.resumeFailed": {
+      "message": "Android を再開できませんでした。",
+      "remediation": "Android を再起動してください。"
+    },
+    "vm.startFailed": {
+      "message": "Android を起動できませんでした。",
+      "remediation": "もう一度お試しください。再度失敗する場合は診断レポートを作成してください。"
+    },
+    "vm.stopTimedOut": {
+      "message": "Android が時間内に停止しませんでした。",
+      "remediation": "もう一度お試しください。再度失敗する場合は APKRun を終了して開き直してください。"
+    },
+    "vm.stoppedWithError": {
+      "message": "Android が予期せず停止しました。",
+      "remediation": "Android を再起動してください。"
+    },
+    "vm.virtualizationUnavailable": {
+      "message": "この Mac では仮想化を利用できません。",
+      "remediation": "APKRun は仮想マシン内では実行できません。Apple silicon Mac 上で実行してください。"
+    },
+    "vm.vsockConnectFailed": {
+      "message": "APKRun は Android に接続できませんでした。",
+      "remediation": "Android を再起動してください。"
+    },
+    "vm.vsockConnectTimedOut": {
+      "message": "Android が時間内に応答しませんでした。",
+      "remediation": "もう一度お試しください。再度失敗する場合は Android を再起動してください。"
+    },
+    "vm.vsockDeviceNotConfigured": {
+      "message": "Android のホスト接続が有効になっていません。",
+      "remediation": "接続前に VM 定義で vsock を有効にしてください。"
+    },
+    "vm.vsockDeviceUnavailable": {
+      "message": "Android のホスト接続が利用できません。",
+      "remediation": "Android を再起動してください。再発する場合は診断レポートを作成してください。"
+    },
+    "vm.vsockPortNotListening": {
+      "message": "Android の準備がまだできていません。",
+      "remediation": "しばらくしてからもう一度お試しください。"
+    },
+    "wrapper.approvalDenied": {
+      "message": "APKRun は {app} が開くことを許可しませんでした。",
+      "remediation": "許可するには、設定の「許可しなかった Mac アプリ」から削除してください。"
+    },
+    "wrapper.approvalNotFound": {
+      "message": "この Mac アプリを開くリクエストはすでに回答済みか期限切れです。",
+      "remediation": "対応は不要です。"
+    },
+    "wrapper.approvalTimedOut": {
+      "message": "APKRun は {app} が開くことを許可しませんでした。",
+      "remediation": "リクエストが 10 分以内に回答されませんでした。{app} を再度開いてください。"
+    },
+    "wrapper.bootstrapInvalid": {
+      "message": "ポータブル Mac アプリの内蔵アプリがチェックに失敗しました（{reason}）。",
+      "remediation": "ファイルが破損している可能性があります。新しいコピーを入手してください。"
+    },
+    "wrapper.bootstrapNotAllowed": {
+      "message": "この Mac アプリは現在アプリをインストールできません（{reason}）。",
+      "remediation": "先に Mac アプリを承認するか、アンインストールしてください。"
+    },
+    "wrapper.bundleInvalid": {
+      "message": "{file} は有効な APKRun Mac アプリではありません。",
+      "remediation": "入手元から新しいコピーを取得するか、Mac アプリを作成し直してください。"
+    },
+    "wrapper.customIconInvalid": {
+      "message": "この画像はアイコンに使用できません。",
+      "remediation": "512×512 以上の PNG、JPEG、HEIC、または .icns ファイルを選択してください。"
+    },
+    "wrapper.destinationNotAccessible": {
+      "message": "APKRun のバックグラウンドサービスはフォルダ {file} にアクセスできません。",
+      "remediation": "「別の場所を選択…」で別の場所を選んでください。"
+    },
+    "wrapper.destinationNotWritable": {
+      "message": "APKRun はフォルダ {file} に Mac アプリを保存できません。",
+      "remediation": "別の場所を選択してください。"
+    },
+    "wrapper.distributionToolMissing": {
+      "message": "APKRun はこの Mac で ‹tool› ツールを見つけられませんでした。",
+      "remediation": "Xcode Command Line Tools をインストールしてください。"
+    },
+    "wrapper.iconConversionFailed": {
+      "message": "APKRun は Mac アプリのアイコンを作成できませんでした。",
+      "remediation": "もう一度お試しください。再度失敗する場合は別の画像を選択してください。"
+    },
+    "wrapper.identityNotFound": {
+      "message": "署名 identity ‹identity› がこの Mac にインストールされていません。",
+      "remediation": "`security find-identity -v` で利用可能な identity を確認してください。"
+    },
+    "wrapper.invalidName": {
+      "message": "この名前は Mac アプリに使用できません。",
+      "remediation": "文字または数字を含む名前を選択してください。"
+    },
+    "wrapper.launchServicesMissing": {
+      "message": "LaunchServices が 1 つ以上の APKRun Mac アプリを認識しなくなりました。",
+      "remediation": "各 Mac アプリを一度開いてください。"
+    },
+    "wrapper.launcherTemplateInvalid": {
+      "message": "APKRun の Mac アプリ用テンプレートが破損しています。",
+      "remediation": "APKRun を再ダウンロードしてアプリケーションフォルダ内を置き換えてください。"
+    },
+    "wrapper.nameConflict": {
+      "message": "{file} という名前の項目がすでに存在します。",
+      "remediation": "別の名前または場所を選択してください。APKRun は既存の項目を置き換えません。"
+    },
+    "wrapper.notarizationFailed": {
+      "message": "Apple の公証サービスが Mac アプリを拒否しました。",
+      "remediation": "公証ログに記載された問題を修正してからもう一度お試しください。"
+    },
+    "wrapper.packageNotInstalled": {
+      "message": "{app} は APKRun にインストールされていません。",
+      "remediation": "先に {app} をインストールしてください。`apkrun wrap` に --install を付けるとインストールも行います。"
+    },
+    "wrapper.refreshBlocked": {
+      "message": "macOS が APKRun による Mac アプリの更新を許可しませんでした。",
+      "remediation": "システム設定 → プライバシーとセキュリティで APKRun を許可してください。"
+    },
+    "wrapper.registrationFailed": {
+      "message": "Mac アプリは作成されましたが、macOS にまだ登録されていません。",
+      "remediation": "Finder で表示すると登録されます。"
+    },
+    "wrapper.registryUnavailable": {
+      "message": "APKRun は Mac アプリの一覧を読み取れないため、開けません。",
+      "remediation": "トラブルシューティングで「Mac アプリを再登録」を選択してください。"
+    },
+    "wrapper.signingFailed": {
+      "message": "APKRun は Mac アプリに署名できませんでした。",
+      "remediation": "もう一度お試しください。再度失敗する場合は診断レポートを作成してください。"
+    },
+    "wrapper.stagingExpired": {
+      "message": "準備された Mac アプリは利用できなくなりました。",
+      "remediation": "Mac アプリを再度作成またはアップデートしてください。"
+    },
+    "wrapper.verificationFailed": {
+      "message": "新しい Mac アプリが署名チェックを通過しませんでした。",
+      "remediation": "もう一度お試しください。再度失敗する場合は問題を報告してください。"
+    },
+    "wrapper.wrapperExists": {
+      "message": "{app} にはすでに Mac アプリがあります（{file}）。",
+      "remediation": "「Mac アプリをアップデート」を使うか、`apkrun wrap {package} --replace` を実行してください。"
+    },
+    "wrapper.wrapperNotFound": {
+      "message": "{app} には Mac アプリがありません。",
+      "remediation": "「Mac アプリを作成」で作成してください。"
+    },
+    "wrapper.wrapperRunning": {
+      "message": "{packageID} が開いているため、Mac アプリを置き換えられません。",
+      "remediation": "Mac アプリを終了してからもう一度お試しください。"
+    }
+  },
+  "strings": {
+    "  - \\(PackageQueryOutput.safeTerminalText(issue.title": "  - \\(PackageQueryOutput.safeTerminalText(issue.title",
+    "  - \\(PackageQueryOutput.safeTerminalText(issue.title[": "  - \\(PackageQueryOutput.safeTerminalText(issue.title[",
+    "  - \\(safeTerminalText(issue.title[": "  - \\(safeTerminalText(issue.title[",
+    "  \\(safeTerminalText(file.name))\\(split): \\(file.size) bytes, \\(file.sha256.rawValue)": "  \\(safeTerminalText(file.name))\\(split): \\(file.size) バイト、\\(file.sha256.rawValue)",
+    " (\\(failure.code))": "（\\(failure.code)）",
+    " (notarized)": "（公証済み）",
+    " Omitted: ": " 省略: ",
+    " Skipped \\(result.skippedRunning.count) running app(s).": " 実行中の \\(result.skippedRunning.count) 個のアプリをスキップしました。",
+    " \\(result.failed.count) failed.": " \\(result.failed.count) 個が失敗しました。",
+    "(\\(code))": "(\\(code))",
+    ".\\(finalURL.lastPathComponent).apkrun-\\(UUID().uuidString)": ".\\(finalURL.lastPathComponent).apkrun-\\(UUID().uuidString)",
+    "APKRun": "APKRun",
+    "APKRun Launcher": "APKRun ランチャー",
+    "APKRun \\(latest.version) is available (you have ": "APKRun \\(latest.version) が利用可能です（現在は ",
+    "APKRun background service isn't running": "APKRun のバックグラウンドサービスが動作していません",
+    "APKRun couldn't change the menu bar item. Check Login Items in System Settings.": "メニューバー項目を変更できませんでした。システム設定の「ログイン項目」を確認してください。",
+    "APKRun couldn't complete this action. Open APKRun for details.": "この操作を完了できませんでした。詳細は APKRun を開いてください。",
+    "APKRun couldn't open the menu bar item. Check Login Items in System Settings.": "メニューバー項目を開けませんでした。システム設定の「ログイン項目」を確認してください。",
+    "APKRun couldn't register the menu bar item. Check Login Items in System Settings.": "メニューバー項目を登録できませんでした。システム設定の「ログイン項目」を確認してください。",
+    "APKRun display 0  \\(framesPerSecond) fps  dropped \\(statistics.droppedFrames)  ": "APKRun ディスプレイ 0  \\(framesPerSecond) fps  ドロップ \\(statistics.droppedFrames)  ",
+    "APKRun is up to date.": "APKRun は最新です。",
+    "APKRun setup is complete. Android is ready.": "APKRun のセットアップが完了しました。Android の準備ができています。",
+    "APKRun's background service is not running.": "APKRun のバックグラウンドサービスが動作していません。",
+    "APKRun's background service isn't running.": "APKRun のバックグラウンドサービスが動作していません。",
+    "APKRun: \\(buildInfo.marketingVersion) (\\(buildInfo.buildNumber))": "APKRun: \\(buildInfo.marketingVersion)（\\(buildInfo.buildNumber)）",
+    "Access": "アクセス",
+    "Add App…": "アプリを追加…",
+    "Add Folder…": "フォルダを追加…",
+    "Add your first Android app": "最初の Android アプリを追加",
+    "Added \\(SharedFoldersOutput.line(folder))": "\\(SharedFoldersOutput.line(folder)) を追加しました",
+    "Added scanout \\(record.scanout): Android display \\(androidID), ": "スキャンアウト \\(record.scanout) を追加しました: Android ディスプレイ \\(androidID)、",
+    "Adopted \\(PackageQueryOutput.safeTerminalText(summary.displayName)) ": "\\(PackageQueryOutput.safeTerminalText(summary.displayName)) を管理対象にしました ",
+    "Advanced": "詳細設定",
+    "Allow": "許可",
+    "Allow APKRun in System Settings > General > Login Items to show the menu bar item.": "メニューバー項目を表示するには、システム設定の「一般」→「ログイン項目」で APKRun を許可してください。",
+    "Allow APKRun in System Settings > General > Login Items, then reopen it.": "システム設定の「一般」→「ログイン項目」で APKRun を許可してから、開き直してください。",
+    "Allow APKRunMenuBar in System Settings > General > Login Items.": "システム設定の「一般」→「ログイン項目」で APKRunMenuBar を許可してください。",
+    "Allow “\\(prompt.displayName)” to open \\(prompt.packageID.rawValue) in APKRun?": "「\\(prompt.displayName)」が APKRun で \\(prompt.packageID.rawValue) を開くことを許可しますか？",
+    "Also move the Mac app to the Trash": "Mac アプリもゴミ箱に移動",
+    "An update source was detected; turn on Automatic or Notify only to use it.": "アップデート元が検出されました。利用するには「自動」または「通知のみ」をオンにしてください。",
+    "Android": "Android",
+    "Android Icon": "Android アイコン",
+    "Android app": "Android アプリ",
+    "Android cannot start, so \\(displayName) may still be installed there.": "Android を起動できないため、\\(displayName) が残っている可能性があります。",
+    "Android data: \\(androidDataBytes) bytes": "Android データ: \\(androidDataBytes) バイト",
+    "Android inventory: cached from \\(PackageQueryOutput.timestamp(result.observedAt)).": "Android 一覧: \\(PackageQueryOutput.timestamp(result.observedAt)) のキャッシュ。",
+    "Android inventory: live (observed \\(PackageQueryOutput.timestamp(result.observedAt))).": "Android 一覧: 最新（\\(PackageQueryOutput.timestamp(result.observedAt)) に観測）。",
+    "Android is \\(status.runtimeState).": "Android は \\(status.runtimeState) です。",
+    "Android is \\(status.runtimeState). No Android data was deleted.": "Android は \\(status.runtimeState) です。Android データは削除されませんでした。",
+    "Android is asleep": "Android はスリープ中です",
+    "Android is running": "Android は動作中です",
+    "Android is stopped": "Android は停止しています",
+    "Android status is unknown": "Android の状態は不明です",
+    "Android stopped unexpectedly": "Android が予期せず停止しました",
+    "Android system updates": "Android システムアップデート",
+    "Android version \\(package.versionName ?? ": "Android バージョン \\(package.versionName ?? ",
+    "Android was reset. Managed apps are being reinstalled.": "Android をリセットしました。管理対象アプリを再インストールしています。",
+    "Android will verify the APK signature during installation": "インストール時に Android が APK の署名を検証します",
+    "Android: \\(PackageQueryOutput.safeTerminalText(status.runtimeState))": "Android: \\(PackageQueryOutput.safeTerminalText(status.runtimeState))",
+    "Android: \\(status.runtimeState)": "Android: \\(status.runtimeState)",
+    "Another app store in Android": "Android 内の別のアプリストア",
+    "Any local process can then reach Android over ADB at 127.0.0.1:6520. Applies the next time Android starts.": "その後、ローカルのどのプロセスも 127.0.0.1:6520 の ADB 経由で Android に接続できます。次回の Android 起動時に適用されます。",
+    "Any local process can then reach Android over ADB at 127.0.0.1:6520. It applies the next time Android starts.": "その後、ローカルのどのプロセスも 127.0.0.1:6520 の ADB 経由で Android に接続できます。次回の Android 起動時に適用されます。",
+    "App: \\(safeTerminalText(preview.displayName))": "アプリ: \\(safeTerminalText(preview.displayName))",
+    "App: \\(safeTerminalText(preview.displayName))\\n": "アプリ: \\(safeTerminalText(preview.displayName))\\n",
+    "Applications (all users)": "アプリケーション（すべてのユーザー）",
+    "Applications (for me)": "アプリケーション（自分のみ）",
+    "Applications for all users": "すべてのユーザーのアプリケーション",
+    "Applications for me": "自分のアプリケーション",
+    "Applies after Reset Android.": "Android のリセット後に適用されます。",
+    "Applies the next time Android starts.": "次回 Android 起動時に適用されます。",
+    "Applies the next time \\(name) opens.": "次回 \\(name) を開いたときに適用されます。",
+    "Applies when you choose Update Mac App.": "「Mac アプリをアップデート」を選ぶと適用されます。",
+    "Apply…": "適用…",
+    "Approval required": "承認が必要",
+    "Apps": "アプリ",
+    "Apps installed outside APKRun appear here.": "APKRun 以外でインストールされたアプリがここに表示されます。",
+    "Apps with kept data": "データを保持しているアプリ",
+    "Ask before installing": "インストール前に確認",
+    "Ask each time": "毎回確認",
+    "Ask me": "確認する",
+    "Automatic": "自動",
+    "Automatic starts are paused after repeated failed starts.": "起動の失敗が続いたため、自動起動を一時停止しています。",
+    "Automatically": "自動的に",
+    "Back": "戻る",
+    "Background service setup failed": "バックグラウンドサービスの設定に失敗しました",
+    "Background service: \\(PackageQueryOutput.safeTerminalText(status.hostState))": "バックグラウンドサービス: \\(PackageQueryOutput.safeTerminalText(status.hostState))",
+    "Background service: \\(status.hostState)": "バックグラウンドサービス: \\(status.hostState)",
+    "Beta": "ベータ",
+    "Boot progress: \\(Int((progress * 100).rounded()))%": "起動進捗: \\(Int((progress * 100).rounded()))%",
+    "Bundle ID: \\(DaemonInstallSupport.safeTerminalText(bundleID))": "バンドル ID: \\(DaemonInstallSupport.safeTerminalText(bundleID))",
+    "Bundle ID: \\(DaemonInstallSupport.safeTerminalText(info.summary.bundleID))": "バンドル ID: \\(DaemonInstallSupport.safeTerminalText(info.summary.bundleID))",
+    "CDHash: \\(cdhash)": "CDHash: \\(cdhash)",
+    "Can't access. Allow APKRun in System Settings → Privacy & Security → Files and Folders.": "アクセスできません。システム設定の「プライバシーとセキュリティ」→「ファイルとフォルダ」で APKRun を許可してください。",
+    "Cancel": "キャンセル",
+    "Cancellation requested for operation \\(operationID.wireValue).": "オペレーション \\(operationID.wireValue) のキャンセルを要求しました。",
+    "Cannot write to \\(url.path)": "\\(url.path) に書き込めません",
+    "Check Now": "今すぐ確認",
+    "Check for Updates": "アップデートを確認",
+    "Check for updates": "アップデートを確認",
+    "Check for updates automatically": "アップデートを自動で確認",
+    "Checking…": "確認中…",
+    "Choose Another Location…": "別の場所を選択…",
+    "Choose Image Folder…": "イメージフォルダを選択…",
+    "Choose an update source to turn on automatic updates.": "自動アップデートを有効にするアップデート元を選択してください。",
+    "Choose where the Mac app goes.": "Mac アプリの作成先を選択してください。",
+    "Choose…": "選択…",
+    "Close": "閉じる",
+    "Compatibility: \\(compatibility.label)": "互換性: \\(compatibility.label)",
+    "Compatibility: \\(info.label)": "互換性: \\(info.label)",
+    "Continue Setup": "設定を続ける",
+    "Copy Command": "コマンドをコピー",
+    "Copy Summary": "概要をコピー",
+    "Could not write the report: \\(error.localizedDescription)": "レポートを書き込めませんでした: \\(error.localizedDescription)",
+    "Couldn't add this file": "このファイルを追加できませんでした",
+    "Create Diagnostics Report": "診断レポートを作成",
+    "Create Diagnostics Report…": "診断レポートを作成…",
+    "Create Mac App": "Mac アプリを作成",
+    "Create Mac app": "Mac アプリを作成",
+    "Create Report…": "レポートを作成…",
+    "Created \\(DaemonInstallSupport.safeTerminalText(info.summary.bundleURL.path))": "\\(DaemonInstallSupport.safeTerminalText(info.summary.bundleURL.path)) を作成しました",
+    "Created \\(DaemonInstallSupport.safeTerminalText(result.appURL.path)) and ": "\\(DaemonInstallSupport.safeTerminalText(result.appURL.path)) を作成し、",
+    "Current:  \\(status.current ?? ": "現在:  \\(status.current ?? ",
+    "Daemon PID: \\(status.daemonPID)": "デーモン PID: \\(status.daemonPID)",
+    "Deep Check": "詳細チェック",
+    "Default location": "デフォルトの場所",
+    "Default size": "デフォルトサイズ",
+    "Delete Data": "データを削除",
+    "Deleted \\(name).": "\\(name) を削除しました。",
+    "Denied until \\(entry.until.formatted())": "\\(entry.until.formatted()) まで拒否",
+    "Details": "詳細",
+    "Developer mode": "開発者モード",
+    "Developer mode on": "開発者モード オン",
+    "Don't Allow": "許可しない",
+    "Done": "完了",
+    "Download Android system updates in the background": "Android システムアップデートをバックグラウンドでダウンロード",
+    "Download on expensive networks": "従量制ネットワークでもダウンロード",
+    "Drag APK, APKS, or XAPK files here to add": "APK、APKS、XAPK ファイルをここにドラッグして追加",
+    "Drag an APK here to add your first app.": "APK をここにドラッグして最初のアプリを追加。",
+    "Edit Folders…": "フォルダを編集…",
+    "Every 12 hours": "12 時間ごと",
+    "Every 3 days": "3 日ごと",
+    "Every 3 hours": "3 時間ごと",
+    "Every 6 hours": "6 時間ごと",
+    "Every day": "毎日",
+    "Every hour": "1 時間ごと",
+    "Every week": "毎週",
+    "Everything is up to date.": "すべて最新です。",
+    "Excluded splits: \\(names)": "除外されたスプリット: \\(names)",
+    "F-Droid's builds of \\(model.displayName) are signed by F-Droid, ": "\\(model.displayName) の F-Droid ビルドは F-Droid が署名しており、",
+    "Failed \\(failure.packageID.rawValue): \\(failure.error.message)": "\\(failure.packageID.rawValue) が失敗しました: \\(failure.error.message)",
+    "Files": "ファイル",
+    "Files (\\(preview.files.count), \\(totalBytes) bytes):": "ファイル（\\(preview.files.count) 件、\\(totalBytes) バイト）:",
+    "Fix": "修復",
+    "Fixed: \\(row.title.fallback)": "修復: \\(row.title.fallback)",
+    "Focus package": "パッケージを表示",
+    "Forget APKRun's record and stored APKs for \\(packageID.rawValue)? This does not determine or change Android app data.": "\\(packageID.rawValue) の APKRun 記録と保管済み APK を破棄しますか？Android アプリデータは確定・変更されません。",
+    "Forget APKRun's record and stored APKs without contacting Android or determining the app-data outcome.": "Android に問い合わせず、アプリデータの結果も確定せずに APKRun の記録と保管済み APK を破棄します。",
+    "Forgot \\(packageID.rawValue) from APKRun.": "\\(packageID.rawValue) を APKRun から削除しました。",
+    "Forgot \\(packageID.rawValue).": "\\(packageID.rawValue) を削除しました。",
+    "Frame Statistics": "フレーム統計",
+    "General": "一般",
+    "Guest Agent protocol: \\(PackageQueryOutput.safeTerminalText(protocolVersion))": "Guest Agent プロトコル: \\(PackageQueryOutput.safeTerminalText(protocolVersion))",
+    "Guest Agent: \\(status.guestAgentState?.rawValue ?? ": "Guest Agent: \\(status.guestAgentState?.rawValue ?? ",
+    "Health": "正常性",
+    "Height": "高さ",
+    "How often": "頻度",
+    "Image \\(version) applied.": "イメージ \\(version) を適用しました。",
+    "Image: \\(imageVersion)": "イメージ: \\(imageVersion)",
+    "Images over 16 MB or 8192 pixels per side are not sent. The text still went through.": "16 MB または一辺 8192 ピクセルを超える画像は送信されません。テキストは送信されました。",
+    "Include Android app logs": "Android アプリのログを含める",
+    "Included: host environment, versions, health, logs, runtime and package state — redacted for names, paths, addresses, and secrets. Never collected: file contents, clipboard, keystrokes, or private app data.": "含まれるもの: ホスト環境、バージョン、正常性、ログ、ランタイムとパッケージの状態（名前・パス・アドレス・機密情報はマスク済み）。収集しないもの: ファイルの内容、クリップボード、キー入力、アプリのプライベートデータ。",
+    "Input": "入力",
+    "Input changes apply the next time \\(model.displayName) opens.": "入力の変更は次回 \\(model.displayName) を開いたときに適用されます。",
+    "Install APKRun updates automatically": "APKRun のアップデートを自動でインストール",
+    "Install Command-Line Tool": "コマンドラインツールをインストール",
+    "Install Command-Line Tool…": "コマンドラインツールをインストール…",
+    "Install \\(appName) \\(version) from this Mac app?": "この Mac アプリから \\(appName) \\(version) をインストールしますか？",
+    "Install \\(displayName) (\\(packageID))?": "\\(displayName)（\\(packageID)）をインストールしますか？",
+    "Install and Relaunch Now": "今すぐインストールして再起動",
+    "Install automatically when the Mac is idle": "Mac がアイドル時に自動でインストール",
+    "Install from File…": "ファイルからインストール…",
+    "Install from Mac App": "Mac アプリからインストール",
+    "Install from This App": "このアプリからインストール",
+    "Installed \\(DaemonInstallSupport.safeTerminalText(result.displayName)) ": "\\(DaemonInstallSupport.safeTerminalText(result.displayName)) をインストールしました ",
+    "Installed \\(DaemonInstallSupport.safeTerminalText(summary.displayName)) ": "\\(DaemonInstallSupport.safeTerminalText(summary.displayName)) をインストールしました ",
+    "Installed \\(safeTerminalText(result.displayName)) ": "\\(safeTerminalText(result.displayName)) をインストールしました ",
+    "Installed image \\(version). It is ready to apply.": "イメージ \\(version) をインストールしました。適用準備ができています。",
+    "Integrations": "連携",
+    "Keep Current Version": "現在のバージョンを保持",
+    "Keep app data (reinstalling \\(displayName) later restores it)": "アプリデータを保持（後で \\(displayName) を再インストールすると復元されます）",
+    "Keep in Android": "Android で開く",
+    "Kind: \\(info.summary.kind.rawValue)": "種類: \\(info.summary.kind.rawValue)",
+    "Kind: \\(kind.rawValue)": "種類: \\(kind.rawValue)",
+    "Language & Region": "言語と地域",
+    "Last:     \\(last)": "前回:     \\(last)",
+    "Later": "あとで",
+    "Launched \\(packageID.rawValue) (\\(result.state.rawValue)).": "\\(packageID.rawValue) を起動しました（\\(result.state.rawValue)）。",
+    "Launcher: \\(DaemonInstallSupport.safeTerminalText(info.summary.launcherVersion))": "Launcher: \\(DaemonInstallSupport.safeTerminalText(info.summary.launcherVersion))",
+    "Let an Android Store Update It": "Android ストアによる更新を許可",
+    "Location": "場所",
+    "Mac App": "Mac アプリ",
+    "Mac app name": "Mac アプリ名",
+    "Mac app: \\(DaemonInstallSupport.safeTerminalText(info.summary.bundleURL.path))": "Mac アプリ: \\(DaemonInstallSupport.safeTerminalText(info.summary.bundleURL.path))",
+    "Mac apps you didn't allow": "許可しなかった Mac アプリ",
+    "Make Local Mac App": "ローカル Mac アプリを作成",
+    "Manage with APKRun": "APKRun で管理",
+    "Managed by another installer": "別のインストーラーが管理中",
+    "Managed: \\(summary.managed ? ": "管理: \\(summary.managed ? ",
+    "Manual": "手動",
+    "Memory and processors apply the next time Android starts.": "メモリとプロセッサの変更は次回の Android 起動時に適用されます。",
+    "Move APKRun.app to Applications and reopen it.": "APKRun.app をアプリケーションに移動して開き直してください。",
+    "Move Mac App to Trash": "Mac アプリをゴミ箱に移動",
+    "Move to Trash": "ゴミ箱に移動",
+    "NAME\\tPACKAGE\\tSTATUS\\tPATH": "名前\\tパッケージ\\t状態\\tパス",
+    "Name": "名前",
+    "Name: \\(DaemonInstallSupport.safeTerminalText(info.summary.displayName))": "名前: \\(DaemonInstallSupport.safeTerminalText(info.summary.displayName))",
+    "Never": "しない",
+    "No Android image information yet.": "Android イメージの情報はまだありません。",
+    "No Android inventory is saved yet. Start Android once to discover installed apps.": "Android のアプリ一覧はまだ保存されていません。Android を一度起動すると検出されます。",
+    "No Mac app for this package.": "このパッケージの Mac アプリはありません。",
+    "No Mac apps are denied.": "拒否された Mac アプリはありません。",
+    "No Mac apps.": "Mac アプリはありません。",
+    "No apps are keeping data.": "データを保持しているアプリはありません。",
+    "No apps installed.": "インストールされているアプリはありません。",
+    "No apps running": "実行中のアプリはありません",
+    "No effect in full screen.": "フルスクリーンでは効果がありません。",
+    "No health report yet.": "正常性レポートはまだありません。",
+    "No managed apps are recorded.": "管理対象アプリは記録されていません。",
+    "No operations.": "オペレーションはありません。",
+    "No pending requests.": "保留中のリクエストはありません。",
+    "No recovery points.": "復元ポイントはありません。",
+    "No settings were stored.": "保存された設定はありません。",
+    "No shared folders.": "共有フォルダはありません。",
+    "No updates available": "利用可能なアップデートはありません",
+    "None": "なし",
+    "Not supported yet": "まだサポートされていません",
+    "Nothing to finish.": "完了すべきものはありません。",
+    "Notify me after automatic updates": "自動アップデート後に通知",
+    "Notify me when Android was updated": "Android が更新されたら通知",
+    "Notify only": "通知のみ",
+    "Omitted: ": "省略: ",
+    "Only allow Mac apps you trust.": "信頼できる Mac アプリのみ許可してください。",
+    "Only the built-in Shared folder is available.": "内蔵の「共有」フォルダのみ利用できます。",
+    "Open": "開く",
+    "Open APKRun to check for updates.": "アップデートを確認するには APKRun を開いてください。",
+    "Open APKRun to finish the update.": "アップデートを完了するには APKRun を開いてください。",
+    "Open APKRun…": "APKRun を開く…",
+    "Open Login Items Settings": "ログイン項目設定を開く",
+    "Open in Browser": "ブラウザで開く",
+    "Opened APKRun. Install the update there.": "APKRun を開きました。そこでアップデートをインストールしてください。",
+    "Operation \\(operationID.wireValue) has already been cancelled.": "オペレーション \\(operationID.wireValue) はすでにキャンセルされています。",
+    "Operation \\(operationID.wireValue) has already completed.": "オペレーション \\(operationID.wireValue) はすでに完了しています。",
+    "Operation \\(operationID.wireValue) has already failed: ": "オペレーション \\(operationID.wireValue) はすでに失敗しています: ",
+    "Operation \\(operationID.wireValue) is still running and cannot be cancelled: ": "オペレーション \\(operationID.wireValue) は実行中のためキャンセルできません: ",
+    "Operation \\(operationID.wireValue): \\(text)": "処理 \\(operationID.wireValue): \\(text)",
+    "Operation \\(snapshot.operationID.wireValue) completed.": "オペレーション \\(snapshot.operationID.wireValue) が完了しました。",
+    "Operation \\(snapshot.operationID.wireValue) is still running. ": "オペレーション \\(snapshot.operationID.wireValue) は実行中です。",
+    "Other…": "その他…",
+    "Owner: apkrund": "所有者: apkrund",
+    "Package: \\(info.summary.packageID.rawValue)": "パッケージ: \\(info.summary.packageID.rawValue)",
+    "Package: \\(packageID)": "パッケージ: \\(packageID)",
+    "Package: \\(preview.packageID.rawValue)": "パッケージ: \\(preview.packageID.rawValue)",
+    "Previous: \\(status.previous ?? ": "変更前: \\(status.previous ?? ",
+    "Privacy": "プライバシー",
+    "Problem: \\(problem.rawValue)": "問題: \\(problem.rawValue)",
+    "Progress: \\(percentage)%": "進捗: \\(percentage)%",
+    "Quit": "終了",
+    "Quit Menu Bar Item": "メニューバー項目を終了",
+    "Read and write": "読み書き",
+    "Read only": "読み取り専用",
+    "Ready: \\(version)": "準備完了: \\(version)",
+    "Recommended for this app": "このアプリにおすすめ",
+    "Recovery: \\(point.name)\\(point.isFailedDump ? ": "復元: \\(point.name)\\(point.isFailedDump ? ",
+    "Refresh Dock Icons…": "Dock アイコンを更新…",
+    "Reinstall \\(displayName) (\\(packageID)) using the selected APK files?": "選択した APK ファイルで \\(displayName)（\\(packageID)）を再インストールしますか？",
+    "Reinstall \\(packageID.rawValue) from APKRun's retained APKs?": "APKRun の保管済み APK から \\(packageID.rawValue) を再インストールしますか？",
+    "Reinstalling restores the kept data when the APK comes ": "再インストールすると、APK が提供元からのものであれば保持データが復元されます",
+    "Reinstall…": "再インストール…",
+    "Rejected: \\(rejected.version) (\\(rejected.reason), \\(rejected.at))": "拒否: \\(rejected.version)（\\(rejected.reason)、\\(rejected.at)）",
+    "Relation: \\(relationName(preview.relation))": "リレーション: \\(relationName(preview.relation))",
+    "Remove": "削除",
+    "Remove Mac App…": "Mac アプリを削除…",
+    "Remove from APKRun": "APKRun から削除",
+    "Removed \\(folder).": "\\(folder) を削除しました。",
+    "Removed scanout \\(scanout).": "スキャンアウト \\(scanout) を削除しました。",
+    "Removing an entry lets the Mac app ask again the next time it opens.": "エントリを削除すると、Mac アプリは次回起動時に再び確認します。",
+    "Rename": "名前を変更",
+    "Rename ‹\\(model.displayName)›": "「\\(model.displayName)」の名前を変更",
+    "Rename…": "名前を変更…",
+    "Repair reinstalls \\(displayName) from the copy APKRun kept. ": "修復は APKRun が保持したコピーから \\(displayName) を再インストールします。",
+    "Repair “\\(displayName)”?": "「\\(displayName)」を修復しますか？",
+    "Repair…": "修復…",
+    "Replaces the Mac app at \\(replacesURL.path(percentEncoded: false).replacingOccurrences(of: NSHomeDirectory(), with: ": "\\(replacesURL.path(percentEncoded: false).replacingOccurrences(of: NSHomeDirectory(), with: にある Mac アプリを置き換えます",
+    "Report…": "レポート…",
+    "Reset": "リセット",
+    "Reset every stored setting.": "保存されたすべての設定をリセットしました。",
+    "Restart": "再起動",
+    "Restart Android": "Android を再起動",
+    "Restart Android Now…": "今すぐ Android を再起動…",
+    "Restart Android automatically after a crash": "クラッシュ後に Android を自動で再起動",
+    "Restart Dock": "Dock を再起動",
+    "Restart Service": "サービスを再起動",
+    "Restarting APKRun to finish the update.": "アップデートを完了するため APKRun を再起動しています。",
+    "Restarts the Dock so Mac apps created by APKRun pick up ": "APKRun が作成した Mac アプリに反映させるため Dock を再起動します",
+    "Restore (Erases Data)": "復元（データは消去されます）",
+    "Reveal Logs in Finder": "Finder でログを表示",
+    "Roll Back": "ロールバック",
+    "Roll Back to \\(previous.versionName ?? String(previous.versionCode))…": "\\(previous.versionName ?? String(previous.versionCode)) にロールバック…",
+    "Roll Back…": "ロールバック…",
+    "Run Again": "もう一度実行",
+    "Run Android apps as Mac apps.": "Android アプリを Mac アプリとして実行します。",
+    "Run `apkrun operations wait \\($0.wireValue)` to check the retained operation result. ": "`apkrun operations wait \\($0.wireValue)` で保持されたオペレーション結果を確認してください。",
+    "Run `apkrun operations wait \\(operationID.wireValue)` to check again. If the operation has expired or the daemon restarted, inspect package state before retrying.": "`apkrun operations wait \\(operationID.wireValue)` で再確認してください。オペレーションが期限切れかデーモンが再起動した場合は、再試行前にパッケージの状態を確認してください。",
+    "Run `apkrun operations wait \\(operationID.wireValue)` to check the retained result. ": "`apkrun operations wait \\(operationID.wireValue)` で保持された結果を確認してください。",
+    "Run this command in Terminal to put `apkrun` on your PATH:\\n\\n\\(Self.installCommand)": "ターミナルでこのコマンドを実行して `apkrun` を PATH に追加してください:\\n\\n\\(Self.installCommand)",
+    "Run this command with a development image that includes the Guest Agent and virgl GPU support.": "Guest Agent と virgl GPU サポートを含む開発イメージでこのコマンドを実行してください。",
+    "Running": "実行中",
+    "Running apps": "実行中のアプリ",
+    "Running apps close while Android restarts.": "Android の再起動中、実行中のアプリは閉じられます。",
+    "Running apps will close.": "実行中のアプリは閉じられます。",
+    "Runtime": "ランタイム",
+    "SCANOUT  STATE       ANDROID ID  MODE          DPI    MEMORY": "SCANOUT  状態        ANDROID ID  モード        DPI    メモリ",
+    "Save to Mac": "Mac に保存",
+    "Section": "セクション",
+    "Settings…": "設定…",
+    "Setup: \\(provisioningText(provisioning))": "セットアップ: \\(provisioningText(provisioning))",
+    "Shared folders": "共有フォルダ",
+    "Show APKRun in the menu bar": "メニューバーに APKRun を表示",
+    "Show Mac App in Finder": "Finder で Mac アプリを表示",
+    "Show in Finder": "Finder で表示",
+    "Signed by": "署名者",
+    "Signed by: \\(digest.rawValue)": "署名者: \\(digest.rawValue)",
+    "Signer SHA-256: \\(digests)": "署名者 SHA-256: \\(digests)",
+    "Signing: not checked": "署名: 未確認",
+    "Skipped \\(packageID.rawValue) (the app is running).": "\\(packageID.rawValue) をスキップしました（アプリ実行中）。",
+    "Sort": "並べ替え",
+    "Sound output": "サウンド出力",
+    "Sound output applies the next time Android starts.": "サウンド出力の変更は次回の Android 起動時に適用されます。",
+    "Stable": "安定版",
+    "Stage: \\(DaemonInstallSupport.safeTerminalText(stage))": "ステージ: \\(DaemonInstallSupport.safeTerminalText(stage))",
+    "Staged update: ": "保留中のアップデート: ",
+    "Start Android": "Android を起動",
+    "Start Android to install updates": "アップデートをインストールするには Android を起動",
+    "Start Over": "やり直す",
+    "Started install operation \\(handle.operationID.wireValue). ": "インストール処理 \\(handle.operationID.wireValue) を開始しました。",
+    "Started uninstall operation \\(handle.operationID.wireValue). ": "アンインストール処理 \\(handle.operationID.wireValue) を開始しました。",
+    "Starting Android with the virgl GPU profile for display management.": "ディスプレイ管理のため virgl GPU プロファイルで Android を起動します。",
+    "Starting Android…": "Android を起動中…",
+    "Startup issue: step \\(step) (\\(PackageQueryOutput.safeTerminalText(code)))": "起動時の問題: ステップ \\(step)（\\(PackageQueryOutput.safeTerminalText(code))）",
+    "Startup issue: step \\(step) (\\(code))": "起動時の問題: ステップ \\(step)（\\(code)）",
+    "State:    \\(status.phase)": "状態:    \\(status.phase)",
+    "State: \\(PackageQueryOutput.stateName(summary.state))": "状態: \\(PackageQueryOutput.stateName(summary.state))",
+    "State: \\(Self.stateText(state))": "状態: \\(Self.stateText(state))",
+    "Stop Android": "Android を停止",
+    "Stop Android?": "Android を停止しますか？",
+    "Stopping Android…": "Android を停止中…",
+    "Storage": "ストレージ",
+    "Stored APKs: \\(details.files.count), \\(details.artifactBytes) bytes": "保存済み APK: \\(details.files.count) 件、\\(details.artifactBytes) バイト",
+    "The Dock and all of its icons restart. This cannot be undone.": "Dock とすべてのアイコンが再起動します。この操作は取り消せません。",
+    "The Mac app goes to the Trash. The Android app stays installed.": "Mac アプリはゴミ箱に移動されます。Android アプリはインストールされたままです。",
+    "The Mac app will contain the APK. Confirm you may redistribute it?": "Mac アプリに APK が含まれます。再配布する権利があることを確認しますか？",
+    "The Mac app's icon is the placeholder because ": "Mac アプリのアイコンはプレースホルダーです（理由: ",
+    "The display for one package: 0 for compatibility or secondary for a pooled window. Two packages use primary then secondary.": "1つのパッケージのディスプレイ: 互換モードは 0、プールウィンドウは secondary。2つのパッケージは primary→secondary。",
+    "The file is newer than the installed version; use --install to update first. ": "ファイルはインストール済みより新しいバージョンです。先に --install で更新してください。",
+    "The file is older than the installed version; ignoring it. ": "ファイルはインストール済みより古いバージョンです。無視します。",
+    "The file is signed by a different developer; ignoring it. ": "ファイルは別の開発者による署名です。無視します。",
+    "The file's version is already installed; wrapping the installed app.": "ファイルのバージョンはすでにインストール済みです。インストール済みアプリをラップします。",
+    "The image is too large to paste.": "画像が大きすぎてペーストできません。",
+    "The last image update failed: \\(candidate?.version ?? ": "前回のイメージアップデートに失敗しました: \\(candidate?.version ?? ",
+    "The menu bar item is unavailable in this copy of APKRun.": "この APKRun ではメニューバー項目を利用できません。",
+    "The operation may still be running if it passed its cancellation point. Check it with `apkrun operations wait \\(operationID.wireValue)`.": "キャンセルポイントを過ぎている場合、オペレーションは実行中の可能性があります。`apkrun operations wait \\(operationID.wireValue)` で確認してください。",
+    "The preview shows \\(displayName) (\\(packageID)) at version ": "プレビューには \\(displayName)（\\(packageID)）バージョン ",
+    "The report failed: \\(failure.message)": "レポートに失敗しました: \\(failure.message)",
+    "The report was cancelled.": "レポートはキャンセルされました。",
+    "The report was written.": "レポートを作成しました。",
+    "The result of operation \\(operationID.wireValue) is unknown.": "オペレーション \\(operationID.wireValue) の結果は不明です。",
+    "The result of operation \\(snapshot.operationID.wireValue) is unknown.": "オペレーション \\(snapshot.operationID.wireValue) の結果は不明です。",
+    "These settings are temporarily unavailable.": "これらの設定は一時的に利用できません。",
+    "This Mac app contains \\(info.summary.displayName) ": "この Mac アプリには \\(info.summary.displayName) が含まれています ",
+    "This Mac app contains the Android app. Install it to continue.": "この Mac アプリには Android アプリが含まれています。続けるにはインストールしてください。",
+    "This erases all Android apps, their data, and settings. Type \\\"Reset\\\" to continue: ": "すべての Android アプリ、そのデータ、設定が消去されます。続行するには \\\"Reset\\\" と入力してください: ",
+    "This takes a few minutes. You can close this window. ": "数分かかります。このウインドウは閉じて構いません。",
+    "Troubleshooting": "トラブルシューティング",
+    "Troubleshooting…": "トラブルシューティング…",
+    "Try Again": "もう一度試す",
+    "Turn On": "オンにする",
+    "Turn on Developer mode?": "開発者モードをオンにしますか？",
+    "Uninstall": "アンインストール",
+    "Uninstall “\\(displayName)”?": "「\\(displayName)」をアンインストールしますか？",
+    "Uninstalled \\(packageID.rawValue).": "\\(packageID.rawValue) をアンインストールしました。",
+    "Uninstalled \\(packageID.rawValue)\\(keepData ? ": "\\(packageID.rawValue) をアンインストールしました\\(keepData ? ",
+    "Uninstall…": "アンインストール…",
+    "Update Mac App": "Mac アプリをアップデート",
+    "Update Now": "今すぐアップデート",
+    "Update authority: \\(summary.updateAuthority.rawValue)": "アップデート権限: \\(summary.updateAuthority.rawValue)",
+    "Update available \\(candidate.versionName ?? ": "アップデートがあります \\(candidate.versionName ?? ",
+    "Update channel": "アップデートチャンネル",
+    "Update history": "アップデート履歴",
+    "Update information isn't available yet.": "アップデート情報はまだありません。",
+    "Updated \\(DaemonInstallSupport.safeTerminalText(info.summary.bundleURL.path))": "\\(DaemonInstallSupport.safeTerminalText(info.summary.bundleURL.path)) を更新しました",
+    "Updated \\(result.refreshed.count) Mac app(s).": "\\(result.refreshed.count) 個の Mac アプリを更新しました。",
+    "Updated by": "更新者",
+    "Updates": "アップデート",
+    "Updates are available. Open APKRun to manage updates.": "アップデートがあります。APKRun を開いて管理してください。",
+    "Use `add --size WIDTHxHEIGHT --dpi DPI`, `list`, `remove SCANOUT`, or `quit`.": "`add --size WIDTHxHEIGHT --dpi DPI`、`list`、`remove SCANOUT`、`quit` のいずれかを使用してください。",
+    "Use the Mac's 12/24-hour setting": "Mac の 12/24 時間表示設定を使用",
+    "Use the Mac's language in Android": "Android で Mac の言語を使用",
+    "Use the Mac's time zone": "Mac のタイムゾーンを使用",
+    "Version: \\(summary.versionName.map(PackageQueryOutput.safeTerminalText) ?? ": "バージョン: \\(summary.versionName.map(PackageQueryOutput.safeTerminalText) ?? ",
+    "Waiting": "待機中",
+    "Warning: Ignoring incompatible APK splits: \\(splitNames)": "警告: 互換性のない APK スプリットを無視します: \\(splitNames)",
+    "Warning: \\(warningName(warning))": "警告: \\(warningName(warning))",
+    "Warning: \\(warningText(warning))": "警告: \\(warningText(warning))",
+    "Warning: the inspection ticket could not be discarded.": "警告: 検査チケットを破棄できませんでした。",
+    "Welcome to APKRun": "APKRun へようこそ",
+    "When I log in": "ログイン時",
+    "When an app opens": "アプリ起動時",
+    "Width": "幅",
+    "Window": "ウインドウ",
+    "Writing the report…": "レポートを作成中…",
+    "You're ready.": "準備ができました。",
+    "Zoom": "ズーム",
+    "\\(Int(((Double(model.value(": "\\(Int(((Double(model.value(",
+    "\\(PackageQueryOutput.safeTerminalText(summary.displayName)) ": "\\(PackageQueryOutput.safeTerminalText(summary.displayName)) ",
+    "\\(appName) could not be installed.": "\\(appName) をインストールできませんでした。",
+    "\\(count) app\\(count == 1 ? ": "\\(count) 個のアプリ\\(count == 1 ? ",
+    "\\(displayName) and its data will be removed from Android.": "\\(displayName) とそのデータは Android から削除されます。",
+    "\\(displayName) is open and will be closed.": "\\(displayName) は開いているため、閉じられます。",
+    "\\(entry.from.map(String.init) ?? ": "\\(entry.from.map(String.init) ?? ",
+    "\\(entry.key)=\\(entry.value) (\\(entry.source))": "\\(entry.key)=\\(entry.value)（\\(entry.source)）",
+    "\\(imageStatus.recoveryPoints.count) recovery point(s) kept. Delete them with `apkrun image recovery-points delete`.": "\\(imageStatus.recoveryPoints.count) 件の復元ポイントを保持中。`apkrun image recovery-points delete` で削除できます。",
+    "\\(item.kind.rawValue): \\(valueText(item.value)) (\\(item.source.rawValue))": "\\(item.kind.rawValue): \\(valueText(item.value))（\\(item.source.rawValue)）",
+    "\\(key)=\\(value)": "\\(key)=\\(value)",
+    "\\(key)=\\(values[key] ?? value)": "\\(key)=\\(values[key] ?? value)",
+    "\\(missing) isn't installed in APKRun.": "\\(missing) は APKRun にインストールされていません。",
+    "\\(model.operations.active.count) operation(s) running": "\\(model.operations.active.count) 件の処理を実行中",
+    "\\(model.value(": "\\(model.value(",
+    "\\(model.value(key)) \\(unit)": "\\(model.value(key)) \\(unit)",
+    "\\(name) (\\(code))": "\\(name)（\\(code)）",
+    "\\(package): failed: \\(error.code)": "\\(package): 失敗: \\(error.code)",
+    "\\(package): installed: \\(from) → \\(to)": "\\(package): インストール: \\(from) → \\(to)",
+    "\\(package): kept after failed health check: \\(reason)": "\\(package): ヘルスチェック失敗後も保持: \\(reason)",
+    "\\(package): no previous version to roll back to, or no rollback mechanism is available.": "\\(package): ロールバック先の以前のバージョンがないか、ロールバック機構が利用できません。",
+    "\\(package): reinstalled from the retained APKs.": "\\(package): 保持された APK から再インストールしました。",
+    "\\(package): rolled back to version \\(to). App data was not changed.": "\\(package): バージョン \\(to) にロールバックしました。アプリデータは変更されていません。",
+    "\\(package): rolled back: \\(reason)": "\\(package): ロールバック: \\(reason)",
+    "\\(package): skipped: \\(reason)\\(error.map { ": "\\(package): スキップ: \\(reason)\\(error.map { ",
+    "\\(package): up to date": "\\(package): 最新です",
+    "\\(package): update available: \\(candidateText(candidate))": "\\(package): 更新あり: \\(candidateText(candidate))",
+    "\\(package): version \\(versionCode) skipped": "\\(package): バージョン \\(versionCode) をスキップしました",
+    "\\(package): version \\(versionCode) unskipped": "\\(package): バージョン \\(versionCode) のスキップを解除しました",
+    "\\(package): waiting: \\(reason.rawValue)": "\\(package): 待機中: \\(reason.rawValue)",
+    "\\(packageID.rawValue): reinstalled from the retained APKs.": "\\(packageID.rawValue): 保持された APK から再インストールしました。",
+    "\\(packageName) wants to open a link.": "\\(packageName) がリンクを開こうとしています。",
+    "\\(point.name)  \\(kind)  \\(image)  \\(point.createdAt)": "\\(point.name)  \\(kind)  \\(image)  \\(point.createdAt)",
+    "\\(preview.displayName) was installed, but the Mac app couldn't be created: \\(wrapperError)": "\\(preview.displayName) はインストールされましたが、Mac アプリを作成できませんでした: \\(wrapperError)",
+    "\\(preview.displayName) was installed.": "\\(preview.displayName) をインストールしました。",
+    "\\(preview.packageID.rawValue) · version \\(version)": "\\(preview.packageID.rawValue) · バージョン \\(version)",
+    "\\(record.scanout)\\t\\t\\(record.state)\\t\\(androidID)\\t\\t\\(mode)\\t\\(dpi)\\t\\(memory)": "\\(record.scanout)\\t\\t\\(record.state)\\t\\(androidID)\\t\\t\\(mode)\\t\\(dpi)\\t\\(memory)",
+    "\\(running) app\\(running == 1 ? ": "\\(running) 個のアプリ\\(running == 1 ? ",
+    "\\(safeTerminalText(package.displayName))\\t\\(package.packageID.rawValue)": "\\(safeTerminalText(package.displayName))\\t\\(package.packageID.rawValue)",
+    "\\(status.packageID.rawValue): authority \\(status.authority)": "\\(status.packageID.rawValue): 権限 \\(status.authority)",
+    "\\(status.packageID.rawValue): mode \\(status.choice?.rawValue ?? status.authority), provider \\(providerText)": "\\(status.packageID.rawValue): モード \\(status.choice?.rawValue ?? status.authority)、提供元 \\(providerText)",
+    "\\(symbol(row.state)) \\(row.id) — \\(row.title.fallback)": "\\(symbol(row.state)) \\(row.id) — \\(row.title.fallback)",
+    "add --size WIDTHxHEIGHT --dpi DPI  Create a virtual display (DPI range: 120–640).": "add --size WIDTHxHEIGHT --dpi DPI  仮想ディスプレイを作成（DPI 範囲: 120–640）。",
+    "apkrun \\(version.marketingVersion) (\\(version.buildNumber))": "apkrun \\(version.marketingVersion)（\\(version.buildNumber)）",
+    "checking this Mac": "この Mac を確認中",
+    "code: \\(error.code)": "コード: \\(error.code)",
+    "creating the Android instance": "Android インスタンスを作成中",
+    "deny (\\(reason.rawValue))": "拒否（\\(reason.rawValue)）",
+    "displays> ": "displays> ",
+    "error: \\(error.message)": "エラー: \\(error.message)",
+    "error: display resize rollback failed (hostModeRestored=\\(hostModeRestored), guestModeRestored=\\(guestModeRestored)); input remains disabled until a newer display frame is committed": "error: ディスプレイリサイズのロールバックに失敗しました（hostModeRestored=\\(hostModeRestored)、guestModeRestored=\\(guestModeRestored)）。新しい表示フレームがコミットされるまで入力は無効のままです",
+    "error: scanout \\(scanout) is not leased by this command.": "error: スキャンアウト \\(scanout) はこのコマンドのリースではありません。",
+    "error: scanout \\(scanout) lease expired before removal completed. ": "error: スキャンアウト \\(scanout) のリースが削除完了前に期限切れになりました。",
+    "failed at \\(step.rawValue) (\\(error.code))": "\\(step.rawValue) で失敗（\\(error.code)）",
+    "first boot (\\(Int((fraction * 100).rounded()))%)": "初回起動（\\(Int((fraction * 100).rounded()))%）",
+    "frameStatistics: \\(error.localizedDescription)": "frameStatistics: \\(error.localizedDescription)",
+    "framesSampled \\(frames)  redFrames \\(redFrames)  blueFrames \\(blueFrames)  mixedFrames \\(mixedFrames)": "framesSampled \\(frames)  redFrames \\(redFrames)  blueFrames \\(blueFrames)  mixedFrames \\(mixedFrames)",
+    "framesSampled \\(frames)  redFrames \\(redFrames)  blueFrames \\(blueFrames)  mixedFrames \\(mixedFrames)  ": "framesSampled \\(frames)  redFrames \\(redFrames)  blueFrames \\(blueFrames)  mixedFrames \\(mixedFrames)  ",
+    "hint: \\(remediation)": "ヒント: \\(remediation)",
+    "installing agents": "エージェントをインストール中",
+    "installing image (\\(Int((fraction * 100).rounded()))%)": "イメージをインストール中（\\(Int((fraction * 100).rounded()))%）",
+    "list                             Show scanout, Android ID, mode, and memory.": "list                             スキャンアウト、Android ID、モード、メモリを表示。",
+    "microphone: a change waits for an Android restart": "マイク: 変更は Android の再起動を待っています",
+    "no app session": "アプリセッションなし",
+    "not started": "未開始",
+    "quit                             Release displays and stop Android.": "quit                             ディスプレイを解放して Android を停止。",
+    "remove SCANOUT                   Release a display created in this session.": "remove SCANOUT                   このセッションで作成したディスプレイを解放。",
+    "running": "実行中",
+    "state: \\(state)": "state: \\(state)",
+    "the app is marked debuggable": "アプリは debuggable に設定されています",
+    "the app requests \\(DaemonInstallSupport.safeTerminalText(feature))": "アプリは \\(DaemonInstallSupport.safeTerminalText(feature)) を要求しています",
+    "the app requests \\(safeTerminalText(feature))": "アプリは \\(safeTerminalText(feature)) を要求しています",
+    "the app targets older Android API \\(target)": "アプリは古い Android API \\(target) を対象にしています",
+    "the signing check is not complete": "署名チェックが完了していません",
+    "warning: Android did not confirm removal of display \\(androidDisplayID); ": "warning: Android がディスプレイ \\(androidDisplayID) の削除を確認しませんでした。",
+    "warning: \\(message)": "warning: \\(message)",
+    "warning: \\(text)": "warning: \\(text)",
+    "warning: could not read display commands: \\(error)": "warning: ディスプレイコマンドを読み取れませんでした: \\(error)",
+    "warning: display resize could not be applied (\\(String(describing: error)))": "warning: ディスプレイリサイズを適用できませんでした（\\(String(describing: error))）",
+    "warning: package store is unavailable; continuing with the window session": "warning: パッケージストアが利用できません。ウインドウセッションを続行します",
+    "warning: sandbox-exec is unavailable; aapt2 is parsing the APK without sandbox restrictions": "warning: sandbox-exec が利用できません。aapt2 はサンドボックス制限なしで APK を解析します",
+    "warning: the initial display geometry could not be resolved; using the clamped size at 160 dpi": "warning: 初期ディスプレイジオメトリを解決できませんでした。160 dpi でクランプしたサイズを使用します",
+    "will update when \\(package) quits": "\\(package) が終了すると更新されます",
+    "• \\(hint)": "• \\(hint)",
+    "‹ Apps": "‹ アプリ",
+    "◐ Updating Android… \\(to)": "◐ Android を更新中… \\(to)",
+    "⚠ Needs attention": "⚠ 対応が必要"
+  },
+  "variants": {
+    "cli.fileNotAccessible.isDirectory": {
+      "message": "{file} はフォルダです。",
+      "remediation": "ファイルを指定してください。展開済みイメージフォルダは `apkrun dev image install` 用です。"
+    },
+    "cli.fileNotAccessible.notFound": {
+      "message": "{file} が存在しません。",
+      "remediation": "パスを確認してください。"
+    },
+    "cli.fileNotAccessible.permissionDenied": {
+      "message": "apkrun は {file} を開く許可がありません。",
+      "remediation": "権限を確認するか、システム設定 → プライバシーとセキュリティでターミナルにアクセスを許可してください。"
+    },
+    "integration.disabled.globallyOff": {
+      "message": "{integration} はすべてのアプリでオフになっています。",
+      "remediation": "設定 → プライバシーでオンにしてください。"
+    },
+    "integration.disabled.noSession": {
+      "message": "{app} が開いていません。",
+      "remediation": "{app} を開いてからもう一度お試しください。"
+    },
+    "integration.disabled.notFocused": {
+      "message": "{app} が {integration} を使用できるのはそのウインドウの使用中のみです。",
+      "remediation": "アプリのウインドウをクリックしてからもう一度お試しください。"
+    },
+    "integration.disabled.notSupported": {
+      "message": "このバージョンの Android は {integration} をサポートしていません。",
+      "remediation": "Android をアップデートしてください。"
+    },
+    "integration.disabled.rateLimited": {
+      "message": "{app} がこの操作を頻繁に行いすぎています。",
+      "remediation": "しばらくしてからもう一度お試しください。"
+    },
+    "integration.folderRefused.hidden": {
+      "message": "APKRun は非表示フォルダを共有しません。",
+      "remediation": "非表示でないフォルダを選択してください。"
+    },
+    "integration.folderRefused.homeFolder": {
+      "message": "APKRun はホームフォルダ全体を共有しません。",
+      "remediation": "書類やダウンロードなど、その中のフォルダを選択してください。"
+    },
+    "integration.folderRefused.insideLibrary": {
+      "message": "APKRun はライブラリ内のフォルダを共有しません。",
+      "remediation": "~/Library の外にあるフォルダを選択してください。"
+    },
+    "integration.folderRefused.limitReached": {
+      "message": "共有できるフォルダは最大 32 個です。",
+      "remediation": "先に設定 → ファイルで共有フォルダを削除してください。"
+    },
+    "integration.folderRefused.volumeRoot": {
+      "message": "APKRun はディスク全体を共有しません。",
+      "remediation": "ディスク内のフォルダを選択してください。"
+    },
+    "integration.folderUnavailable.missing": {
+      "message": "共有フォルダ {file} はもう存在しません。",
+      "remediation": "フォルダを戻すか、設定 → ファイルで削除してください。"
+    },
+    "integration.folderUnavailable.offline": {
+      "message": "共有フォルダ {file} は現在利用できません。",
+      "remediation": "そのフォルダを含むドライブまたはネットワークボリュームを接続してください。"
+    },
+    "integration.folderUnavailable.privacyDenied": {
+      "message": "macOS が APKRun による共有フォルダ {file} へのアクセスを許可しません。",
+      "remediation": "システム設定 → プライバシーとセキュリティ → ファイルとフォルダで APKRun を許可してください。"
+    },
+    "integration.linkRejected.notFocused": {
+      "message": "APKRun が {app} からのリンクを開けるのはそのウインドウの使用中のみです。"
+    },
+    "integration.linkRejected.rateLimited": {
+      "message": "{app} が一度に多くのリンクを開きすぎました。"
+    },
+    "integration.linkRejected.scheme": {
+      "message": "APKRun は Android アプリからの Web とメールのリンクのみ開きます。"
+    },
+    "integration.linkRejected.tooLong": {
+      "message": "{app} からのリンクは長すぎて開けません。"
+    },
+    "runtime.hostRequirementsNotMet.apfsVolume": {
+      "message": "APKRun のデータを APFS ボリュームに移動してください。"
+    },
+    "runtime.hostRequirementsNotMet.appleSilicon": {
+      "message": "APKRun には Apple silicon の Mac が必要です。"
+    },
+    "runtime.hostRequirementsNotMet.freeDiskSpace": {
+      "message": "{needed} の空き容量を確保してください。"
+    },
+    "runtime.hostRequirementsNotMet.macOSVersion": {
+      "message": "APKRun には macOS 27 以降が必要です。macOS をアップデートしてください。"
+    },
+    "runtime.hostRequirementsNotMet.virtualization": {
+      "message": "この Mac では仮想化を利用できません（APKRun は仮想マシン内では実行できません）。"
+    },
+    "runtime.inputNotBound.guestAgentNotRunning": {
+      "message": "Guest Agent が動作していないため、ポインタとキーボード入力は Android にバインドされていません。"
+    },
+    "runtime.instanceLocked.apkrunDev": {
+      "message": "開発セッション（apkrun dev）が Android を使用中です。",
+      "remediation": "開発セッションを停止してからもう一度お試しください。"
+    },
+    "runtime.instanceLocked.apkrund": {
+      "message": "APKRun のバックグラウンドサービスが Android を使用中です。",
+      "remediation": "APKRun とその Mac アプリを終了するか、APKRUN_HOME を別のフォルダに設定してください。"
+    },
+    "store.archiveLimitExceeded.apkCount": {
+      "message": "このファイルには 256 個を超える APK が含まれています。",
+      "remediation": "開発者からアプリを再度ダウンロードしてください。"
+    },
+    "store.archiveLimitExceeded.compressionRatio": {
+      "message": "このファイルは安全に展開できない方法で圧縮されています。",
+      "remediation": "開発者からアプリを再度ダウンロードしてください。"
+    },
+    "store.archiveLimitExceeded.entryCount": {
+      "message": "このファイルには 512 個を超えるエントリが含まれています。",
+      "remediation": "開発者からアプリを再度ダウンロードしてください。"
+    },
+    "store.archiveLimitExceeded.fileSize": {
+      "message": "内部のファイルが 2 GB を超えています。",
+      "remediation": "開発者からアプリを再度ダウンロードしてください。"
+    },
+    "store.archiveLimitExceeded.totalSize": {
+      "message": "内部のファイルの合計が 8 GB を超えています。",
+      "remediation": "開発者からアプリを再度ダウンロードしてください。"
+    },
+    "store.archiveLimitExceeded.unsafeName": {
+      "message": "このファイルには安全でない名前のエントリが含まれています。",
+      "remediation": "開発者からアプリを再度ダウンロードしてください。"
+    },
+    "store.inconsistentSplits.package": {
+      "message": "{file} は別のアプリのものです。",
+      "remediation": "同一提供元の同一バージョンの APK を追加してください。"
+    },
+    "store.inconsistentSplits.signer": {
+      "message": "{file} は別の開発者が署名しています。",
+      "remediation": "同一提供元の同一バージョンの APK を追加してください。"
+    },
+    "store.inconsistentSplits.versionCode": {
+      "message": "{file} は別バージョンのアプリのものです。",
+      "remediation": "同一提供元の同一バージョンの APK を追加してください。"
+    },
+    "store.unsupportedContainer.appBundle": {
+      "message": "このファイルは Android App Bundle（.aab）で、直接インストールできません。",
+      "remediation": "開発者から .apk または .apks ファイルを入手してください。"
+    },
+    "store.unsupportedContainer.encryptedAPKM": {
+      "message": "この .apkm ファイルは暗号化されています。",
+      "remediation": ".apk など暗号化されていない形式でアプリをダウンロードしてください。"
+    }
+  }
+}

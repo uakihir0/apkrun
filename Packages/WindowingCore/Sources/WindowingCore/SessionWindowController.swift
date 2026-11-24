@@ -17,7 +17,9 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     private let layerView: IOSurfaceLayerView
     private let inputSink: PointerInputSink?
     private let onFocusChanged: (@MainActor (Bool) -> Void)?
-    private let allowsResize: Bool
+    private var allowsResize: Bool
+    /// `window.alwaysOnTop`, applied live except while full screen (OQ-09).
+    private var wantsAlwaysOnTop = false
     private var placeholderView: SessionWindowPlaceholderView?
     private var errorView: SessionWindowErrorView?
     private let source: any FrameSource
@@ -112,6 +114,32 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
         self.placeholderView = placeholderView
     }
 
+    /// Applies `window.alwaysOnTop` live (package-metadata-json.md §3.1).
+    /// A full-screen window ignores the floating level and restores it on
+    /// exit (OQ-09).
+    public func setAlwaysOnTop(_ floating: Bool) {
+        wantsAlwaysOnTop = floating
+        guard !window.styleMask.contains(.fullScreen) else { return }
+        window.level = floating ? .floating : .normal
+    }
+
+    /// Applies `window.resizable` live (§3.1).
+    public func setResizable(_ resizable: Bool) {
+        allowsResize = resizable
+        if resizable {
+            window.styleMask.insert(.resizable)
+        } else {
+            window.styleMask.remove(.resizable)
+        }
+    }
+
+    /// Applies `window.zoom` live (§3.1).
+    public func setZoom(_ zoom: Double) {
+        guard allowsResize else { return }
+        window.contentMinSize = NSSize(width: 320 * zoom, height: 400 * zoom)
+        requestGeometryUpdate(zoom: zoom)
+    }
+
     /// Shows the window, and starts applying the frames of the source.
     public func show() {
         isShown = true
@@ -198,6 +226,12 @@ public final class SessionWindowController: NSObject, NSWindowDelegate {
     }
 
     /// A quiet-period resize also handles fullscreen transitions, which do not always send live-resize callbacks.
+    /// Restores the floating level a full-screen window suppresses (OQ-09).
+    public func windowDidExitFullScreen(_ notification: Notification) {
+        window.level = wantsAlwaysOnTop ? .floating : .normal
+    }
+
+    /// Resizes re-derive the frame relayed to the guest display.
     public func windowDidResize(_ notification: Notification) {
         requestGeometryUpdate()
     }

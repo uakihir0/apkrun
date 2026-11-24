@@ -79,6 +79,20 @@ public struct VerifyWrapperRequest: Codable, Equatable, Sendable {
     }
 }
 
+/// One file of a wrapper bundle's hash list (wrapper.md §9.1).
+public struct WrapperFileHashWire: Codable, Equatable, Sendable {
+    /// The path relative to the bundle root.
+    public let path: String
+    /// The lowercase hex SHA-256 of the file's contents.
+    public let sha256: String
+
+    /// Creates a file hash entry.
+    public init(path: String, sha256: String) {
+        self.path = path
+        self.sha256 = sha256
+    }
+}
+
 /// The `verifyWrapper` reply (runtime-api.md §10.4).
 public struct WrapperVerification: Codable, Equatable, Sendable {
     /// The bundle that was checked.
@@ -105,6 +119,9 @@ public struct WrapperVerification: Codable, Equatable, Sendable {
     public let launcherAPI: APIVersion?
     /// The Android version inside a portable wrapper; `nil` otherwise.
     public let bundledVersion: String?
+    /// The sorted per-file SHA-256 list of the bundle (wrapper.md §9.1);
+    /// present only for a `deep` request.
+    public let fileHashes: [WrapperFileHashWire]?
 
     /// Creates a verification result.
     public init(
@@ -119,7 +136,8 @@ public struct WrapperVerification: Codable, Equatable, Sendable {
         cdhash: String? = nil,
         launcherVersion: String? = nil,
         launcherAPI: APIVersion? = nil,
-        bundledVersion: String? = nil
+        bundledVersion: String? = nil,
+        fileHashes: [WrapperFileHashWire]? = nil
     ) {
         self.bundleURL = bundleURL
         self.bundleID = bundleID
@@ -133,6 +151,7 @@ public struct WrapperVerification: Codable, Equatable, Sendable {
         self.launcherVersion = launcherVersion
         self.launcherAPI = launcherAPI
         self.bundledVersion = bundledVersion
+        self.fileHashes = fileHashes
     }
 }
 
@@ -162,6 +181,85 @@ public struct RuntimeVerifyWrapperControlReply: Codable, Equatable, Sendable {
 
     /// Creates a successful reply.
     public init(result: WrapperVerification) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+// MARK: - placeStagedWrapper (wrapper.md §6.3)
+
+/// Finishes a generation whose destination the daemon cannot reach: the
+/// client moved the staged bundle and reports where it went.
+public struct RuntimePlaceStagedWrapperControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The token from the `wrapper.destinationNotAccessible` error.
+    public let stagingToken: String
+    /// Where the client placed the bundle.
+    public let finalURL: URL
+    /// The client's security bookmark for `finalURL`, base64.
+    public let bookmark: String?
+
+    /// Creates a place-staged-wrapper control request.
+    public init(header: APIRequestHeader, stagingToken: String, finalURL: URL, bookmark: String?) {
+        self.header = header
+        self.stagingToken = stagingToken
+        self.finalURL = finalURL
+        self.bookmark = bookmark
+    }
+}
+
+/// The result or typed error returned by a control place-staged-wrapper request.
+public struct RuntimePlaceStagedWrapperControlReply: Codable, Equatable, Sendable {
+    /// The registered wrapper, present on success.
+    public let result: WrapperInfo?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: WrapperInfo) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+// MARK: - wrapperInfo (runtime-api.md §10.2)
+
+/// Asks the daemon for the registry row of one package's wrapper.
+public struct RuntimeWrapperInfoControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The installed package whose wrapper to describe.
+    public let packageID: RuntimePackageID
+
+    /// Creates a wrapper-info control request.
+    public init(header: APIRequestHeader, packageID: RuntimePackageID) {
+        self.header = header
+        self.packageID = packageID
+    }
+}
+
+/// The result or typed error returned by a control wrapper-info request.
+public struct RuntimeWrapperInfoControlReply: Codable, Equatable, Sendable {
+    /// The wrapper record, present on success.
+    public let result: WrapperInfo?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: WrapperInfo) {
         self.result = result
         error = nil
     }
@@ -439,6 +537,172 @@ public struct RuntimeCreateWrapperControlRequest: Codable, Equatable, Sendable {
 
 /// The operation handle or typed error returned by `createWrapper`.
 public struct RuntimeCreateWrapperControlReply: Codable, Equatable, Sendable {
+    /// The operation handle, present on acceptance.
+    public let result: OperationHandle?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates an accepted reply.
+    public init(result: OperationHandle) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// The `buildDistributionWrapper` request (runtime-api.md §10.8): a
+/// Developer ID signed, optionally notarized portable wrapper written to
+/// `outputDirectory`. It is never placed or registered.
+public struct DistributionWrapperRequest: Codable, Equatable, Sendable {
+    /// The installed package to wrap.
+    public var packageID: RuntimePackageID
+    /// The directory the `<name>.app` and `<name>.zip` products land in.
+    public var outputDirectory: URL
+    /// A file name that overrides wrapper.md §4.3 (without `.app`).
+    public var fileName: String?
+    /// The display name; `nil` = the package's name.
+    public var displayName: String?
+    /// The icon source; `nil` = the Android icon.
+    public var icon: WrapperIconChoice?
+    /// The Developer ID signing identity, e.g.
+    /// `Developer ID Application: Name (TEAMID)`.
+    public var identity: String
+    /// Whether to notarize and staple the wrapper.
+    public var notarize: Bool
+    /// The `notarytool` keychain profile; required with `notarize`.
+    public var keychainProfile: String?
+
+    /// The client confirmed the APK may be redistributed; `false` fails
+    /// the request with `runtime.malformedRequest` (wrapper.md §11).
+    public var redistributionConfirmed: Bool
+
+    /// Creates a distribution-wrapper request.
+    public init(
+        packageID: RuntimePackageID,
+        outputDirectory: URL,
+        fileName: String? = nil,
+        displayName: String? = nil,
+        icon: WrapperIconChoice? = nil,
+        identity: String,
+        notarize: Bool = false,
+        keychainProfile: String? = nil,
+        redistributionConfirmed: Bool
+    ) {
+        self.packageID = packageID
+        self.outputDirectory = outputDirectory
+        self.fileName = fileName
+        self.displayName = displayName
+        self.icon = icon
+        self.identity = identity
+        self.notarize = notarize
+        self.keychainProfile = keychainProfile
+        self.redistributionConfirmed = redistributionConfirmed
+    }
+}
+
+/// The finished distribution products (runtime-api.md §10.8).
+public struct DistributionWrapperResult: Codable, Equatable, Sendable {
+    /// The delivered `<name>.app`.
+    public var appURL: URL
+    /// The delivered `<name>.zip` (the stapled archive when notarized).
+    public var zipURL: URL
+    /// The deterministic bundle ID.
+    public var bundleID: String
+    /// The 40-hex code directory hash of the Developer ID signature.
+    public var cdhash: String
+    /// The team ID of the signing identity.
+    public var teamID: String?
+    /// Whether the bundle was notarized and stapled.
+    public var notarized: Bool
+    /// The notary submission ID, only when `notarized`.
+    public var submissionID: String?
+    /// The `spctl` assessment line, only when `notarized`.
+    public var assessment: String?
+
+    /// Creates a distribution result.
+    public init(
+        appURL: URL,
+        zipURL: URL,
+        bundleID: String,
+        cdhash: String,
+        teamID: String? = nil,
+        notarized: Bool,
+        submissionID: String? = nil,
+        assessment: String? = nil
+    ) {
+        self.appURL = appURL
+        self.zipURL = zipURL
+        self.bundleID = bundleID
+        self.cdhash = cdhash
+        self.teamID = teamID
+        self.notarized = notarized
+        self.submissionID = submissionID
+        self.assessment = assessment
+    }
+}
+
+/// Starts a `distributionWrapper` operation on the control endpoint.
+public struct RuntimeBuildDistributionWrapperControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// What to build.
+    public let request: DistributionWrapperRequest
+
+    /// Creates a distribution-wrapper control request.
+    public init(header: APIRequestHeader, request: DistributionWrapperRequest) {
+        self.header = header
+        self.request = request
+    }
+}
+
+/// The operation handle or typed error returned by
+/// `buildDistributionWrapper`.
+public struct RuntimeBuildDistributionWrapperControlReply: Codable, Equatable, Sendable {
+    /// The operation handle, present on acceptance.
+    public let result: OperationHandle?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates an accepted reply.
+    public init(result: OperationHandle) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// A launcher's `importBootstrap` control request (runtime-api.md §10.2):
+/// its bundle ID resolves the approved registry entry, `bootstrapJSON` is the
+/// `Contents/Resources/bootstrap/bootstrap.json` bytes, and the APK files
+/// ride alongside as `FileHandle`s (wrapper-json.md §3.4).
+public struct RuntimeImportBootstrapControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The requesting wrapper's bundle ID.
+    public let bundleID: String
+    /// The bootstrap document bytes.
+    public let bootstrapJSON: Data
+
+    /// Creates an import-bootstrap control request.
+    public init(header: APIRequestHeader, bundleID: String, bootstrapJSON: Data) {
+        self.header = header
+        self.bundleID = bundleID
+        self.bootstrapJSON = bootstrapJSON
+    }
+}
+
+/// The operation handle or typed error returned by `importBootstrap`.
+public struct RuntimeImportBootstrapControlReply: Codable, Equatable, Sendable {
     /// The operation handle, present on acceptance.
     public let result: OperationHandle?
     /// The structured failure, present on failure.
@@ -972,5 +1236,309 @@ public struct RuntimeApprovalBrokerReply: Codable, Equatable, Sendable {
     public init(error: RuntimeWireError) {
         result = nil
         self.error = error
+    }
+}
+
+// MARK: - wrapper lifecycle (runtime-api.md §10.5, wrapper.md §9)
+
+/// One row of `listWrappers`: the registry summary plus the status the
+/// validator computed (wrapper.md §9.1). The status is never stored.
+public struct WrapperListEntryWire: Codable, Equatable, Sendable {
+    /// The registry row.
+    public var summary: WrapperSummary
+    /// The validator's state, or nil when validation could not run.
+    public var state: WrapperState?
+    /// Why the wrapper wants a refresh (check 6 of §9.1).
+    public var refreshReasons: [WrapperRefreshReason]
+
+    /// Creates a list entry.
+    public init(
+        summary: WrapperSummary,
+        state: WrapperState? = nil,
+        refreshReasons: [WrapperRefreshReason] = []
+    ) {
+        self.summary = summary
+        self.state = state
+        self.refreshReasons = refreshReasons
+    }
+}
+
+/// A `listWrappers` control request; has no parameters.
+public struct RuntimeWrapperListControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+
+    /// Creates a list-wrappers control request.
+    public init(header: APIRequestHeader) {
+        self.header = header
+    }
+}
+
+/// The result or typed error returned by a control list-wrappers request.
+public struct RuntimeWrapperListControlReply: Codable, Equatable, Sendable {
+    /// The wrapper rows, present on success.
+    public let result: [WrapperListEntryWire]?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: [WrapperListEntryWire]) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// A `removeWrapper` control request (wrapper.md §9.5): drops the registry
+/// entry, and with `trash` moves the bundle to the Trash first.
+public struct RuntimeRemoveWrapperControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// The installed package whose wrapper to remove.
+    public let packageID: RuntimePackageID
+    /// Move the bundle to the Trash before dropping the entry.
+    public let trash: Bool
+
+    /// Creates a remove-wrapper control request.
+    public init(header: APIRequestHeader, packageID: RuntimePackageID, trash: Bool) {
+        self.header = header
+        self.packageID = packageID
+        self.trash = trash
+    }
+}
+
+/// The result or typed error returned by a control remove-wrapper request.
+public struct RuntimeRemoveWrapperControlReply: Codable, Equatable, Sendable {
+    /// Whether an entry was removed, present on success.
+    public let result: Bool?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: Bool) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// A `rescanWrappers` control request (wrapper.md §7.2): lists, or with
+/// `register` also registers, the valid `APKRunPackageID` bundles in
+/// `~/Applications` and `/Applications`.
+public struct RuntimeRescanWrappersControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// Register the found bundles, not just list them.
+    public let register: Bool
+
+    /// Creates a rescan-wrappers control request.
+    public init(header: APIRequestHeader, register: Bool) {
+        self.header = header
+        self.register = register
+    }
+}
+
+/// The result or typed error returned by a control rescan-wrappers request.
+public struct RuntimeRescanWrappersControlReply: Codable, Equatable, Sendable {
+    /// The bundle paths found and registered, present on success.
+    public let result: RescanWrappersResult?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: RescanWrappersResult) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// The `rescanWrappers` outcome: the bundle paths the scan found, and the
+/// ones `register = true` newly registered.
+public struct RescanWrappersResult: Codable, Equatable, Sendable {
+    /// Every wrapper bundle found, as a path.
+    public var found: [String]
+    /// The bundles that were registered by this call.
+    public var registered: [String]
+
+    /// Creates a rescan result.
+    public init(found: [String], registered: [String]) {
+        self.found = found
+        self.registered = registered
+    }
+}
+
+// MARK: - wrapper refresh (runtime-api.md §10.5, wrapper.md §9.3)
+
+/// What a refresh changes (wrapper.md §9.3): name, icon, or launcher.
+public struct WrapperRefreshWire: Codable, Equatable, Sendable {
+    /// The new display name; `""` resets it to the package name.
+    public var displayName: String?
+    /// A replacement icon arrives as the call's file handle.
+    public var icon: Bool
+    /// Restore the current Android icon, dropping a custom icon file.
+    public var androidIcon: Bool
+    /// Only the launcher executable is refreshed.
+    public var launcherOnly: Bool
+    /// Makes the package local (wrapper.md §10.2) — #90 rejects it for now.
+    public var makeLocal: Bool
+    /// Answers "Quit ‹App› to update its Mac app?" with yes.
+    public var closeRunningApp: Bool
+
+    /// Creates the refresh options.
+    public init(
+        displayName: String? = nil,
+        icon: Bool = false,
+        androidIcon: Bool = false,
+        launcherOnly: Bool = false,
+        makeLocal: Bool = false,
+        closeRunningApp: Bool = false
+    ) {
+        self.displayName = displayName
+        self.icon = icon
+        self.androidIcon = androidIcon
+        self.launcherOnly = launcherOnly
+        self.makeLocal = makeLocal
+        self.closeRunningApp = closeRunningApp
+    }
+}
+
+/// The `refreshWrapper` request (runtime-api.md §10.5).
+public struct RuntimeRefreshWrapperControlRequest: Codable, Equatable, Sendable {
+    /// The request header.
+    public var header: APIRequestHeader
+    /// The package whose wrapper refreshes.
+    public var packageID: RuntimePackageID
+    /// What the refresh changes.
+    public var change: WrapperRefreshWire
+
+    /// Creates the request.
+    public init(
+        header: APIRequestHeader,
+        packageID: RuntimePackageID,
+        change: WrapperRefreshWire
+    ) {
+        self.header = header
+        self.packageID = packageID
+        self.change = change
+    }
+}
+
+/// The `refreshWrapper` reply: an operation handle or a typed error.
+public struct RuntimeRefreshWrapperControlReply: Codable, Equatable, Sendable {
+    /// The started operation.
+    public var result: OperationHandle?
+    /// The rejection.
+    public var error: RuntimeWireError?
+
+    /// Creates a success reply.
+    public init(result: OperationHandle) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a rejection reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// The `refreshAllWrappers` selection (runtime-api.md §10.5).
+public enum RefreshAllScope: String, Codable, Sendable {
+    /// Only wrappers with a refresh reason.
+    case needingRefresh
+    /// Every registered wrapper.
+    case all
+}
+
+/// The `refreshAllWrappers` request (runtime-api.md §10.5).
+public struct RuntimeRefreshAllWrappersControlRequest: Codable, Equatable, Sendable {
+    /// The request header.
+    public var header: APIRequestHeader
+    /// Which wrappers are selected.
+    public var scope: RefreshAllScope
+    /// Only refresh launcher executables.
+    public var launcherOnly: Bool
+
+    /// Creates the request.
+    public init(
+        header: APIRequestHeader,
+        scope: RefreshAllScope,
+        launcherOnly: Bool
+    ) {
+        self.header = header
+        self.scope = scope
+        self.launcherOnly = launcherOnly
+    }
+}
+
+/// The `refreshAllWrappers` reply: an operation handle or a typed error.
+public struct RuntimeRefreshAllWrappersControlReply: Codable, Equatable, Sendable {
+    /// The started operation.
+    public var result: OperationHandle?
+    /// The rejection.
+    public var error: RuntimeWireError?
+
+    /// Creates a success reply.
+    public init(result: OperationHandle) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a rejection reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// One refresh failure inside a `refreshAllWrappers` batch.
+public struct WrapperBatchFailure: Codable, Equatable, Sendable {
+    /// The package whose refresh failed.
+    public var packageID: RuntimePackageID
+    /// The failure.
+    public var error: RuntimeWireError
+
+    /// Creates the failure record.
+    public init(packageID: RuntimePackageID, error: RuntimeWireError) {
+        self.packageID = packageID
+        self.error = error
+    }
+}
+
+/// The `refreshAllWrappers` outcome (runtime-api.md §10.5).
+public struct WrapperBatchResult: Codable, Equatable, Sendable {
+    /// The wrappers that refreshed successfully.
+    public var refreshed: [RuntimePackageID]
+    /// The wrappers skipped because their app is running.
+    public var skippedRunning: [RuntimePackageID]
+    /// The wrappers whose refresh failed.
+    public var failed: [WrapperBatchFailure]
+
+    /// Creates the batch result.
+    public init(
+        refreshed: [RuntimePackageID],
+        skippedRunning: [RuntimePackageID],
+        failed: [WrapperBatchFailure]
+    ) {
+        self.refreshed = refreshed
+        self.skippedRunning = skippedRunning
+        self.failed = failed
     }
 }

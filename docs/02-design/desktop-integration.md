@@ -122,7 +122,7 @@ client → server
   clipboardWritten(changeCount, digest)             §4.3 (after writing a guest clip to NSPasteboard)
   importFiles([FileHandle], [ImportFileInfo], ImportTarget) → ImportResult     §6.2
   acceptExport(offerID, FileHandle?)                §6.3 (nil = cancelled)
-  resolveLinkPrompt(promptID, LinkChoice)           §7.2
+  resolveLinkPrompt(promptID, LinkChoice, remember)  §7.2
 server → client (events)
   clipboardFromGuest(ClipItem)                      §4.3 (only to the key window's session)
   exportOffered(ExportOffer)                        §6.3
@@ -408,7 +408,8 @@ A subfolder of the home folder, such as `~/Documents` or `~/Downloads`, can be a
 OpenUrlOnHost → LinkForwarder
   validate: URLComponents parse; scheme http | https | mailto; length ≤ 8 KiB; http(s) needs a host
     anything else → ResolveUrl(request_id, DROP), counted
-  policy: the app's window must be key, or have had user input in the last 5 s (links opened by background work are dropped)
+  policy: the app's window must be key (links opened by background work are dropped)
+          the "input within 5 s" alternative follows when the input path reports last activity
   rate: ≤ 3 per 10 s per package; beyond that DROP
   integrations.links:
     mac     → WorkspaceOpener.open(url) (default browser or mail app); ResolveUrl(OPENED_ON_HOST)

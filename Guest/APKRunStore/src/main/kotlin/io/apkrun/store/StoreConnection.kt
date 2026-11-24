@@ -93,6 +93,7 @@ class StoreConnection(
             return
         }
         daemon.sessions.track(socket)
+        daemon.transfers.attach(writer)
         try {
             while (true) {
                 val envelope = reader.next()
@@ -101,9 +102,16 @@ class StoreConnection(
                         "the body is not allowed on the artifact channel"
                     )
                 }
-                daemon.install.receive(envelope.bulk) { reply -> writer.send { it.setBulk(reply) } }
+                if (envelope.bulk.hasAck()) {
+                    daemon.transfers.receiveAck(envelope.bulk)
+                } else {
+                    daemon.install.receive(envelope.bulk) { reply ->
+                        writer.send { it.setBulk(reply) }
+                    }
+                }
             }
         } finally {
+            daemon.transfers.detach(writer)
             daemon.sessions.untrack(socket)
         }
     }
@@ -202,6 +210,8 @@ class StoreConnection(
                 GuestCapability.STORE_METADATA,
                 GuestCapability.STORE_OWNERSHIP,
                 GuestCapability.STORE_CONSTRAINTS,
+                GuestCapability.STORE_ROLLBACK,
+                GuestCapability.STORE_ICON,
             )
     }
 }

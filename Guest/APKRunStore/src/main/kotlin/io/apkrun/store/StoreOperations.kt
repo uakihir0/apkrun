@@ -3,9 +3,13 @@ package io.apkrun.store
 import io.apkrun.guest.protocol.v1.BeginInstallResult
 import io.apkrun.guest.protocol.v1.CheckInstallConstraints
 import io.apkrun.guest.protocol.v1.ConstraintsResult
+import io.apkrun.guest.protocol.v1.IconResult
 import io.apkrun.guest.protocol.v1.InstallRequest
 import io.apkrun.guest.protocol.v1.ListManagedPackages
 import io.apkrun.guest.protocol.v1.Pong
+import io.apkrun.guest.protocol.v1.RenderIcon
+import io.apkrun.guest.protocol.v1.RollbackPackage
+import io.apkrun.guest.protocol.v1.RollbackResult
 import io.apkrun.guest.protocol.v1.StorePackageInfo
 import io.apkrun.guest.protocol.v1.StorePackageList
 import io.apkrun.guest.protocol.v1.Uninstall
@@ -41,9 +45,21 @@ interface StoreOperations {
     fun relinquishUpdateOwnership(packageName: String)
 
     /**
+     * Commits a RollbackManager rollback matching the package and both versions
+     * (store.rollback.v1). `NOT_AVAILABLE` is a result, not a failure.
+     */
+    fun rollbackPackage(request: RollbackPackage): RollbackResult
+
+    /**
      * Answers whether Android's install constraints hold now (store.constraints.v1). A hint only.
      */
     suspend fun checkInstallConstraints(request: CheckInstallConstraints): ConstraintsResult
+
+    /**
+     * Renders the package's icon layers and streams them on the artifact connection (store.icon.v1,
+     * wrapper.md §8.1).
+     */
+    fun renderIcon(request: RenderIcon): IconResult
 }
 
 /** The device implementation of [StoreOperations]: the services of [StoreDaemon]. */
@@ -51,7 +67,9 @@ class DeviceStoreOperations(
     private val install: InstallService,
     private val ownership: OwnershipService,
     private val metadata: MetadataService,
+    private val rollback: RollbackService,
     private val constraints: ConstraintsService,
+    private val icons: IconService,
 ) : StoreOperations {
     override fun beginInstall(request: InstallRequest): BeginInstallResult =
         install.beginInstall(request)
@@ -72,7 +90,16 @@ class DeviceStoreOperations(
     override fun relinquishUpdateOwnership(packageName: String) =
         ownership.relinquishUpdateOwnership(packageName)
 
+    override fun rollbackPackage(request: RollbackPackage): RollbackResult =
+        rollback.rollbackPackage(
+            request.`package`,
+            request.fromVersionCode,
+            request.toVersionCode,
+        )
+
     override suspend fun checkInstallConstraints(
         request: CheckInstallConstraints
     ): ConstraintsResult = constraints.checkInstallConstraints(request)
+
+    override fun renderIcon(request: RenderIcon): IconResult = icons.renderIcon(request)
 }

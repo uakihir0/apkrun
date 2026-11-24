@@ -108,6 +108,15 @@ def parse_ed25519_public_key(data):
                 return key
     return None
 
+def parse_sparkle_private_key(data):
+    """A Sparkle `generate_keys` private key: base64 of the 64-byte ed25519 key."""
+    try:
+        decoded = base64.b64decode(data.decode("ascii").strip(), validate=True)
+    except (ValueError, binascii.Error, UnicodeDecodeError):
+        return None
+    return decoded if len(decoded) == 64 else None
+
+
 def parse_pkcs8_private_key(data):
     try:
         text = data.decode("ascii")
@@ -125,6 +134,21 @@ def parse_pkcs8_private_key(data):
     if len(decoded) < 16 or decoded[0] != 0x30 or (rsa_oid not in decoded and ed25519_oid not in decoded):
         return None
     return decoded
+
+
+def parse_raw_ed25519_private_key(data):
+    try:
+        text = data.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    stripped = "".join(line.strip() for line in text.splitlines())
+    try:
+        decoded = base64.b64decode(stripped, validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    if len(decoded) == 64:
+        return decoded
+    return None
 
 def read_der_value(data, offset, tag):
     value = read_der_any_value(data, offset)
@@ -447,6 +471,8 @@ def add_key_tokens(path):
         rsa_private_key = parse_pkcs1_rsa_private_key(data)
         if private_key is None and rsa_private_key is not None:
             private_key = rsa_private_key[0]
+        if private_key is None:
+            private_key = parse_raw_ed25519_private_key(data)
         avb_public_key = parse_avb_public_key(data) if path.suffix.lower() == ".avbpubkey" else None
 
     binary_tokens = set()
@@ -457,7 +483,11 @@ def add_key_tokens(path):
     elif unsupported is None and avb_public_key is not None:
         add_material_tokens(tokens, binary_tokens, avb_public_key)
     elif unsupported is None:
-        unsupported = f"{path}: unrecognized test signing fixture format"
+        sparkle_key = parse_sparkle_private_key(data)
+        if sparkle_key is not None:
+            add_material_tokens(tokens, binary_tokens, sparkle_key)
+        else:
+            unsupported = f"{path}: unrecognized test signing fixture format"
     if rsa_private_key is not None:
         for private_component in rsa_private_key[1]:
             tokens.add(private_component.hex())

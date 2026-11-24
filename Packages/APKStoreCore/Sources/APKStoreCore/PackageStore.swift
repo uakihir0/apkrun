@@ -134,7 +134,24 @@ public enum PackageStoreFailure: Error, Equatable, Sendable {
     case packageInUse(PackageID)
     /// The package has no staged update to install.
     case stagedUpdateMissing
+    /// A `settings.json` patch named a key outside package-metadata-json.md §3.1.
+    case unknownSettingKey(String)
+    /// A `settings.json` patch value is outside the key's §3.1 range.
+    case invalidSettingValue(key: String, allowed: String)
+    /// No rollback can run (package-store.md §7.3).
+    case rollbackUnavailable(RollbackUnavailableReason)
+    /// Android refused or failed the rollback commit.
+    case rollbackFailed(detail: String)
     case io
+}
+
+/// Why `rollback` could not start.
+public enum RollbackUnavailableReason: String, Codable, Sendable, Equatable {
+    /// `previous/` is missing, unreadable, or not older than `current/`.
+    case noPreviousSet
+    /// The channel offers no rollback mechanism and the confirmed
+    /// data-loss fallback was not allowed (package-store.md §7.3).
+    case noMechanism
 }
 
 private struct GuestUninstallBoundaryFailure: Error, @unchecked Sendable {
@@ -143,6 +160,10 @@ private struct GuestUninstallBoundaryFailure: Error, @unchecked Sendable {
 
 private struct GuestInstallBoundaryFailure: Error, @unchecked Sendable {
     let underlying: any Error
+}
+
+private final class BoxedFlag: @unchecked Sendable {
+    var boxed = false
 }
 
 private final class GuestInstallBoundaryState: @unchecked Sendable {
@@ -361,6 +382,9 @@ public actor PackageStore {
         var createdAt: Date
         var facts: [PersistedAPKFacts]
         var origin: ImportOrigin?
+        /// Set for `importBootstrap`: the new record's `source.kind`
+        /// `wrapperBootstrap` and `source.wrapperBundleId` (wrapper-json.md §3.3).
+        var wrapperBundleId: String?
     }
 
     private struct PackageIDEnvelope: Decodable {
@@ -469,6 +493,15 @@ public actor PackageStore {
     /// them into regular tickets. Maps the ticket to its package's directory.
     private var downloadTickets: [UUID: (packageID: PackageID, directory: String)] = [:]
     private var transactions: [String: JournalTransaction] = [:]
+    /// Called when a rendered icon's set digest changed (package-store.md §10.2).
+    /// RuntimeHost publishes `PackageChange.iconChanged` through it.
+    public var iconChangeHandler: (@Sendable (PackageID) async -> Void)?
+
+    /// Sets the rendered-icon change sink (package-store.md §10.2).
+    public func setIconChangeHandler(_ handler: (@Sendable (PackageID) async -> Void)?) {
+        iconChangeHandler = handler
+    }
+
     private var operationsInProgress = Set<PackageID>()
     private var sequence: Int64 = 0
     private var opened = false
@@ -532,7 +565,8 @@ public actor PackageStore {
     /// ticket refers only to the private incoming set, so callers may release their source files.
     public func importPackage(
         files: [URL],
-        origin: ImportOrigin? = nil
+        origin: ImportOrigin? = nil,
+        bootstrapBundleID: String? = nil
     ) async throws -> PackageImportPreview {
         try requireWritable()
         let importsLock = try await acquireLock(at: importsLockURL)
@@ -732,7 +766,8 @@ public actor PackageStore {
             preview: preview,
             createdAt: clock(),
             facts: facts.map(PersistedAPKFacts.init),
-            origin: origin
+            origin: origin,
+            wrapperBundleId: bootstrapBundleID
         )
         do {
             try writeJSON(manifest, to: incoming.appendingPathComponent("ticket.json"))
@@ -1020,7 +1055,8 @@ public actor PackageStore {
             preview: preview,
             createdAt: clock(),
             facts: facts.map(PersistedAPKFacts.init),
-            origin: nil
+            origin: nil,
+            wrapperBundleId: nil
         )
         do {
             try writeJSON(manifest, to: incoming.appendingPathComponent("ticket.json"))
@@ -1615,7 +1651,307 @@ public actor PackageStore {
         records[packageID] = record
         warnOnMissingUpdateOwner(record)
         try purgeTrash()
+        try? await refreshRenderedIcon(packageID, renderedForVersionCode: record.versionCode)
         return record
+    }
+
+    /// Restores the `previous/` set after a failed health check or an explicit
+    /// user request (package-store.md §5.2 `rollback`, §7.3).
+    ///
+    /// Mechanisms are tried in §7.3 order: RollbackManager when the channel
+    /// advertises `.rollback`, downgrade reinstall on `.downgradeReinstall`,
+    /// and — only with `allowDataLoss`, which callers may set only after the
+    /// user confirmed — uninstall plus a first install of `previous/`. Without
+    /// a mechanism the transaction is not started and
+    /// `rollbackUnavailable(.noMechanism)` is thrown; a background rollback
+    /// therefore never erases app data.
+    public func rollback(
+        packageID: PackageID,
+        allowDataLoss: Bool = false,
+        reason: String
+    ) async throws -> PackageRecord {
+        try requireWritable()
+        guard let runtimeAccess else { throw PackageStoreFailure.runtimeUnavailable }
+        guard operationsInProgress.insert(packageID).inserted else {
+            throw PackageStoreFailure.operationInProgress
+        }
+        defer { operationsInProgress.remove(packageID) }
+
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadJournalState()
+        guard !isReadOnly else { throw PackageStoreFailure.journalUnreadable }
+        try reloadRecordsPreservingImportDirectories()
+        if let detail = unreadableRecords[packageID] {
+            throw PackageStoreFailure.metadataUnreadable(packageID, detail: detail)
+        }
+        guard let existing = records[packageID], existing.state == .installed else {
+            throw PackageStoreFailure.packageNotFound
+        }
+
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        let packageDirectory = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
+        let current = packageDirectory.appendingPathComponent("current", isDirectory: true)
+        let previous = packageDirectory.appendingPathComponent("previous", isDirectory: true)
+        guard let previousSet = try artifactSet(in: previous),
+            previousSet.packageID == packageID,
+            let previousDigest = stagedSetDigest(in: previous)
+        else {
+            throw PackageStoreFailure.rollbackUnavailable(.noPreviousSet)
+        }
+        guard previousSet.versionCode < existing.versionCode else {
+            throw PackageStoreFailure.rollbackUnavailable(.noPreviousSet)
+        }
+
+        let transaction = Self.makeTransactionID(at: clock())
+        let startedAt = clock()
+        let operationID = UUID()
+        try append(
+            JournalEntry(
+                v: 1,
+                seq: 0,
+                txn: transaction,
+                at: startedAt,
+                op: "begin",
+                kind: "rollback",
+                package: packageID.rawValue,
+                dir: directory,
+                from: existing.versionCode,
+                to: previousSet.versionCode,
+                setDigest: previousDigest.rawValue,
+                ticket: nil,
+                keepData: allowDataLoss,
+                step: nil,
+                reason: reason
+            )
+        )
+        try injectFault(kind: "rollback", step: "begin")
+        try appendStep(transaction, kind: "rollback", step: "guestRollbackRequested")
+        try injectFault(kind: "rollback", step: "guestRollbackRequested")
+
+        let boundaryState = GuestInstallBoundaryState()
+        let needsDataLossFallback = BoxedFlag()
+        var info: StorePackageInfo?
+        do {
+            info = try await runtimeAccess.withStoreAgent(operationID) { channel in
+                boundaryState.markPassed()
+                if channel.capabilities.contains(.rollback) {
+                    let result = try await channel.rollback(
+                        packageID,
+                        from: existing.versionCode,
+                        to: previousSet.versionCode
+                    )
+                    switch result {
+                    case .rolledBack:
+                        return try await channel.packageInfo(packageID)
+                    case .unavailable:
+                        break
+                    case .failed(let detail):
+                        throw PackageStoreFailure.rollbackFailed(detail: detail)
+                    }
+                }
+                if channel.capabilities.contains(.downgradeReinstall) {
+                    return try await channel.install(
+                        StoreInstallRequest(
+                            packageID: packageID,
+                            versionCode: previousSet.versionCode,
+                            allowDowngrade: true,
+                            mode: .reinstall,
+                            signerDigests: previousSet.signerDigests
+                        ),
+                        files: Self.artifactURLs(in: previous, set: previousSet)
+                    )
+                }
+                if allowDataLoss {
+                    needsDataLossFallback.boxed = true
+                    return nil
+                }
+                return nil
+            }
+            if info == nil && needsDataLossFallback.boxed {
+                // Confirmed fallback (§7.3): the only path that deletes app
+                // data, journaled so post-boot recovery can finish it.
+                try appendStep(transaction, kind: "rollback", step: "guestUninstallRequested")
+                try injectFault(kind: "rollback", step: "guestUninstallRequested")
+                info = try await runtimeAccess.withStoreAgent(operationID) { channel in
+                    try await channel.uninstall(packageID, keepData: false)
+                    return try await channel.install(
+                        StoreInstallRequest(
+                            packageID: packageID,
+                            versionCode: previousSet.versionCode,
+                            signerDigests: previousSet.signerDigests
+                        ),
+                        files: Self.artifactURLs(in: previous, set: previousSet)
+                    )
+                }
+            }
+            if info == nil {
+                try appendAbort(transaction, reason: "rollbackUnavailable")
+                throw PackageStoreFailure.rollbackUnavailable(.noMechanism)
+            }
+        } catch PackageStoreFailure.rollbackUnavailable {
+            throw PackageStoreFailure.rollbackUnavailable(.noMechanism)
+        } catch {
+            guard boundaryState.didPass() else {
+                try appendAbort(transaction, reason: "guestRollbackNotStarted")
+                throw error
+            }
+            // The rollback may have committed even though the reply was lost.
+            let committed = try await queryPackage(packageID, through: runtimeAccess)
+            guard committed?.versionCode == previousSet.versionCode else {
+                if needsDataLossFallback.boxed, committed == nil {
+                    // §7.3 data-loss fallback part-way: the guest uninstall
+                    // ran but the previous-set reinstall did not, so Android
+                    // has no package. Commit the journal with the file slots
+                    // and record consistent — the restored previous set in
+                    // `current/` no longer matches Android — then surface the
+                    // failure so the caller marks the package broken.
+                    try appendStep(
+                        transaction, kind: "rollback", step: "guestUninstalled")
+                    try finishRollbackRestore(
+                        transaction: transaction,
+                        failedVersion: existing.versionCode,
+                        previousDigest: previousDigest,
+                        packageDirectory: packageDirectory
+                    )
+                    try appendStep(
+                        transaction, kind: "rollback", step: "filesRestored")
+                    var lostRecord = recordAfterRollback(
+                        existing,
+                        info: StorePackageInfo(
+                            packageID: packageID,
+                            displayName: existing.displayName,
+                            versionCode: previousSet.versionCode,
+                            enabled: true,
+                            targetSDK: existing.android.targetSdk,
+                            minSDK: existing.android.minSdk
+                        ),
+                        set: previousSet,
+                        digest: previousDigest,
+                        operationID: operationID,
+                        startedAt: startedAt
+                    )
+                    lostRecord.artifacts.currentMatchesAndroid = false
+                    try writeRecord(lostRecord, directory: directory)
+                    try appendStep(
+                        transaction, kind: "rollback", step: "metadataWritten")
+                    try appendTerminal(transaction, op: "commit")
+                    records[packageID] = lostRecord
+                    try purgeTrash()
+                    throw PackageStoreFailure.rollbackFailed(
+                        detail:
+                            "the fallback reinstall never finished; the package is uninstalled in Android")
+                }
+                try appendAbort(transaction, reason: "guestRollbackFailed")
+                throw error
+            }
+            info = committed
+        }
+        guard let info, info.versionCode == previousSet.versionCode else {
+            try appendAbort(transaction, reason: "guestVersionMismatch")
+            throw PackageStoreFailure.guestVersionMismatch
+        }
+        try appendStep(
+            transaction, kind: "rollback", step: "guestRolledBack",
+            versionCode: previousSet.versionCode)
+        try injectFault(kind: "rollback", step: "guestRolledBack")
+
+        try finishRollbackRestore(
+            transaction: transaction,
+            failedVersion: existing.versionCode,
+            previousDigest: previousDigest,
+            packageDirectory: packageDirectory
+        )
+        try appendStep(transaction, kind: "rollback", step: "filesRestored")
+        try injectFault(kind: "rollback", step: "filesRestored")
+
+        let record = recordAfterRollback(
+            existing,
+            info: info,
+            set: previousSet,
+            digest: previousDigest,
+            operationID: operationID,
+            startedAt: startedAt
+        )
+        try writeRecord(record, directory: directory)
+        try appendStep(transaction, kind: "rollback", step: "metadataWritten")
+        try injectFault(kind: "rollback", step: "metadataWritten")
+        try appendTerminal(transaction, op: "commit")
+        records[packageID] = record
+        try purgeTrash()
+        try? await refreshRenderedIcon(packageID, renderedForVersionCode: record.versionCode)
+        return record
+    }
+
+    /// The pixel size `RenderIcon` is asked for (guest-protocol.md §11.1).
+    static let renderedIconSizePx = 1536
+
+    /// The `icon/` directory of a managed package (package-store.md §10.2),
+    /// or `nil` for a package the store does not manage.
+    public func iconDirectory(for packageID: PackageID) -> URL? {
+        guard
+            let directory = directories[packageID]
+                ?? (records[packageID] != nil ? directoryName(for: packageID) : nil)
+        else { return nil }
+        return
+            packagesDirectory
+            .appendingPathComponent(directory, isDirectory: true)
+            .appendingPathComponent("icon", isDirectory: true)
+    }
+
+    /// The `icon.json` manifest written for a rendered icon set, if present.
+    public func iconManifest(for packageID: PackageID) -> PackageIconManifest? {
+        guard let iconDirectory = iconDirectory(for: packageID) else { return nil }
+        let manifestURL = iconDirectory.appendingPathComponent("icon.json")
+        guard let data = fileManager.contents(atPath: manifestURL.path) else { return nil }
+        return try? JSONDecoder().decode(PackageIconManifest.self, from: data)
+    }
+
+    /// Re-renders the package's icon through the channel and rewrites `icon/`
+    /// (package-store.md §10.2). A changed set digest calls `iconChangeHandler`.
+    /// Returns whether the rendered set differs from the stored one; callers
+    /// wrap this in `try?` because §10.2 makes rendering non-fatal.
+    @discardableResult
+    public func refreshRenderedIcon(
+        _ packageID: PackageID,
+        renderedForVersionCode: VersionCode
+    ) async throws -> Bool {
+        guard let runtimeAccess else { return false }
+        let icon = try await runtimeAccess.withStoreAgent(UUID()) { channel in
+            guard channel.capabilities.contains(.icons) else { return StoreIcon?.none }
+            return try await channel.renderIcon(packageID, sizePx: Self.renderedIconSizePx)
+        }
+        guard let icon, let iconDirectory = iconDirectory(for: packageID) else { return false }
+        let ordered = icon.layers.sorted { $0.role.rawValue < $1.role.rawValue }
+        var digestInput = Data()
+        for layer in ordered {
+            digestInput.append(Data(layer.role.rawValue.utf8))
+            digestInput.append(layer.png)
+        }
+        let setDigest = SHA256Digest(data: digestInput)
+        guard setDigest != iconManifest(for: packageID)?.setDigest else { return false }
+
+        try fileManager.createDirectory(at: iconDirectory, withIntermediateDirectories: true)
+        for role in StoreIconRole.allCases {
+            let layerURL = iconDirectory.appendingPathComponent("\(role.rawValue).png")
+            if let layer = ordered.first(where: { $0.role == role }) {
+                try layer.png.write(to: layerURL, options: .atomic)
+            } else {
+                try? fileManager.removeItem(at: layerURL)
+            }
+        }
+        let manifest = PackageIconManifest(
+            kind: icon.kind,
+            sizePx: Self.renderedIconSizePx,
+            renderedForVersionCode: renderedForVersionCode,
+            setDigest: setDigest
+        )
+        let manifestData = try JSONEncoder().encode(manifest)
+        try manifestData.write(
+            to: iconDirectory.appendingPathComponent("icon.json"), options: .atomic
+        )
+        await iconChangeHandler?(packageID)
+        return true
     }
 
     /// The managed packages whose Android update owner is not `io.apkrun.store`
@@ -1724,8 +2060,40 @@ public actor PackageStore {
         } else {
             settings = PackageSettings()
         }
-        settings.update["mode"] = mode
+        settings.set("update.mode", mode)
         try writeJSON(settings, to: url)
+    }
+
+    /// Records the outcome of the post-update health check on the package's
+    /// last operation (package-store.md §7): clears `healthPending` and sets
+    /// `healthResult`.
+    public func recordHealth(_ packageID: PackageID, result: HealthResult) async throws {
+        try requireWritable()
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard var record = records[packageID] else { throw PackageStoreFailure.packageNotFound }
+        record.lastOperation?.healthPending = false
+        record.lastOperation?.healthResult = result
+        record.updatedAt = clock()
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        try writeRecord(record, directory: directory)
+        records[packageID] = record
+    }
+
+    /// Marks an installed package `broken` (update-system.md §8.3): a failed
+    /// rollback leaves the failed update installed and unusable.
+    public func markBroken(_ packageID: PackageID, reason: BrokenReason) async throws {
+        try requireWritable()
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard var record = records[packageID] else { throw PackageStoreFailure.packageNotFound }
+        record.state = .broken(reason)
+        record.updatedAt = clock()
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        try writeRecord(record, directory: directory)
+        records[packageID] = record
     }
 
     /// Moves a package to a different update authority (package-store.md §6.3).
@@ -1991,6 +2359,76 @@ public actor PackageStore {
                     keepData: transaction.begin.keepData ?? false
                 )
 
+            case ("rollback", "guestRollbackRequested"):
+                // Post-boot (§5.5): the `from` version still installed means the
+                // rollback did not happen — abort and leave the record on the
+                // failed version. The `to` version installed means it did — finish.
+                let info = try await queryPackage(packageID, through: runtimeAccess)
+                if info?.versionCode == transaction.begin.to {
+                    try finishRollbackRecovery(
+                        transaction: transactionID,
+                        packageID: packageID,
+                        directory: directory,
+                        info: info
+                    )
+                } else {
+                    try appendAbort(transactionID, reason: "rollbackDidNotHappen")
+                }
+
+            case ("rollback", "guestUninstallRequested"):
+                // Confirmed data-loss fallback (§5.5): absent package → continue
+                // with the first install of `previous/`; `from` installed → abort.
+                let info = try await queryPackage(packageID, through: runtimeAccess)
+                if info == nil {
+                    let packageDirectory =
+                        packagesDirectory.appendingPathComponent(directory, isDirectory: true)
+                    let previous =
+                        packageDirectory.appendingPathComponent("previous", isDirectory: true)
+                    guard let previousSet = try artifactSet(in: previous) else {
+                        try appendAbort(transactionID, reason: "previousSetMissing")
+                        continue
+                    }
+                    let installed = try await runtimeAccess.withStoreAgent(UUID()) { channel in
+                        try await channel.install(
+                            StoreInstallRequest(
+                                packageID: packageID,
+                                versionCode: previousSet.versionCode,
+                                signerDigests: previousSet.signerDigests
+                            ),
+                            files: Self.artifactURLs(in: previous, set: previousSet)
+                        )
+                    }
+                    try appendStep(
+                        transactionID, kind: "rollback", step: "guestRolledBack",
+                        versionCode: installed.versionCode)
+                    try finishRollbackRecovery(
+                        transaction: transactionID,
+                        packageID: packageID,
+                        directory: directory,
+                        info: installed
+                    )
+                } else if info?.versionCode == transaction.begin.to {
+                    try finishRollbackRecovery(
+                        transaction: transactionID,
+                        packageID: packageID,
+                        directory: directory,
+                        info: info
+                    )
+                } else {
+                    try appendAbort(transactionID, reason: "rollbackDidNotHappen")
+                }
+
+            case ("rollback", "guestRolledBack"),
+                ("rollback", "filesRestored"),
+                ("rollback", "metadataWritten"):
+                let info = try await queryPackage(packageID, through: runtimeAccess)
+                try finishRollbackRecovery(
+                    transaction: transactionID,
+                    packageID: packageID,
+                    directory: directory,
+                    info: info
+                )
+
             case ("relinquishOwnership", _):
                 // Post-boot task (§5.5, §6.3): replay the relinquish only while the record
                 // still names a non-owning authority — a switch back to `apkrun` or `manual`
@@ -2124,6 +2562,8 @@ public actor PackageStore {
         try requireOpen()
         let mutationLock = try await acquireLock(at: mutationLockURL)
         defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard records[packageID] != nil else { throw PackageStoreFailure.packageNotFound }
         let directory = directories[packageID] ?? directoryName(for: packageID)
         let url = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
             .appendingPathComponent("settings.json")
@@ -2133,6 +2573,45 @@ public actor PackageStore {
             return nil
         }
         return try? Self.decoder().decode(PackageSettings.self, from: data)
+    }
+
+    /// Applies a patch to the package's `settings.json` (host-ui.md §7):
+    /// each dotted key is written, `nil` removes the stored value. Unknown
+    /// keys and values outside package-metadata-json.md §3.1 are refused.
+    @discardableResult
+    public func updatePackageSettings(
+        _ packageID: PackageID, patch: [String: String?]
+    ) async throws -> PackageSettings {
+        try requireWritable()
+        for (key, value) in patch {
+            guard PackageSettingsSchema.key(key) != nil else {
+                throw PackageStoreFailure.unknownSettingKey(key)
+            }
+            if let value, !PackageSettingsSchema.isValid(key, stored: value) {
+                throw PackageStoreFailure.invalidSettingValue(
+                    key: key,
+                    allowed: PackageSettingsSchema.allowedValues(key) ?? "a different value")
+            }
+        }
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+        guard records[packageID] != nil else { throw PackageStoreFailure.packageNotFound }
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        let url = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
+            .appendingPathComponent("settings.json")
+        var settings = PackageSettings()
+        if fileManager.fileExists(atPath: url.path),
+            let data = try? Data(contentsOf: url),
+            let decoded = try? Self.decoder().decode(PackageSettings.self, from: data)
+        {
+            settings = decoded
+        }
+        for (key, value) in patch {
+            settings.set(key, value)
+        }
+        try writeJSON(settings, to: url)
+        return settings
     }
 
     /// Returns the last Android package inventory observed by a live runtime.
@@ -2180,6 +2659,46 @@ public actor PackageStore {
             to: androidInventoryURL
         )
         return snapshot
+    }
+
+    /// Persists labels reported by Android for installed managed packages.
+    ///
+    /// Android labels follow the guest locale. Updating only `displayName` and `updatedAt` keeps
+    /// the package's install, signer, artifact, and update-authority metadata intact.
+    @discardableResult
+    public func updateManagedDisplayNames(
+        from packages: [StorePackageSummary]
+    ) async throws -> [PackageID] {
+        try requireOpen()
+        guard !isReadOnly else { return [] }
+
+        var displayNames: [PackageID: String] = [:]
+        for package in packages where package.userInstalled && !package.displayName.isEmpty {
+            displayNames[package.packageID] = package.displayName
+        }
+        guard !displayNames.isEmpty else { return [] }
+
+        let mutationLock = try await acquireLock(at: mutationLockURL)
+        defer { _ = Darwin.close(mutationLock) }
+        try reloadRecordsPreservingImportDirectories()
+
+        var changedPackageIDs: [PackageID] = []
+        for packageID in records.keys.sorted() {
+            guard var record = records[packageID],
+                record.state == .installed,
+                let displayName = displayNames[packageID],
+                record.displayName != displayName
+            else {
+                continue
+            }
+
+            record.displayName = displayName
+            record.updatedAt = clock()
+            try writeRecord(record, directory: directories[packageID] ?? directoryName(for: packageID))
+            records[packageID] = record
+            changedPackageIDs.append(packageID)
+        }
+        return changedPackageIDs
     }
 
     private var journalURL: URL {
@@ -2445,6 +2964,7 @@ public actor PackageStore {
             cleanupDeferred = true
         }
         let previousVersionCode = previouslyInstalled?.versionCode ?? previousRecord?.versionCode
+        try? await refreshRenderedIcon(packageID, renderedForVersionCode: record.versionCode)
         return PackageInstallOutcome(
             record: record,
             previousVersionCode: previousVersionCode,
@@ -2461,7 +2981,7 @@ public actor PackageStore {
         case .needsReinstall, .broken(.reinstallFailed):
             return true
         case .installed, .uninstalledKeepingData, .broken(.removedInAndroid),
-            .broken(.artifactMissing), .broken(.signerChanged):
+            .broken(.artifactMissing), .broken(.signerChanged), .broken(.rollbackFailed):
             return false
         }
     }
@@ -2472,7 +2992,7 @@ public actor PackageStore {
             return true
         case .broken(.removedInAndroid), .broken(.artifactMissing), .broken(.reinstallFailed):
             return true
-        case .uninstalledKeepingData, .broken(.signerChanged):
+        case .uninstalledKeepingData, .broken(.signerChanged), .broken(.rollbackFailed):
             return false
         }
     }
@@ -2672,11 +3192,12 @@ public actor PackageStore {
             android: android,
             source: existing?.source
                 ?? PackageSource(
-                    kind: .file,
+                    kind: manifest.wrapperBundleId == nil ? .file : .wrapperBootstrap,
                     at: startedAt,
                     origin: manifest.origin,
                     fileNames: manifest.preview.sourceFileNames,
-                    container: .apk
+                    container: .apk,
+                    wrapperBundleId: manifest.wrapperBundleId
                 ),
             lastOperation: OperationSummary(
                 kind: kind == "reinstall" ? .reinstall : .firstInstall,
@@ -3561,6 +4082,67 @@ public actor PackageStore {
         try purgeTrash()
     }
 
+    /// Finishes an interrupted `rollback` transaction: restores the file slots
+    /// when `filesRestored` was not reached, then writes the restored record
+    /// (package-store.md §5.5).
+    private func finishRollbackRecovery(
+        transaction: String,
+        packageID: PackageID,
+        directory: String,
+        info: StorePackageInfo?
+    ) throws {
+        let packageDirectory = packagesDirectory.appendingPathComponent(directory, isDirectory: true)
+        let current = packageDirectory.appendingPathComponent("current", isDirectory: true)
+        guard
+            let toDigest = transactions[transaction]?.begin.setDigest
+                .flatMap(SHA256Digest.init(rawValue:)),
+            let failedVersion = transactions[transaction]?.begin.from,
+            let old = records[packageID]
+        else {
+            try appendAbort(transaction, reason: "rollbackRecoveryInputsMissing")
+            return
+        }
+        if transactions[transaction]?.lastStep != "filesRestored",
+            transactions[transaction]?.lastStep != "metadataWritten"
+        {
+            try appendStep(
+                transaction, kind: "rollback", step: "guestRolledBack",
+                versionCode: info?.versionCode)
+            try finishRollbackRestore(
+                transaction: transaction,
+                failedVersion: failedVersion,
+                previousDigest: toDigest,
+                packageDirectory: packageDirectory
+            )
+            try appendStep(transaction, kind: "rollback", step: "filesRestored")
+        }
+        guard let restoredSet = try artifactSet(in: current) else {
+            try appendAbort(transaction, reason: "restoredSetMissing")
+            return
+        }
+        let record = recordAfterRollback(
+            old,
+            info: info
+                ?? StorePackageInfo(
+                    packageID: packageID,
+                    displayName: old.displayName,
+                    versionCode: restoredSet.versionCode,
+                    enabled: true,
+                    targetSDK: old.android.targetSdk,
+                    minSDK: old.android.minSdk
+                ),
+            set: restoredSet,
+            digest: toDigest,
+            operationID: UUID(),
+            startedAt: transactions[transaction]?.begin.at ?? clock()
+        )
+        try writeRecord(record, directory: directory)
+        try appendStep(transaction, kind: "rollback", step: "metadataWritten")
+        try appendTerminal(transaction, op: "commit")
+        records[packageID] = record
+        try purgeTrash()
+    }
+
     /// Decodes a slot's `artifact.json`, or nil when the file is absent.
     private func artifactSet(in slot: URL) throws -> ArtifactSet? {
         let artifactURL = slot.appendingPathComponent("artifact.json")
@@ -3585,6 +4167,45 @@ public actor PackageStore {
             .appendingPathComponent(directory, isDirectory: true)
             .appendingPathComponent("current", isDirectory: true)
         return try artifactSet(in: current)
+    }
+
+    /// The installed `current/` set and its directory for a portable
+    /// wrapper's `bootstrap/` (wrapper.md §10.1). The files live beside
+    /// `artifact.json` under their `ArtifactFile.name`s.
+    public func bootstrapSet(for packageID: PackageID) async throws -> (
+        set: ArtifactSet, directory: URL
+    ) {
+        try requireOpen()
+        guard let directory = directories[packageID] else {
+            throw PackageStoreFailure.packageNotFound
+        }
+        let current =
+            packagesDirectory
+            .appendingPathComponent(directory, isDirectory: true)
+            .appendingPathComponent("current", isDirectory: true)
+        guard let set = try artifactSet(in: current) else {
+            throw PackageStoreFailure.packageNotFound
+        }
+        return (set, current)
+    }
+
+    /// An open import ticket's inspected set, `incoming/` directory, and
+    /// display name for a portable wrapper's `bootstrap/` (wrapper.md
+    /// §10.1). Throws `importTicketNotFound` when the ticket is unknown.
+    public func bootstrapSet(ticket: UUID) async throws -> (
+        set: ArtifactSet, directory: URL, displayName: String
+    ) {
+        try requireOpen()
+        guard let manifest = tickets[ticket] else {
+            throw PackageStoreFailure.importTicketNotFound
+        }
+        let packageID = manifest.preview.packageID
+        let directory = directories[packageID] ?? directoryName(for: packageID)
+        return (
+            manifest.preview.artifactSet,
+            incomingDirectory(packageID: packageID, directory: directory, ticket: ticket),
+            manifest.preview.displayName
+        )
     }
 
     /// Promotes `staged/` to `current/` for the `update` transaction
@@ -3724,6 +4345,93 @@ public actor PackageStore {
             startedAt: startedAt,
             finishedAt: clock(),
             fromVersionCode: old.versionCode,
+            result: .succeeded,
+            healthPending: true
+        )
+        record.updatedAt = clock()
+        return record
+    }
+
+    /// Restores the file slots for a `rollback` transaction (package-store.md
+    /// §5.2): the failed `current/` set moves to `failed/<versionCode>/` and
+    /// `previous/` becomes `current/`. Idempotent by `setDigest`.
+    private func finishRollbackRestore(
+        transaction: String,
+        failedVersion: VersionCode,
+        previousDigest: SHA256Digest,
+        packageDirectory: URL
+    ) throws {
+        let current = packageDirectory.appendingPathComponent("current", isDirectory: true)
+        let previous = packageDirectory.appendingPathComponent("previous", isDirectory: true)
+        let failedDirectory = packageDirectory.appendingPathComponent("failed", isDirectory: true)
+        let failedSlot =
+            failedDirectory.appendingPathComponent("\(failedVersion)", isDirectory: true)
+        if fileManager.fileExists(atPath: current.path),
+            stagedSetDigest(in: current) != previousDigest
+        {
+            try createDirectory(failedDirectory)
+            if fileManager.fileExists(atPath: failedSlot.path) {
+                try moveItem(
+                    failedSlot,
+                    to: trashDirectory.appendingPathComponent(
+                        "\(transaction)-failed-\(failedVersion)", isDirectory: true))
+            }
+            try moveItem(current, to: failedSlot)
+        }
+        if fileManager.fileExists(atPath: previous.path) {
+            guard stagedSetDigest(in: previous) == previousDigest else {
+                throw PackageStoreFailure.io
+            }
+            guard !fileManager.fileExists(atPath: current.path) else {
+                throw PackageStoreFailure.io
+            }
+            try moveItem(previous, to: current)
+        }
+        guard stagedSetDigest(in: current) == previousDigest else {
+            throw PackageStoreFailure.io
+        }
+    }
+
+    /// The record after a `rollback` transaction commits: `current/` is the
+    /// restored previous set and `previous/` empties (the failed set lives in
+    /// `failed/<versionCode>/`).
+    private func recordAfterRollback(
+        _ old: PackageRecord,
+        info: StorePackageInfo,
+        set: ArtifactSet,
+        digest: SHA256Digest,
+        operationID: UUID,
+        startedAt: Date
+    ) -> PackageRecord {
+        var record = old
+        record.versionCode = info.versionCode
+        record.versionName = info.versionName ?? set.versionName
+        record.signingCertificates =
+            info.signingDigests.isEmpty ? set.signerDigests : info.signingDigests
+        record.signingLineage = set.lineage
+        record.state = .installed
+        record.artifacts = ArtifactSlots(
+            current: ArtifactSlotSummary(
+                versionCode: set.versionCode,
+                versionName: set.versionName,
+                setDigest: digest,
+                size: set.files.reduce(0) { $0 + $1.size },
+                fileCount: set.files.count
+            ),
+            previous: nil,
+            staged: old.artifacts.staged,
+            currentMatchesAndroid: true
+        )
+        var android = record.android
+        android.lastUpdateTime = info.lastUpdateTime
+        record.android = android
+        record.lastOperation = OperationSummary(
+            kind: .rollback,
+            operationID: operationID,
+            startedAt: startedAt,
+            finishedAt: clock(),
+            fromVersionCode: old.versionCode,
+            toVersionCode: set.versionCode,
             result: .succeeded
         )
         record.updatedAt = clock()

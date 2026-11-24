@@ -28,6 +28,7 @@ struct ContainerReader: Sendable {
     static let maxCompressionRatio: Double = 100
 
     /// Detects the container by content (package-store.md §4.2).
+    /// SECURITY: untrusted container input; fuzzed by `container-reader` (#92).
     func detect(at url: URL) throws(StoreFailure) -> DetectedContainer {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw .unreadableArchive(detail: "the file cannot be opened")

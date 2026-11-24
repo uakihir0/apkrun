@@ -3,11 +3,15 @@
   "apps": [
     {
       "name": "Fennec F-Droid",
-      "url": "https://f-droid.org/repo/org.mozilla.fennec_fdroid_1600020.apk"
+      "url": "https://f-droid.org/repo/org.mozilla.fennec_fdroid_1600020.apk",
+      "packageID": "org.mozilla.fennec_fdroid",
+      "versionCode": 1600020
     },
     {
       "name": "OsmAnd+",
-      "url": "https://f-droid.org/repo/net.osmand.plus_541103.apk"
+      "url": "https://f-droid.org/repo/net.osmand.plus_541103.apk",
+      "packageID": "net.osmand.plus",
+      "versionCode": 541103
     }
   ]
 }

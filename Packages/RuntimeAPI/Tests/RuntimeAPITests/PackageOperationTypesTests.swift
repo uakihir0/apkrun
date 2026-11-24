@@ -136,6 +136,14 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     #expect(try roundTrip(packageInfoRequest) == packageInfoRequest)
     #expect(RuntimeListPackagesControlRequest(header: header).filter == .managed)
 
+    let closeRequest = RuntimeCloseSessionControlRequest(
+        header: header, packageID: packageID, policy: .keepRunning)
+    #expect(try roundTrip(closeRequest) == closeRequest)
+    let closeResult = RuntimeCloseSessionResult(packageID: packageID, hadSession: true)
+    let closeReply = RuntimeCloseSessionControlReply(hadSession: true)
+    #expect(try roundTrip(closeReply) == closeReply)
+    #expect(try roundTrip(closeResult) == closeResult)
+
     let launchReply = RuntimeLaunchControlReply(result: launch)
     let terminateReply = RuntimeTerminateControlReply(result: terminate)
     let packageSummary = RuntimePackageSummary(packageID: packageID, displayName: "Example", versionCode: 7)
@@ -201,6 +209,7 @@ private func roundTrip<Value: Codable & Equatable>(_ value: Value) throws -> Val
     #expect(try roundTrip(installReply) == installReply)
     #expect(try roundTrip(RuntimeImportPackageControlReply(error: failure)).error == failure)
     #expect(try roundTrip(RuntimeInstallImportedControlReply(error: failure)).error == failure)
+    #expect(importRequest.header.apiVersion == .current)
     #expect(importRequest.header.apiVersion == .current)
 }
 

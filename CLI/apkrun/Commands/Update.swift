@@ -3,15 +3,35 @@ import Foundation
 import RuntimeAPI
 import RuntimeClient
 
-/// `apkrun update` (cli.md §4.3): checks managed packages for updates and
-/// prints one line per package. Exit code is 2 when any package failed.
+/// `apkrun update` (cli.md §4.3): group command. The positional `<package>`
+/// and the check flags live on the hidden `check` default subcommand: a
+/// positional on this level would swallow the subcommand names.
 struct UpdateCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "update",
         abstract: "Check for, list, and manage Android app updates.",
+        discussion: """
+            `apkrun update [<package>] [--file <file> …] [--check-only] [--now] \
+            [--json]` checks managed packages for updates and installs them; \
+            see `apkrun help update check`.
+            """,
         subcommands: [
+            UpdateCheckCommand.self,
             UpdatePolicyCommand.self, UpdateAuthorityCommand.self, UpdateHistoryCommand.self,
-        ]
+            UpdateSkipCommand.self, UpdateUnskipCommand.self,
+        ],
+        defaultSubcommand: UpdateCheckCommand.self
+    )
+}
+
+/// `apkrun update [<package>]` (cli.md §4.3): checks managed packages for
+/// updates and prints one line per package. Exit code is 2 when any package
+/// failed.
+struct UpdateCheckCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "check",
+        abstract: "Check managed packages for updates.",
+        shouldDisplay: false
     )
 
     @Argument(help: "The Android package name. Omit it to check every package.")
@@ -202,7 +222,7 @@ struct UpdatePolicyCommand: AsyncParsableCommand {
         if noProvider {
             providerChange = .remove
         } else if let provider {
-            providerChange = .set(try Self.providerSpec(provider))
+            providerChange = .set(try InstallUpdateOptions.providerSpec(provider))
         } else {
             providerChange = .keep
         }
@@ -223,29 +243,6 @@ struct UpdatePolicyCommand: AsyncParsableCommand {
         }
     }
 
-    /// Parses `local:<path>` into a provider spec carrying a security-scoped
-    /// bookmark of the folder (runtime-api.md §9.2). Other schemes land with
-    /// their providers (#51–#53).
-    private static func providerSpec(_ spec: String) throws -> ProviderSpec {
-        if spec.hasPrefix("local:") {
-            let path = String(spec.dropFirst("local:".count))
-            let url = URL(fileURLWithPath: path)
-            guard url.isFileURL else {
-                throw CLIFailure.invalidArgument(argument: "--provider", reason: "invalidValue")
-            }
-            let bookmark: Data
-            do {
-                bookmark = try url.bookmarkData(
-                    options: [.withSecurityScope],
-                    includingResourceValuesForKeys: nil,
-                    relativeTo: nil)
-            } catch {
-                throw CLIFailure.fileNotAccessible(file: path, .permissionDenied)
-            }
-            return ProviderSpec(spec: spec, bookmark: bookmark)
-        }
-        return ProviderSpec(spec: spec)
-    }
 }
 
 /// `apkrun update history [<package>]` (cli.md §4.3): the update history.
@@ -329,3 +326,149 @@ enum UpdateOutput {
         return code
     }
 }
+
+/// `apkrun update skip <package> <versionCode>` (§8.4, cli.md §4.3):
+/// refuses the version on the next checks until unskipped.
+struct UpdateSkipCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "skip",
+        abstract: "Skip an update version so it is not offered again."
+    )
+
+    @Argument(help: "The Android package name.")
+    var package: String
+
+    @Argument(help: "The versionCode to skip.")
+    var versionCode: Int64
+
+    mutating func run() async throws {
+        guard let packageID = RuntimePackageID(rawValue: package) else {
+            throw CLIFailure.invalidPackageName(package: package)
+        }
+        do {
+            let client = try RuntimeControlClient(clientKind: .cli)
+            try await client.updateSkipped(
+                packageID: packageID, versionCode: versionCode, skipped: true)
+            Output.write("\(package): version \(versionCode) skipped")
+        } catch let failure as RuntimeWireError {
+            throw failure
+        } catch {
+            throw await RuntimeStatusOutput.commandFailure(error)
+        }
+    }
+}
+
+/// `apkrun update unskip <package> <versionCode>` (§8.4, cli.md §4.3):
+/// removes the skip so the version is offered again.
+struct UpdateUnskipCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "unskip",
+        abstract: "Offer a skipped update version again."
+    )
+
+    @Argument(help: "The Android package name.")
+    var package: String
+
+    @Argument(help: "The versionCode to unskip.")
+    var versionCode: Int64
+
+    mutating func run() async throws {
+        guard let packageID = RuntimePackageID(rawValue: package) else {
+            throw CLIFailure.invalidPackageName(package: package)
+        }
+        do {
+            let client = try RuntimeControlClient(clientKind: .cli)
+            try await client.updateSkipped(
+                packageID: packageID, versionCode: versionCode, skipped: false)
+            Output.write("\(package): version \(versionCode) unskipped")
+        } catch let failure as RuntimeWireError {
+            throw failure
+        } catch {
+            throw await RuntimeStatusOutput.commandFailure(error)
+        }
+    }
+}
+
+/// `apkrun rollback <package> [--allow-data-loss]` (§8.5, cli.md §4.3):
+/// rolls back to `previous/`. App data is never rolled back;
+/// `--allow-data-loss` is the confirmed Restore choice that erases it.
+struct RollbackCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "rollback",
+        abstract: "Roll an app back to its previous version."
+    )
+
+    @Argument(help: "The Android package name.")
+    var package: String
+
+    @Flag(name: .long, help: "Allow the data-erasing restore fallback.")
+    var allowDataLoss = false
+
+    mutating func run() async throws {
+        guard let packageID = RuntimePackageID(rawValue: package) else {
+            throw CLIFailure.invalidPackageName(package: package)
+        }
+        do {
+            let client = try RuntimeControlClient(clientKind: .cli)
+            let reply = try await client.rollbackPackage(
+                packageID: packageID, allowDataLoss: allowDataLoss)
+            if let to = reply.rolledBackTo {
+                Output.write(
+                    "\(package): rolled back to version \(to). App data was not changed.")
+            } else {
+                Output.writeLogLine(
+                    "\(package): no previous version to roll back to, or no rollback mechanism is available.",
+                    toStandardError: true
+                )
+                throw ExitCode.failure
+            }
+        } catch let failure as RuntimeWireError {
+            throw failure
+        } catch {
+            throw await RuntimeStatusOutput.commandFailure(error)
+        }
+    }
+}
+
+#if !APKRUN_EMBEDDED_RUNTIME
+    /// `apkrun repair <package> [--yes]` (package-store.md §11.1, cli.md §4.3):
+    /// reinstalls a `broken` package from its retained `current/` artifacts.
+    /// The daemon refuses when the package is not broken.
+    struct RepairCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "repair",
+            abstract: "Reinstall a broken app from APKRun's retained APKs."
+        )
+
+        @Argument(help: "The Android package name.")
+        var package: String
+
+        @Flag(name: .long, help: "Repair without asking for confirmation.")
+        var yes = false
+
+        mutating func run() async throws {
+            guard let packageID = RuntimePackageID(rawValue: package) else {
+                throw CLIFailure.invalidPackageName(package: package)
+            }
+            try CLIConfirmation.confirm(
+                "Reinstall \(package) from APKRun's retained APKs?", yes: yes)
+            do {
+                let client = try RuntimeControlClient(clientKind: .cli)
+                let handle = try await client.repairPackage(packageID: packageID)
+                let snapshot = try await OperationCommandOutput.waitForTerminalSnapshot(
+                    using: client,
+                    operationID: handle.operationID,
+                    progressToStderr: OperationCommandOutput.shouldShowProgress
+                )
+                if case .failed(let wireError)? = snapshot.result {
+                    throw wireError
+                }
+                Output.write("\(package): reinstalled from the retained APKs.")
+            } catch let failure as RuntimeWireError {
+                throw failure
+            } catch {
+                throw await RuntimeStatusOutput.commandFailure(error)
+            }
+        }
+    }
+#endif

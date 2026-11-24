@@ -4,11 +4,13 @@ import android.net.LocalSocket
 import android.os.HandlerThread
 import android.os.Process
 import android.os.SystemClock
+import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.SessionManager
 import io.apkrun.guest.protocol.v1.ChannelKind
 import io.apkrun.guest.runtime.AgentLog
 import io.apkrun.guest.runtime.AgentSocketServer
 import io.apkrun.guest.runtime.SystemContext
+import io.apkrun.guest.url.UrlRedirect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -21,6 +23,9 @@ const val INPUT_SOCKET = "apkrun-guestd-input"
 
 /** The abstract socket of the bulk channel. */
 const val BULK_SOCKET = "apkrun-guestd-bulk"
+
+/** The installed package whose cache directory stores inbound transfers. */
+private const val GUEST_PACKAGE = "io.apkrun.guest"
 
 /**
  * The daemon: the three sockets, the sessions, the dispatcher, and the services
@@ -63,6 +68,17 @@ class Daemon(internal val scope: CoroutineScope) {
     }
 
     internal val events = EventBus()
+    /**
+     * The capabilities the connections advertise: `url.v1` only where the agent runs inside the app
+     * and its UrlRedirectActivity can hold the browser role. The shell-uid development agent keeps
+     * the handler off (issue #82).
+     */
+    internal val implemented: Set<GuestCapability> =
+        if (Process.myUid() == Process.SHELL_UID) {
+            Connection.IMPLEMENTED - GuestCapability.URL
+        } else {
+            Connection.IMPLEMENTED
+        }
     internal val sessions =
         SessionManager({ SystemClock.elapsedRealtime() }) { token ->
             // Publishing must not kill the control accept path: a settings failure degrades to
@@ -76,7 +92,61 @@ class Daemon(internal val scope: CoroutineScope) {
     private val packages = PackageService(AndroidPackageCatalog(SystemContext.get().packageManager))
     internal val bulkTransfers = BulkTransfers()
     private val diagnostics = DiagnosticsService(bulkTransfers)
-    internal val clipboard = ClipboardBridge.create(SystemContext.get(), events)
+    internal val inboundTransfers = InboundTransfers(transfersDir())
+    internal val clipboard =
+        ClipboardBridge.create(SystemContext.get(), events, bulkTransfers, inboundTransfers)
+    internal val hostFileClient = io.apkrun.guest.files.HostFileClient()
+    internal val filesBridge =
+        io.apkrun.guest.files
+            .FilesBridge(
+                SystemContext.get(),
+                events,
+                inboundTransfers,
+                bulkTransfers,
+            )
+            .also {
+                // The share activity and the DocumentsProvider reach the bridge in-process only;
+                // in development the daemon runs under app_process and they stay unbound
+                // (TODO(#36)).
+                io.apkrun.guest.files.ExportRelay.bridge = it
+                io.apkrun.guest.files.MacFilesBridge.access = it
+                io.apkrun.guest.files.MacFilesBridge.client = hostFileClient
+            }
+    internal val notifications =
+        NotificationBridge(events, ApkRunNotificationListener.access()).also {
+            ApkRunNotificationListener.bridge = it
+        }
+    internal val urlRedirect =
+        UrlRedirect(
+                events,
+                uptimeMillis = { SystemClock.elapsedRealtime() },
+                roleHeld = { browserRoleHeld() },
+                takeRole = { takeBrowserRole() },
+                // Kept intents expire on the callbacks thread so a silent host
+                // cannot hold the intercepted intent forever (§7.1).
+                schedule = { delay, action -> callbackHandler.postDelayed(action, delay) },
+            )
+            .also {
+                // The activity and the daemon share a process in PRIVILEGED_APP mode
+                // only; in development the bridge stays unreachable and the activity
+                // is disabled (guest-components.md §3.2, TODO(#36)).
+                if (Process.myUid() != Process.SHELL_UID) {
+                    UrlRedirect.instance = it
+                }
+            }
+    internal val microphone =
+        MicrophoneGate(
+                events,
+                AndroidOpsAccess(SystemContext.get()),
+                AndroidRecordingAccess(SystemContext.get(), callbackHandler),
+                AndroidRecordablePackages(SystemContext.get()),
+            )
+            .also { gate ->
+                gate.start()
+                // Newly installed packages keep their default silence until the
+                // host's next push (desktop-integration.md §8.2).
+                MicrophoneGate.watchPackageAdded(SystemContext.get(), gate)
+            }
     internal val input =
         InputService(
             boundsOf = { displayId ->
@@ -93,7 +163,19 @@ class Daemon(internal val scope: CoroutineScope) {
     internal val dispatcher =
         Dispatcher(
             operations =
-                DeviceOperations(displays, tasks, launch, packages, diagnostics, clipboard),
+                DeviceOperations(
+                    displays,
+                    tasks,
+                    launch,
+                    packages,
+                    diagnostics,
+                    clipboard,
+                    notifications,
+                    urlRedirect,
+                    microphone,
+                    filesBridge,
+                    input,
+                ),
             uptimeMillis = { SystemClock.elapsedRealtime() },
         )
 
@@ -123,6 +205,65 @@ class Daemon(internal val scope: CoroutineScope) {
         DeviceSetup.apply()
         sockets.forEach { it.start() }
         AgentLog.info("apkrun_guestd is serving the control, input, and bulk sockets")
+    }
+
+    /**
+     * The directory inbound transfer files land in. In privileged mode the agent runs inside the
+     * `io.apkrun.guest` app, and TransferFileProvider resolves files under this same directory in
+     * the app process. The development agent runs as the shell uid (guest-components.md §3.2) and
+     * cannot write that private directory — it uses the shell-writable log directory instead; the
+     * provider path the URI grant needs is privileged-mode only (guest-components.md §5).
+     */
+    private fun transfersDir(): java.io.File =
+        if (android.os.Process.myUid() == android.os.Process.SHELL_UID) {
+            java.io.File("/data/local/tmp/apkrun/transfers")
+        } else {
+            java.io.File(
+                SystemContext.get().createPackageContext(GUEST_PACKAGE, 0).cacheDir,
+                "transfers",
+            )
+        }
+
+    /** Whether the app holds `RoleManager.ROLE_BROWSER` (desktop-integration.md §7.1). */
+    private fun browserRoleHeld(): Boolean = runCatching {
+        val manager = SystemContext.get().getSystemService(android.app.role.RoleManager::class.java)
+        manager?.isRoleHeld(android.app.role.RoleManager.ROLE_BROWSER) == true
+    }
+        .getOrDefault(false)
+
+    /**
+     * Takes the browser role again through the privileged `RoleManager.addRoleHolderAsUser`
+     * (guest-components.md §5). The shell uid cannot hold a role, so the development agent does
+     * nothing here.
+     */
+    private fun takeBrowserRole() {
+        if (Process.myUid() == Process.SHELL_UID) return
+        runCatching {
+            val manager =
+                SystemContext.get().getSystemService(android.app.role.RoleManager::class.java)
+                    ?: return@runCatching
+            android.app.role.RoleManager::class
+                .java
+                .getMethod(
+                    "addRoleHolderAsUser",
+                    String::class.java,
+                    String::class.java,
+                    Int::class.javaPrimitiveType,
+                    android.os.UserHandle::class.java,
+                    java.util.concurrent.Executor::class.java,
+                    java.util.function.Consumer::class.java,
+                )
+                .invoke(
+                    manager,
+                    android.app.role.RoleManager.ROLE_BROWSER,
+                    GUEST_PACKAGE,
+                    0,
+                    Process.myUserHandle(),
+                    java.util.concurrent.Executor { it.run() },
+                    java.util.function.Consumer<Boolean> {},
+                )
+        }
+            .onFailure { AgentLog.warning("the browser role could not be taken") }
     }
 
     private fun serve(socket: LocalSocket, channel: ChannelKind) {

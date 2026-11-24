@@ -1,0 +1,13 @@
+OVERVIEW: Read and write daemon settings.
+
+USAGE: apkrun config <subcommand>
+
+OPTIONS:
+  --version               Show the version.
+  -h, --help              Show help information.
+
+SUBCOMMANDS:
+  get                     Read daemon settings.
+  set                     Write a daemon setting.
+
+  See 'apkrun help config <subcommand>' for detailed help.

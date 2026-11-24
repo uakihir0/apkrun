@@ -25,6 +25,25 @@
       }
     },
     {
+      "id": "0F4AFC2E-3F03-4E56-9C1F-0030030030F0",
+      "name": "Security",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "security",
+            "enabled": true
+          },
+          {
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15037",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 1200
+      }
+    },
+    {
       "id": "0F4AFC2E-3F03-4E56-9C1F-003003003005",
       "name": "AndroidPackage",
       "options": {
@@ -128,6 +147,64 @@
           {
             "key": "APKRUN_FIXTURE_APK",
             "value": "/tmp/apkrun-test-fixtures/HelloText.apk",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 1800
+      }
+    },
+    {
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003016",
+      "name": "AndroidIdleSuspend",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-idle-suspend",
+            "enabled": true
+          },
+          {
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15045",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_GUEST_DIR",
+            "value": "/tmp/apkrun-test-guest",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_FIXTURE_APK",
+            "value": "/tmp/apkrun-test-fixtures/HelloText.apk",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_TEST_HEADLESS_LAUNCH",
+            "value": "1",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 1800
+      }
+    },
+    {
+      "id": "0F4AFC2E-3F03-4E56-9C1F-003003003017",
+      "name": "AndroidSleepWake",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-sleep-wake",
+            "enabled": true
+          },
+          {
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15046",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_GUEST_DIR",
+            "value": "/tmp/apkrun-test-guest",
             "enabled": true
           }
         ],
@@ -406,6 +483,40 @@
           }
         ],
         "maximumTestExecutionTimeAllowance": 2400
+      }
+    },
+    {
+      "id": "28AE21E9-6BC4-5CEA-A0F7-2A5D71FA7219",
+      "name": "AndroidCustomKeepRunning",
+      "options": {
+        "environmentVariableEntries": [
+          {
+            "key": "APKRUN_INTEGRATION_SUITE",
+            "value": "android-keep-running-idle",
+            "enabled": true
+          },
+          {
+            "key": "ANDROID_ADB_SERVER_PORT",
+            "value": "15045",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_GUEST_DIR",
+            "value": "/tmp/apkrun-test-guest",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_FIXTURE_APK",
+            "value": "/tmp/apkrun-test-fixtures/HelloText.apk",
+            "enabled": true
+          },
+          {
+            "key": "APKRUN_TEST_HEADLESS_LAUNCH",
+            "value": "1",
+            "enabled": true
+          }
+        ],
+        "maximumTestExecutionTimeAllowance": 1800
       }
     }
   ],

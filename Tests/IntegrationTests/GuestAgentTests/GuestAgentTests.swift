@@ -166,6 +166,33 @@ final class GuestAgentTests: XCTestCase {
         }
     }
 
+    /// `SetTimeZone` uses `AlarmManager.setTimeZone` through the shell-launched Guest Agent on the stock image
+    /// (#86, guest-components.md §5).
+    func testShellGuestAgentCanSetTimeZoneOnTheStockImage() async throws {
+        let bundle = try Self.bundle()
+        try await AndroidBootSession.withBoot(developerMode: true, guestAgentBundle: bundle) { session in
+            guard let agent = await session.supervisor.developmentGuestAgent else {
+                return XCTFail("the boot did not start the development Guest Agent")
+            }
+            let adb = try await Self.connectedClient(session)
+            guard let processID = try await adb.processID(named: Self.processName) else {
+                return XCTFail("the Guest Agent does not have a running process")
+            }
+            let processStatus = try await adb.shell("cat /proc/\(processID)/status").output
+            let uidFields =
+                processStatus
+                .split(separator: "\n")
+                .first { $0.hasPrefix("Uid:") }?
+                .split(whereSeparator: \.isWhitespace)
+            XCTAssertEqual(uidFields?.dropFirst().first, "2000", "the Guest Agent must run as shell")
+
+            let result = try await agent.applyTimeZone("Asia/Tokyo")
+            XCTAssertEqual(result, .applied)
+            let actualZone = try await adb.shell("getprop persist.sys.timezone").output
+            XCTAssertEqual(actualZone.trimmingCharacters(in: .whitespacesAndNewlines), "Asia/Tokyo")
+        }
+    }
+
     /// The device setup of guest-components.md §3.4: the screen stays on, and there is no keyguard.
     func testTheDeviceStaysAwakeWithoutKeyguard() async throws {
         let bundle = try Self.bundle()

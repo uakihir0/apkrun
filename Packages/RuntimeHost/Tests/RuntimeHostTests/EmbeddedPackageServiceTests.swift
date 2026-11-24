@@ -3,6 +3,7 @@ import DiagnosticsCore
 import Foundation
 import RuntimeAPI
 import Testing
+import WrapperCore
 
 @testable import RuntimeHost
 
@@ -368,6 +369,74 @@ func embeddedPackageServiceImportsIndexedFileHandlesWithoutStartingAndroid() asy
 }
 
 @Test(.timeLimit(.minutes(1)))
+func embeddedPackageServiceModeOnlyReinstallKeepsAuthorityAndProvider() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-package-service-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": root.path])
+    let package = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    final class InspectVersion: @unchecked Sendable { var code: VersionCode = 12 }
+    let inspectVersion = InspectVersion()
+    let service = EmbeddedPackageService(
+        paths: paths,
+        inspector: { _ in
+            APKFacts(
+                packageID: package,
+                versionCode: inspectVersion.code,
+                versionName: "1.2",
+                splitName: nil,
+                displayName: "Hello Text",
+                minSDK: 23,
+                targetSDK: 35,
+                nativeABIs: []
+            )
+        },
+        importVerifier: PackageStore.legacyImportVerifier,
+        runtimeAccess: FakeInstalledRuntimeAccess()
+    )
+    try await service.open()
+
+    func install(_ options: RuntimeInstallOptions) async throws {
+        let source = root.appendingPathComponent("hello-\(inspectVersion.code).apk")
+        try Data("apk-test-bytes".utf8).write(to: source)
+        let handle = try FileHandle(forReadingFrom: source)
+        defer { try? handle.close() }
+        let preview = try await service.importPackage(
+            RuntimeImportPackageRequest(
+                files: [RuntimeImportSourceFile(fileIndex: 0, name: "hello.apk")],
+                origin: .cli
+            ),
+            files: [handle]
+        )
+        _ = try await service.installImportedWithChange(
+            RuntimeInstallImportedRequest(ticket: preview.ticket, options: options),
+            beforeStoreMutation: {})
+    }
+
+    try await install(
+        RuntimeInstallOptions(
+            authority: .apkrun,
+            provider: try #require(ProviderSpec(spec: "direct:https://updates.example.com/app.json")),
+            updateMode: .automatic))
+    var record = try #require(
+        await service.store.listManagedPackages().first { $0.packageId == package })
+    #expect(record.updateAuthority == .apkrun)
+    #expect(record.updateProvider != nil)
+
+    inspectVersion.code = 13
+    try await install(
+        RuntimeInstallOptions(authority: .manual, updateMode: .notifyOnly))
+    record = try #require(
+        await service.store.listManagedPackages().first { $0.packageId == package })
+    #expect(record.updateAuthority == .apkrun)
+    #expect(record.updateProvider != nil)
+    let settings = try #require(await service.store.packageSettings(for: package))
+    #expect(settings.updateMode == "notifyOnly")
+}
+
+@Test(.timeLimit(.minutes(1)))
 func embeddedPackageServiceStagesSameSetPreviewForGuestVerification() async throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("apkrun-package-service-\(UUID().uuidString)", isDirectory: true)
@@ -724,4 +793,362 @@ func embeddedPackageServiceFailsClosedWhenHostSpaceCannotBeRead() async throws {
 
     let stagingRoot = paths.packagesDirectory.appendingPathComponent(".client-imports", isDirectory: true)
     #expect(try FileManager.default.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil).isEmpty)
+}
+
+/// A Store Agent stand-in that accepts every install and remembers the last
+/// installed package so reinstall flows can query it back.
+private struct FakeInstalledRuntimeAccess: StoreRuntimeAccess {
+    private let channel = FakeInstalledStoreAgentChannel()
+
+    func withStoreAgent<T: Sendable>(
+        _ operation: UUID,
+        _ body: @Sendable (any StoreAgentChannel) async throws -> T
+    ) async throws -> T {
+        try await body(channel)
+    }
+
+    func userdataGeneration() async -> UUID? { nil }
+}
+
+private final class FakeInstalledStoreAgentChannel: StoreAgentChannel, @unchecked Sendable {
+    let capabilities: StoreCapabilities = [.install, .metadata]
+    private var installed: StorePackageInfo?
+
+    func install(_ request: StoreInstallRequest, files: [URL]) async throws -> StorePackageInfo {
+        let info = StorePackageInfo(
+            packageID: request.packageID,
+            displayName: "Hello Text",
+            versionCode: request.versionCode,
+            versionName: "1.2",
+            enabled: true,
+            targetSDK: 35,
+            minSDK: 23,
+            signingDigests: request.signerDigests
+        )
+        installed = info
+        return info
+    }
+
+    func uninstall(_ package: PackageID, keepData: Bool) async throws {
+        installed = nil
+    }
+
+    func packageInfo(_ package: PackageID) async throws -> StorePackageInfo? {
+        installed?.packageID == package ? installed : nil
+    }
+
+    func listPackages(_ filter: StorePackageFilter) async throws -> [StorePackageSummary] { [] }
+}
+
+// MARK: - importBootstrap (wrapper-json.md §3.4)
+
+private let bootstrapTestSigner = "sha256:" + String(repeating: "ab", count: 32)
+
+private func bootstrapTestSignerDigest() throws -> SHA256Digest {
+    try #require(SHA256Digest(hex: String(repeating: "ab", count: 32)))
+}
+
+private func bootstrapEntry(packageID: PackageID, kind: WrapperKind = .portable) -> WrapperRegistryEntry {
+    WrapperRegistryEntry(
+        bundleId: "io.apkrun.android.\(packageID.rawValue.replacingOccurrences(of: "-", with: "_"))",
+        packageId: packageID.rawValue,
+        kind: kind,
+        state: .active,
+        path: "/Applications/Hello.app",
+        cdhash: String(repeating: "0", count: 40),
+        launcherVersion: "1",
+        launcherAPI: "1.26",
+        fileName: "Hello.app",
+        displayName: "Hello Text",
+        createdAt: Date()
+    )
+}
+
+private func bootstrapWrapperDocument(
+    packageID: PackageID,
+    updates: WrapperDocument.Updates? = nil,
+    window: WrapperDocument.Window? = nil,
+    integration: WrapperDocument.Integration? = nil
+) -> WrapperDocument {
+    WrapperDocument(
+        kind: .portable,
+        application: .init(packageId: packageID.rawValue, displayName: "Hello Text"),
+        runtime: .init(minimumVersion: "1", launcherAPI: "1.26"),
+        window: window,
+        updates: updates,
+        integration: integration
+    )
+}
+
+private func bootstrapDocumentJSON(
+    packageID: PackageID,
+    files: [(name: String, bytes: Data)],
+    signers: [String]? = nil,
+    setDigest: String? = nil,
+    versionCode: Int64 = 12,
+    versionName: String? = "1.2"
+) throws -> Data {
+    let entries = files.map {
+        BootstrapFileEntry(
+            name: $0.name,
+            sha256: SHA256Digest(data: $0.bytes).rawValue,
+            size: Int64($0.bytes.count)
+        )
+    }
+    let document = BootstrapDocument(
+        packageId: packageID.rawValue,
+        versionCode: versionCode,
+        versionName: versionName,
+        setDigest: setDigest ?? BootstrapSetDigest.compute(files: entries),
+        signers: signers ?? [bootstrapTestSigner],
+        files: entries
+    )
+    return try BootstrapDocumentCodec.encode(document)
+}
+
+private func bootstrapService(
+    paths: APKRunPaths,
+    packageID: PackageID
+) -> EmbeddedPackageService {
+    let signer = try! bootstrapTestSignerDigest()
+    return EmbeddedPackageService(
+        paths: paths,
+        inspector: { _ in
+            APKFacts(
+                packageID: packageID,
+                versionCode: 12,
+                versionName: "1.2",
+                splitName: nil,
+                displayName: "Hello Text",
+                minSDK: 23,
+                targetSDK: 35,
+                nativeABIs: []
+            )
+        },
+        sessionService: PackageMutationTestSessionService(),
+        importVerifier: { staged, _, inspect in
+            var facts: [APKFacts] = []
+            for url in staged { facts.append(try await inspect(url)) }
+            return PackageStore.VerifiedImport(
+                files: staged,
+                facts: facts,
+                signerDigests: [signer],
+                lineage: [signer],
+                warnings: [],
+                excludedSplits: []
+            )
+        },
+        runtimeAccess: FakeInstalledRuntimeAccess()
+    )
+}
+
+private func bootstrapHandles(
+    _ files: [(name: String, bytes: Data)],
+    in root: URL
+) throws -> [FileHandle] {
+    try files.map { file in
+        let url = root.appendingPathComponent(file.name)
+        try file.bytes.write(to: url)
+        return try FileHandle(forReadingFrom: url)
+    }
+}
+
+private func bootstrapRoot() throws -> URL {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-bootstrap-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    return root
+}
+
+@Test(.timeLimit(.minutes(1)))
+func importBootstrapInstallsAndMarksTheWrapperBootstrapSource() async throws {
+    let root = try bootstrapRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": root.path])
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let service = bootstrapService(paths: paths, packageID: packageID)
+    try await service.open()
+
+    let apk = Data("apk-test-bytes".utf8)
+    let json = try bootstrapDocumentJSON(packageID: packageID, files: [("base.apk", apk)])
+    let handles = try bootstrapHandles([("base.apk", apk)], in: root)
+    defer { for handle in handles { try? handle.close() } }
+
+    let summary = try await service.importBootstrap(
+        entry: bootstrapEntry(packageID: packageID),
+        wrapperDocument: bootstrapWrapperDocument(packageID: packageID),
+        bootstrapJSON: json,
+        files: handles
+    )
+    #expect(summary.packageID.rawValue == packageID.rawValue)
+    #expect(summary.versionCode == 12)
+
+    let records = try await service.store.listManagedPackages()
+    let record = try #require(records.first { $0.packageId == packageID })
+    #expect(record.source.kind == .wrapperBootstrap)
+    #expect(record.source.wrapperBundleId == "io.apkrun.android.\(packageID.rawValue)")
+}
+
+@Test(.timeLimit(.minutes(1)))
+func importBootstrapRefusesAnInstalledPackage() async throws {
+    let root = try bootstrapRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": root.path])
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let service = bootstrapService(paths: paths, packageID: packageID)
+    try await service.open()
+
+    // First bootstrap succeeds; the second hits B2 (alreadyInstalled).
+    let apk = Data("apk-test-bytes".utf8)
+    let json = try bootstrapDocumentJSON(packageID: packageID, files: [("base.apk", apk)])
+    let first = try bootstrapHandles([("base.apk", apk)], in: root)
+    _ = try await service.importBootstrap(
+        entry: bootstrapEntry(packageID: packageID),
+        wrapperDocument: bootstrapWrapperDocument(packageID: packageID),
+        bootstrapJSON: json,
+        files: first
+    )
+    for handle in first { try? handle.close() }
+
+    let second = try bootstrapHandles([("base.apk", apk)], in: root)
+    defer { for handle in second { try? handle.close() } }
+    do {
+        _ = try await service.importBootstrap(
+            entry: bootstrapEntry(packageID: packageID),
+            wrapperDocument: bootstrapWrapperDocument(packageID: packageID),
+            bootstrapJSON: json,
+            files: second
+        )
+        Issue.record("importBootstrap must refuse a package that is already installed.")
+    } catch let wireError as RuntimeWireError {
+        #expect(wireError.code == "wrapper.bootstrapNotAllowed")
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func importBootstrapRefusesAPackageMismatch() async throws {
+    let root = try bootstrapRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": root.path])
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let otherID = try #require(PackageID(rawValue: "com.example.other"))
+    let service = bootstrapService(paths: paths, packageID: packageID)
+    try await service.open()
+
+    // The document names a different package than the registered wrapper (B4).
+    let apk = Data("apk-test-bytes".utf8)
+    let json = try bootstrapDocumentJSON(packageID: otherID, files: [("base.apk", apk)])
+    let handles = try bootstrapHandles([("base.apk", apk)], in: root)
+    defer { for handle in handles { try? handle.close() } }
+    do {
+        _ = try await service.importBootstrap(
+            entry: bootstrapEntry(packageID: packageID),
+            wrapperDocument: bootstrapWrapperDocument(packageID: packageID),
+            bootstrapJSON: json,
+            files: handles
+        )
+        Issue.record("importBootstrap must refuse a document for another package.")
+    } catch let wireError as RuntimeWireError {
+        #expect(wireError.code == "wrapper.bootstrapInvalid")
+    }
+
+    // And when the document agrees but the inspected APK does not (B7).
+    let badService = EmbeddedPackageService(
+        paths: paths,
+        inspector: { _ in
+            APKFacts(
+                packageID: otherID,
+                versionCode: 12,
+                versionName: "1.2",
+                splitName: nil,
+                displayName: "Other",
+                minSDK: 23,
+                targetSDK: 35,
+                nativeABIs: []
+            )
+        },
+        sessionService: PackageMutationTestSessionService(),
+        importVerifier: { staged, _, inspect in
+            var facts: [APKFacts] = []
+            for url in staged { facts.append(try await inspect(url)) }
+            let signer = try bootstrapTestSignerDigest()
+            return PackageStore.VerifiedImport(
+                files: staged,
+                facts: facts,
+                signerDigests: [signer],
+                lineage: [signer],
+                warnings: [],
+                excludedSplits: []
+            )
+        },
+        runtimeAccess: FakeInstalledRuntimeAccess()
+    )
+    try await badService.open()
+    let goodJSON = try bootstrapDocumentJSON(packageID: packageID, files: [("base.apk", apk)])
+    let handles2 = try bootstrapHandles([("base.apk", apk)], in: root)
+    defer { for handle in handles2 { try? handle.close() } }
+    do {
+        _ = try await badService.importBootstrap(
+            entry: bootstrapEntry(packageID: packageID),
+            wrapperDocument: bootstrapWrapperDocument(packageID: packageID),
+            bootstrapJSON: goodJSON,
+            files: handles2
+        )
+        Issue.record("importBootstrap must refuse an APK whose identity differs.")
+    } catch let wireError as RuntimeWireError {
+        #expect(wireError.code == "wrapper.bootstrapInvalid")
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func importBootstrapRefusesAHashMismatch() async throws {
+    let root = try bootstrapRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": root.path])
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let service = bootstrapService(paths: paths, packageID: packageID)
+    try await service.open()
+
+    // The document declares the digest of different bytes (B5).
+    let declared = Data("other-bytes".utf8)
+    let json = try bootstrapDocumentJSON(packageID: packageID, files: [("base.apk", declared)])
+    let actual = Data("apk-test-bytes".utf8)
+    let handles = try bootstrapHandles([("base.apk", actual)], in: root)
+    defer { for handle in handles { try? handle.close() } }
+    do {
+        _ = try await service.importBootstrap(
+            entry: bootstrapEntry(packageID: packageID),
+            wrapperDocument: bootstrapWrapperDocument(packageID: packageID),
+            bootstrapJSON: json,
+            files: handles
+        )
+        Issue.record("importBootstrap must refuse a file digest mismatch.")
+    } catch let wireError as RuntimeWireError {
+        #expect(wireError.code == "wrapper.bootstrapInvalid")
+    }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func importBootstrapRefusesMalformedDocuments() async throws {
+    let root = try bootstrapRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": root.path])
+    let packageID = try #require(PackageID(rawValue: "io.apkrun.fixture.hellotext"))
+    let service = bootstrapService(paths: paths, packageID: packageID)
+    try await service.open()
+
+    let apk = Data("apk-test-bytes".utf8)
+    let handles = try bootstrapHandles([("base.apk", apk)], in: root)
+    defer { for handle in handles { try? handle.close() } }
+    do {
+        _ = try await service.importBootstrap(
+            entry: bootstrapEntry(packageID: packageID),
+            wrapperDocument: bootstrapWrapperDocument(packageID: packageID),
+            bootstrapJSON: Data("{not json".utf8),
+            files: handles
+        )
+        Issue.record("importBootstrap must refuse an unparseable document.")
+    } catch let wireError as RuntimeWireError {
+        #expect(wireError.code == "wrapper.bootstrapInvalid")
+    }
 }

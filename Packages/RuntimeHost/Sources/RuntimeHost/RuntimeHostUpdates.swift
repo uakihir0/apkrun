@@ -1,6 +1,9 @@
 import APKStoreCore
+import CoreGraphics
 import DiagnosticsCore
 import Foundation
+import IOKit.ps
+import Network
 import RuntimeAPI
 import RuntimeCore
 import UpdateCore
@@ -12,11 +15,12 @@ import UpdateCore
 public actor EmbeddedUpdateService {
     private let paths: APKRunPaths
     private let fileManager = FileManager.default
-    private let store: PackageStore
+    let store: PackageStore
     /// The persisted update phases; internal for the `updates.waiting`
     /// health check and tests.
     let stateStore: UpdateStateStore
-    private let coordinator: UpdateCoordinator
+    /// Internal for the §3 scheduler the host drives.
+    let coordinator: UpdateCoordinator
     private let credentials = KeychainProviderCredentials()
     private var isOpen = false
 
@@ -50,7 +54,12 @@ public actor EmbeddedUpdateService {
             notifier: notifier,
             developerModeEnabled: developerModeEnabled,
             checkIntervalHours: checkIntervalHours(),
-            guestFacts: guestFacts
+            guestFacts: guestFacts,
+            installedNotificationEnabled: {
+                GlobalSettings.load(
+                    from: APKRunPaths(allowingHomeOverride: true).settingsFile
+                ).updatesNotifyInstalled
+            }
         )
     }
 
@@ -183,6 +192,8 @@ public actor EmbeddedUpdateService {
             {
             case .installed(let from, let to):
                 return .updated(from: from, to: to)
+            case .rolledBack(let failure):
+                return .rolledBack(reason: failure.errorCode)
             case .keptAfterFailedHealthCheck(let failure):
                 return .keptAfterFailedHealthCheck(reason: failure.errorCode)
             case .staged:
@@ -205,8 +216,9 @@ public actor EmbeddedUpdateService {
             storeBusy: { [store] packageID in
                 await store.packageMutationInProgress(packageID)
             },
-            // TODO(#42): launch health checks need a DisplayPool slot; v1's
-            // H1 is `versionOnly` for every package.
+            // §8.2: the health launch reuses the session's display lease; a
+            // pool with no free scanout answers `.launchFailed` rather than
+            // blocking the install queue on a display slot.
             requiresDisplaySlot: { _ in false },
             displaySlotFree: { true })
         serviceGate = gate
@@ -372,7 +384,8 @@ public actor EmbeddedUpdateService {
             lastCheckAt: state?.lastCheckAt,
             nextCheckAt: state?.nextCheckAt,
             consecutiveFailures: state?.consecutiveFailures ?? 0,
-            waiting: []
+            waiting: [],
+            incompatibleReason: state?.incompatibleReason
         )
     }
 
@@ -414,6 +427,50 @@ public actor EmbeddedUpdateService {
         }
         // The §2.1–§2.4 authority rules live in UpdateCore.
         let resolution = try UpdatePolicyRules.resolve(policy, for: record)
+
+        // §9.2: a token travels only in `ProviderSpec.token` and is
+        // GitHub-only; it is validated before anything writes (below).
+        if case .set(let spec) = policy.provider, spec.token != nil {
+            guard resolution.provider?.type == .github else {
+                throw UpdateFailure.providerMetadataInvalid(
+                    detail: "provider token is GitHub-only")
+            }
+        }
+
+        // §11.1: a signed-remote provider makes one test request before the
+        // policy is written — for F-Droid it fetches and verifies entry.jar,
+        // for GitHub the release listing — so a wrong source fails here, not
+        // on the first check.
+        if let providerRef = resolution.provider {
+            switch providerRef.type {
+            case .fdroid:
+                let provider = try FDroidProvider(ref: providerRef)
+                _ = try await provider.fetchEntry(
+                    context: providerContext(userInitiated: true))
+            case .github:
+                let provider = try GitHubProvider(ref: providerRef)
+                // The connection test runs with the effective token — the
+                // request's token when present (`""` means none) — so a
+                // stale stored token cannot block a replacement or deletion.
+                let effectiveToken: String?
+                if case .set(let spec) = policy.provider, let token = spec.token {
+                    effectiveToken = token.isEmpty ? nil : token
+                } else {
+                    effectiveToken = credentials.token(for: GitHubProvider.tokenService)
+                }
+                try await provider.testConnection(
+                    context: providerContext(userInitiated: true), token: effectiveToken)
+            case .local, .direct:
+                break
+            }
+        }
+
+        // The provider validated: the token goes to the Keychain (service
+        // `io.apkrun.provider.github`), never settings.json or the record.
+        // A request without `token` keeps the stored one; `""` deletes it.
+        if case .set(let spec) = policy.provider, let token = spec.token {
+            try credentials.setToken(token, for: GitHubProvider.tokenService)
+        }
 
         try await store.setUpdateMode(for: packageID, mode: resolution.settingsMode)
         // `requireProvider` makes the provider requirement atomic inside the
@@ -484,6 +541,30 @@ public actor EmbeddedUpdateService {
             throw PackageStoreFailure.packageNotFound
         }
         return updated
+    }
+
+    /// §8.5: rolls the package back to `previous/`. The coordinator
+    /// decides which §7.3 mechanism can run.
+    public func rollbackPackage(
+        packageID: PackageID,
+        allowDataLoss: Bool = false
+    ) async throws -> UpdateCoordinator.UpdateRollbackOutcome {
+        try await coordinator.rollbackPackage(packageID, allowDataLoss: allowDataLoss)
+    }
+
+    /// §8.4: adds (`skipped` true) or removes a version on the skip list.
+    /// Skipping discards any staged set (update-system.md §8.4).
+    public func setSkippedVersion(
+        packageID: PackageID,
+        versionCode: VersionCode,
+        skipped: Bool
+    ) async throws {
+        if skipped {
+            try await store.discardStaged(packageID: packageID)
+            await stateStore.skipVersion(packageID, versionCode: versionCode)
+        } else {
+            await stateStore.unskipVersion(packageID, versionCode: versionCode)
+        }
     }
 
     /// The wire `UpdateChoice` a record and its settings mode describe. The
@@ -618,34 +699,6 @@ public actor EmbeddedUpdateService {
     }
 }
 
-/// `GET` through `URLSession` (update-system.md §4.1).
-public struct URLSessionUpdateHTTPClient: UpdateHTTPClient {
-    /// Creates a client.
-    public init() {}
-
-    /// Performs a GET request.
-    public func get(_ url: URL, headers: [String: String]) async throws(UpdateFailure) -> HTTPResponse {
-        var request = URLRequest(url: url)
-        for (name, value) in headers {
-            request.setValue(value, forHTTPHeaderField: name)
-        }
-        let (body, response): (Data, URLResponse)
-        do {
-            (body, response) = try await URLSession.shared.data(for: request)
-        } catch {
-            throw UpdateFailure.providerUnreachable(reason: error.localizedDescription)
-        }
-        guard let http = response as? HTTPURLResponse else {
-            throw UpdateFailure.providerUnreachable(reason: "not an HTTP response")
-        }
-        return HTTPResponse(
-            status: http.statusCode,
-            body: body,
-            etag: http.value(forHTTPHeaderField: "ETag"),
-            lastModified: http.value(forHTTPHeaderField: "Last-Modified"))
-    }
-}
-
 /// The on-disk provider cache under `Updates/cache/<key>/` (§4.1).
 public struct FileProviderCache: ProviderCache {
     /// The cache root.
@@ -737,6 +790,220 @@ extension RuntimeHost {
         return service
     }
 
+    /// `apkrun config get` (configuration.md §2.7): the `updates.*` values;
+    /// `keys` nil returns all four.
+    func updateConfigValues(keys: [String]?) -> [String: String] {
+        let globals = GlobalSettings.load(from: paths.settingsFile)
+        var all: [String: String] = [
+            "updates.checkIntervalHours": String(globals.updatesCheckIntervalHours),
+            "updates.downloadOnExpensiveNetwork":
+                globals.updatesDownloadOnExpensiveNetwork ? "true" : "false",
+            "updates.startRuntimeToInstall":
+                globals.updatesStartRuntimeToInstall ? "true" : "false",
+            "updates.notifyInstalled": globals.updatesNotifyInstalled ? "true" : "false",
+            "developer.enabled": globals.developerEnabled ? "true" : "false",
+        ]
+        for (name, value) in globals.integrationsEnabled {
+            all["integrations.enabled.\(name)"] = value ? "true" : "false"
+        }
+        for (name, value) in globals.integrationsDefaults {
+            all["integrations.defaults.\(name)"] = value
+        }
+        for (key, defaultValue) in GlobalSettings.extraDefaults {
+            all[key] = globals.extras[key] ?? defaultValue
+        }
+        for (key, value) in globals.extras where all[key] == nil {
+            all[key] = value
+        }
+        guard let keys else { return all }
+        return all.filter { keys.contains($0.key) }
+    }
+
+    /// `apkrun config set` (configuration.md §2.7): validates and writes one
+    /// `updates.*` key, returning the values after the write.
+    func updateConfigSet(key: String, value: String) throws -> [String: String] {
+        var globals = GlobalSettings.load(from: paths.settingsFile)
+        switch key {
+        case "updates.checkIntervalHours":
+            guard let hours = Int(value),
+                GlobalSettings.allowedCheckIntervalHours.contains(hours)
+            else {
+                throw RuntimeWireError(
+                    domain: "runtime", code: "runtime.invalidConfigValue",
+                    message:
+                        "updates.checkIntervalHours must be one of 1, 3, 6, 12, 24, 72, 168"
+                )
+            }
+            globals.updatesCheckIntervalHours = hours
+        case "updates.downloadOnExpensiveNetwork", "updates.startRuntimeToInstall",
+            "updates.notifyInstalled":
+            guard let flag = value == "true" ? true : value == "false" ? false : nil
+            else {
+                throw RuntimeWireError(
+                    domain: "runtime", code: "runtime.invalidConfigValue",
+                    message: "\(key) must be true or false")
+            }
+            switch key {
+            case "updates.downloadOnExpensiveNetwork":
+                globals.updatesDownloadOnExpensiveNetwork = flag
+            case "updates.startRuntimeToInstall":
+                globals.updatesStartRuntimeToInstall = flag
+            default:
+                globals.updatesNotifyInstalled = flag
+            }
+        case "developer.enabled":
+            guard let flag = Self.configBool(value, key: key) else {
+                throw Self.invalidConfigValue(key, "true or false")
+            }
+            globals.developerEnabled = flag
+        case let integrationKey where integrationKey.hasPrefix("integrations.enabled."):
+            let name = String(integrationKey.dropFirst("integrations.enabled.".count))
+            guard !name.isEmpty else { throw Self.unknownConfigKey(key) }
+            guard let flag = Self.configBool(value, key: key) else {
+                throw Self.invalidConfigValue(key, "true or false")
+            }
+            globals.integrationsEnabled[name] = flag
+        case let integrationKey where integrationKey.hasPrefix("integrations.defaults."):
+            let name = String(integrationKey.dropFirst("integrations.defaults.".count))
+            guard !name.isEmpty else { throw Self.unknownConfigKey(key) }
+            switch name {
+            case "links":
+                guard ["ask", "mac", "android"].contains(value) else {
+                    throw Self.invalidConfigValue(key, "ask, mac, or android")
+                }
+            case "sharedFolders":
+                guard ["off", "readOnly", "readWrite"].contains(value) else {
+                    throw Self.invalidConfigValue(key, "off, readOnly, or readWrite")
+                }
+            default:
+                guard Self.configBool(value, key: key) != nil else {
+                    throw Self.invalidConfigValue(key, "true or false")
+                }
+            }
+            globals.integrationsDefaults[name] = value
+        case "runtime.startPolicy":
+            guard ["onDemand", "atLogin"].contains(value) else {
+                throw Self.invalidConfigValue(key, "onDemand or atLogin")
+            }
+            globals.extras[key] = value
+        case "maintenance.channel":
+            guard ["stable", "beta"].contains(value) else {
+                throw Self.invalidConfigValue(key, "stable or beta")
+            }
+            globals.extras[key] = value
+        case "maintenance.installImages":
+            guard ["automatic", "ask"].contains(value) else {
+                throw Self.invalidConfigValue(key, "automatic or ask")
+            }
+            globals.extras[key] = value
+        case "wrappers.defaultLocation":
+            guard ["userApplications", "allUsersApplications", "ask"].contains(value)
+            else {
+                throw Self.invalidConfigValue(
+                    key, "userApplications, allUsersApplications, or ask")
+            }
+            globals.extras[key] = value
+        case "runtime.idleSuspendMinutes", "runtime.idleStopMinutes":
+            try Self.configInt(key, value, range: 0...1440, into: &globals)
+        case "runtime.cpuCount":
+            try Self.configInt(key, value, range: 2...16, into: &globals)
+        case "runtime.memoryGiB":
+            try Self.configInt(key, value, range: 3...128, into: &globals)
+        case "runtime.userdataGiB":
+            try Self.configInt(key, value, range: 8...256, into: &globals)
+        case "display.maxSessions":
+            try Self.configInt(key, value, range: 1...15, into: &globals)
+        case "runtime.autoRestart", "audio.output", "graphics.safeMode",
+            "maintenance.checkAutomatically", "maintenance.installAPKRunAutomatically",
+            "maintenance.downloadImagesAutomatically",
+            "maintenance.notifyImageInstalled", "system.syncLocale",
+            "system.syncTimeZone", "system.syncClockFormat":
+            guard Self.configBool(value, key: key) != nil else {
+                throw Self.invalidConfigValue(key, "true or false")
+            }
+            globals.extras[key] = value
+        default:
+            throw Self.unknownConfigKey(key)
+        }
+        try GlobalSettings.store(globals, to: paths.settingsFile)
+        // The idle controller applies new suspend/stop deadlines at once;
+        // it is not re-read until the next daemon start otherwise.
+        Task { await reloadIdleSettingsIfIdleKey(key) }
+        // A changed `integrations.enabled.*`/`defaults.*` may alter the
+        // guest's forwarding allowlist; push it so titles and text stop
+        // leaving Android at once.
+        if key.hasPrefix("integrations.") {
+            Task { await pushNotificationForwarding() }
+        }
+        // `system.sync*` is owned by the configuration store (the extras
+        // write above only keeps `apkrun config` read-back consistent):
+        // persist it there too and fan the change out to subscribers and
+        // the locale/time synchronizer like `updateConfiguration` does.
+        if [
+            LocaleTimeConfigurationValues.syncLocaleKey,
+            LocaleTimeConfigurationValues.syncTimeZoneKey,
+            LocaleTimeConfigurationValues.syncClockFormatKey,
+        ].contains(key),
+            let flag = Self.configBool(value, key: key)
+        {
+            let update = try configurationStore.updateLocaleTimeSettings([key: .set(flag)])
+            if !update.changedKeys.isEmpty {
+                eventHub.publishRuntimeChange(.configurationChanged(keys: update.changedKeys))
+                enqueueLocaleTimeTrigger(.hostPreferencesChanged)
+            }
+        }
+        // `maintenance.*` is read live by APKRun.app's self-update wiring
+        // (configuration.md §2.6); the change event reaches it on the
+        // runtime topic like `updateConfiguration` does.
+        if key.hasPrefix("maintenance.") {
+            eventHub.publishRuntimeChange(.configurationChanged(keys: [key]))
+        }
+        return updateConfigValues(keys: nil)
+    }
+
+    /// The lazily created §3 update scheduler: drives due checks, timers,
+    /// wake and launch triggers, and the §3.4 resource limits.
+    func updateSchedulerInstance() -> UpdateScheduler {
+        if let updateScheduler { return updateScheduler }
+        let service = updateServiceInstance()
+        let scheduler = UpdateScheduler(
+            coordinator: service.coordinator,
+            stateStore: service.stateStore,
+            store: service.store,
+            contextProvider: { await service.providerContext(userInitiated: false) },
+            runtimeProvider: { [weak self] in await self?.updateRuntimeAccess() },
+            gateProvider: { [weak self] in await self?.updateGateInstance() },
+            networkSatisfied: { Self.updateNetworkPathSatisfied() },
+            backgroundDownloadAllowed: {
+                Self.updateBackgroundDownloadAllowed()
+            })
+        updateScheduler = scheduler
+        return scheduler
+    }
+
+    /// `NWPathMonitor`-backed answer for "may a check run now" (§3.4). The
+    /// monitor is created lazily; before its first sample lands the path is
+    /// treated as satisfied (a check is cheap, a false negative is not).
+    private static let updatePathMonitor = UpdatePathMonitor()
+    static func updateNetworkPathSatisfied() -> Bool {
+        updatePathMonitor.satisfied
+    }
+
+    /// §3.4: a background download needs a non-expensive/non-constrained
+    /// path unless `updates.downloadOnExpensiveNetwork`, and is skipped in
+    /// Low Power Mode when the staged set tops 50 MiB (approximated here by
+    /// "any background download" — the per-set size check lives in the
+    /// download step itself).
+    static func updateBackgroundDownloadAllowed() -> Bool {
+        let globals = GlobalSettings.load(
+            from: APKRunPaths(allowingHomeOverride: true).settingsFile)
+        if ProcessInfo.processInfo.isLowPowerModeEnabled {
+            return false
+        }
+        return updatePathMonitor.inexpensive
+            || globals.updatesDownloadOnExpensiveNetwork
+    }
+
     /// Registers `updates.waiting` once (diagnostics.md §7.4).
     private func registerUpdatesWaitingCheck(service: EmbeddedUpdateService) {
         guard !updatesHealthChecksRegistered, let checks = healthCheckRegistry else { return }
@@ -748,15 +1015,9 @@ extension RuntimeHost {
 
     /// `updates.checkIntervalHours` (configuration.md §2.7), default 6.
     static func updatesCheckIntervalHours() -> Int {
-        guard let data = try? Data(contentsOf: APKRunPaths(allowingHomeOverride: true).settingsFile),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let updates = object["updates"] as? [String: Any],
-            let hours = updates["checkIntervalHours"] as? Int,
-            hours > 0
-        else {
-            return 6
-        }
-        return hours
+        GlobalSettings.load(
+            from: APKRunPaths(allowingHomeOverride: true).settingsFile
+        ).updatesCheckIntervalHours
     }
 
     /// `checkForUpdates` (runtime-api.md §9.1): a long operation that checks
@@ -822,16 +1083,19 @@ extension RuntimeHost {
 
         // A non-checkOnly run can install: hold the package-mutation guard so
         // stop/restart/reset cannot interrupt a stage→install transaction.
-        if !checkOnly {
+        // Acquiring it can boot a stopped runtime, so skip it when there is
+        // nothing to check.
+        var mutationToken: UUID?
+        if !checkOnly, !selected.isEmpty {
             do {
-                try beginPackageMutation()
+                mutationToken = try await beginPackageMutation()
             } catch {
                 finishOperation(
                     operationID, result: .failed(Self.sessionWireError(for: error)))
                 throw Self.sessionWireError(for: error)
             }
         }
-        defer { if !checkOnly { finishPackageMutation() } }
+        defer { if let mutationToken { finishPackageMutation(mutationToken) } }
 
         let results = await service.checkPackages(
             selected, context: service.providerContext(userInitiated: true),
@@ -934,6 +1198,78 @@ extension RuntimeHost {
             throw EmbeddedUpdateService.wireError(for: error)
         }
     }
+
+    /// `rollbackPackage` (update-system.md §8.5, cli.md §4.3).
+    public func rollbackPackage(
+        packageID wireID: RuntimePackageID,
+        allowDataLoss: Bool
+    ) async throws(RuntimeWireError) -> RuntimeRollbackPackageControlReply {
+        let service = updateServiceInstance()
+        do {
+            try await service.open()
+        } catch {
+            throw EmbeddedPackageService.wireError(for: error)
+        }
+        guard let packageID = PackageID(rawValue: wireID.rawValue) else {
+            throw .store(
+                "packageNotFound",
+                message: "The package is not managed by APKRun.",
+                remediation: "Use `apkrun list` to see managed packages.")
+        }
+        // A rollback is a package mutation: it blocks stop/restart/reset
+        // like installs and uninstalls do (update-system.md §8.5).
+        let mutationToken: UUID
+        do {
+            mutationToken = try await beginPackageMutation()
+        } catch {
+            throw Self.sessionWireError(for: error)
+        }
+        defer { finishPackageMutation(mutationToken) }
+        do {
+            switch try await service.rollbackPackage(
+                packageID: packageID, allowDataLoss: allowDataLoss)
+            {
+            case .rolledBack(let to):
+                return RuntimeRollbackPackageControlReply(rolledBackTo: to)
+            case .unavailable:
+                return RuntimeRollbackPackageControlReply(unavailable: true)
+            case .failed(let failure):
+                throw EmbeddedUpdateService.wireError(for: failure)
+            }
+        } catch let error as RuntimeWireError {
+            throw error
+        } catch {
+            throw EmbeddedUpdateService.wireError(for: error)
+        }
+    }
+
+    /// `updateSkipped` (update-system.md §8.4, cli.md §4.3).
+    public func setSkippedVersion(
+        packageID wireID: RuntimePackageID,
+        versionCode: RuntimeVersionCode,
+        skipped: Bool
+    ) async throws(RuntimeWireError) {
+        let service = updateServiceInstance()
+        do {
+            try await service.open()
+        } catch {
+            throw EmbeddedPackageService.wireError(for: error)
+        }
+        guard let packageID = PackageID(rawValue: wireID.rawValue) else {
+            throw .store(
+                "packageNotFound",
+                message: "The package is not managed by APKRun.",
+                remediation: "Use `apkrun list` to see managed packages.")
+        }
+        do {
+            try await service.setSkippedVersion(
+                packageID: packageID, versionCode: versionCode, skipped: skipped)
+        } catch let error as RuntimeWireError {
+            throw error
+        } catch {
+            throw EmbeddedUpdateService.wireError(for: error)
+        }
+    }
 }
 
 /// The `UpdateRuntimeAccess` the host supplies to UpdateCore (update-system.md
@@ -948,7 +1284,11 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
     private let endAll: @Sendable (PackageID) async -> Void
     private let reopenPackage: @Sendable (PackageID) async throws -> Void
     private let ready: @Sendable (UpdateStartReason) async throws -> Void
+    private let mayStart: @Sendable () async -> Bool
     private let assertOperation: @Sendable () async throws -> UpdateActivityAssertion
+    private let idle: @Sendable () async -> Void
+    private let healthLaunch: @Sendable (PackageID, UpdateHealthCheckTimeouts) async -> HealthLaunchResult
+    private let drawnFrame: @Sendable (PackageID) async -> Bool
 
     init(
         stateOf: @escaping @Sendable () async -> WireRuntimeState,
@@ -959,7 +1299,11 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         endAll: @escaping @Sendable (PackageID) async -> Void,
         reopenPackage: @escaping @Sendable (PackageID) async throws -> Void,
         ready: @escaping @Sendable (UpdateStartReason) async throws -> Void,
-        assertOperation: @escaping @Sendable () async throws -> UpdateActivityAssertion
+        mayStart: @escaping @Sendable () async -> Bool = { false },
+        assertOperation: @escaping @Sendable () async throws -> UpdateActivityAssertion,
+        idle: @escaping @Sendable () async -> Void = {},
+        healthLaunch: @escaping @Sendable (PackageID, UpdateHealthCheckTimeouts) async -> UpdateCore.HealthLaunchResult,
+        drawnFrame: @escaping @Sendable (PackageID) async -> Bool
     ) {
         self.stateOf = stateOf
         self.inUse = inUse
@@ -969,7 +1313,11 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         self.endAll = endAll
         self.reopenPackage = reopenPackage
         self.ready = ready
+        self.mayStart = mayStart
         self.assertOperation = assertOperation
+        self.idle = idle
+        self.healthLaunch = healthLaunch
+        self.drawnFrame = drawnFrame
     }
 
     var runtimeState: WireRuntimeState {
@@ -1004,8 +1352,29 @@ private actor EmbeddedUpdateRuntimeAccess: UpdateRuntimeAccess {
         try await ready(reason)
     }
 
+    func mayStartForUpdateInstall() async -> Bool {
+        await mayStart()
+    }
+
     func assertStoreOperation() async throws -> UpdateActivityAssertion {
         try await assertOperation()
+    }
+
+    func updatesIdle() async {
+        await idle()
+    }
+
+    /// §8.2: the session service runs the health launch when it knows how;
+    /// a service without health-launch support answers `.launchFailed`, the
+    /// same as no channel.
+    func healthCheckLaunch(_ packageID: PackageID, timeouts: UpdateHealthCheckTimeouts) async
+        -> HealthLaunchResult
+    {
+        await healthLaunch(packageID, timeouts)
+    }
+
+    func hasDrawnFrame(_ packageID: PackageID) async -> Bool {
+        await drawnFrame(packageID)
     }
 }
 
@@ -1065,6 +1434,39 @@ extension RuntimeHost {
     /// (T1 with fake sessions, update-system.md §7.5).
     func installHeadlessSessionServiceForTesting(_ service: any RuntimeSessionService) {
         headlessSessionService = service
+    }
+
+    /// The §3.5 headless-install conditions: `updates.startRuntimeToInstall`
+    /// on, a staged update waiting longer than 24 h, AC power, and the user
+    /// idle for at least 15 minutes. GU1 and `ensureReady(.update)` both ask.
+    func mayStartUpdateInstallOnStoppedRuntime() async -> Bool {
+        let globals = GlobalSettings.load(from: paths.settingsFile)
+        guard globals.updatesStartRuntimeToInstall else { return false }
+        let cutoff = Date().addingTimeInterval(-86_400)
+        let staged = await updateServiceInstance().stateStore.allStates()
+            .values.contains {
+                $0.phase == "staged" && ($0.stagedAt ?? .distantFuture) < cutoff
+            }
+        guard staged else { return false }
+        return Self.hostOnACPower() && Self.hostIdleSeconds() >= 900
+    }
+
+    /// §3.5's tail: marks that an update install booted a stopped runtime.
+    func markUpdateBootedForInstall() { updateBootedForInstall = true }
+    /// §3.5's tail: clears the mark — a real session now owns the runtime.
+    func clearUpdateBootedForInstall() { updateBootedForInstall = false }
+    /// §3.5's tail: stops a runtime this daemon booted only for update
+    /// installs once no update work, mutation, or session keeps it.
+    private func stopUpdateBootedRuntimeIfIdle() async {
+        guard updateBootedForInstall, activePackageMutations == 0 else { return }
+        if let gate = updateGate, await gate.hasPendingInstalls { return }
+        if let service = headlessSessionService as? DaemonHeadlessSessionService,
+            await service.hasLiveSessions
+        {
+            return
+        }
+        updateBootedForInstall = false
+        try? await stopRuntimeBody(reason: .idle)
     }
 
     /// Builds the §7.5 runtime access over this host's supervisor and
@@ -1173,7 +1575,7 @@ extension RuntimeHost {
                 else {
                     return
                 }
-                await handling.endSessionForUpdate(packageID: wireID)
+                await handling.endSessionForUpdate(packageID: wireID, reason: .updating)
             },
             reopenPackage: { [weak self] packageID in
                 guard let self,
@@ -1183,11 +1585,37 @@ extension RuntimeHost {
                 else {
                     return
                 }
-                try await handling.reopenPackageSession(packageID: wireID)
+                // The service-level reopen bypasses the host `launch` that
+                // holds `.session` activity; hold it here or the resumed app
+                // would be eligible for idle suspend/stop.
+                await self.acquireSessionActivityIfNeeded(wireID)
+                do {
+                    try await handling.reopenPackageSession(packageID: wireID)
+                } catch {
+                    await self.releaseSessionActivityIfInactive(wireID)
+                    throw error
+                }
             },
             ready: { [weak self] reason in
+                // Daemon startup creates the supervisor asynchronously; an
+                // install admitted before that must not fail on a nil
+                // supervisor and drop the staged request.
+                try? await self?.waitForStartupCompletion()
                 guard let self, let supervisor = await self.supervisor else {
                     throw UpdateFailure.providerUnreachable(reason: "runtime is not running")
+                }
+                // §3.5: booting a stopped runtime for an automatic install is
+                // allowed only under `updates.startRuntimeToInstall` while a
+                // staged update has waited > 24 h on AC with the user idle
+                // >= 15 min; otherwise the install defers to the next gate.
+                if reason == .update, await supervisor.state == .stopped {
+                    guard await self.mayStartUpdateInstallOnStoppedRuntime() else {
+                        throw UpdateFailure.providerUnreachable(
+                            reason: "the §3.5 headless-install conditions do not hold")
+                    }
+                    // §3.5's tail: remember this boot was update-driven so
+                    // the runtime stops again once the installs finish.
+                    await markUpdateBootedForInstall()
                 }
                 // A user-initiated Update Now may resume a suspended runtime;
                 // automatic installs go through .automatic (§7.1 GU1).
@@ -1203,17 +1631,57 @@ extension RuntimeHost {
                         reason: "package channel is not connected")
                 }
             },
+            mayStart: { [weak self] in
+                await self?.mayStartUpdateInstallOnStoppedRuntime() ?? false
+            },
             assertOperation: { [weak self] in
                 guard let self else { return UpdateActivityAssertion() }
                 // The host's package-mutation guard makes a stop, restart,
                 // or reset wait for a queued install resuming without its
                 // original client request.
-                try await self.beginPackageMutation()
+                let token = try await self.beginPackageMutation()
                 let inner = await self.updateIdleController.assertActivity(.storeOperation)
                 return UpdateActivityAssertion {
                     inner.release()
-                    Task { await self.finishPackageMutation() }
+                    Task {
+                        await self.finishPackageMutation(token)
+                        await self.stopUpdateBootedRuntimeIfIdle()
+                    }
                 }
+            },
+            idle: { [weak self] in
+                await self?.stopUpdateBootedRuntimeIfIdle()
+            },
+            // §8.2: the session service runs the health-check launch; a
+            // service without it answers `.launchFailed`, the same as no
+            // channel.
+            healthLaunch: { [weak self] packageID, timeouts in
+                // The service is created lazily so an install that booted
+                // Android itself (§3.5) can still run its health launch.
+                guard let self,
+                    let service = (try? await self.makeHeadlessSessionService())
+                        as? DaemonHeadlessSessionService,
+                    let wireID = RuntimePackageID(rawValue: packageID.rawValue)
+                else {
+                    return .launchFailed(detail: "noSessionService")
+                }
+                return await service.healthCheckLaunch(
+                    packageID: wireID, timeouts: timeouts)
+            },
+            drawnFrame: { [weak self] packageID in
+                guard let self else { return false }
+                if let service = (try? await self.makeHeadlessSessionService())
+                    as? DaemonHeadlessSessionService,
+                    let wireID = RuntimePackageID(rawValue: packageID.rawValue),
+                    await service.hasDrawnFrame(packageID: wireID)
+                {
+                    return true
+                }
+                // §8.1: any earlier session that drew a frame — a FIRST_FRAME
+                // marker persisted in perf/launches.jsonl — also proves the
+                // app can draw, including across daemon restarts.
+                return PerfRecordWriter.read(from: self.paths.launchPerformanceFile)
+                    .contains { $0.packageID == packageID.rawValue && $0.outcome == "shown" }
             })
     }
 
@@ -1228,13 +1696,16 @@ extension RuntimeHost {
                 return await self.packageQueryServiceInstance().store
                     .packageMutationInProgress(packageID)
             },
-            // TODO(#42): launch health checks need a DisplayPool slot; v1's
-            // H1 is `versionOnly` for every package.
+            // §8.2: the health launch reuses the session's display lease; a
+            // pool with no free scanout answers `.launchFailed` rather than
+            // blocking the install queue on a display slot.
             requiresDisplaySlot: { _ in false },
             displaySlotFree: { true })
         updateGate = gate
         startUpdateGatePump()
-        Task { await self.wireUpdateGateSessionHooks() }
+        Task { [weak self] in
+            await self?.wireUpdateGateSessionHooks()
+        }
         return gate
     }
 
@@ -1251,8 +1722,16 @@ extension RuntimeHost {
                 await self?.awaitUpdateInstall(for: packageID, gate: updateGate)
             },
             firstFrameObserver: { [weak self] packageID in
-                guard let self, let package = PackageID(rawValue: packageID.rawValue) else { return }
+                guard let self else { return }
+                // A session that drew a frame means someone is using the
+                // runtime: it is no longer a headless update boot.
+                await clearUpdateBootedForInstall()
+                guard let package = PackageID(rawValue: packageID.rawValue) else { return }
                 await self.updateServiceInstance().notePostUpdateFirstFrame(package)
+                // runtime-daemon.md §7.1: a due package's check is scheduled
+                // 30 s after the first frame — never before openSession
+                // replies.
+                await self.updateSchedulerInstance().noteLaunched(package)
             })
     }
 
@@ -1391,14 +1870,15 @@ extension RuntimeHost {
         // An update is a package mutation: it blocks stop/restart/reset like
         // installs and uninstalls do, so Android cannot be torn down while a
         // stage→install transaction is open.
+        let mutationToken: UUID
         do {
-            try beginPackageMutation()
+            mutationToken = try await beginPackageMutation()
         } catch {
             finishOperation(
                 operationID, result: .failed(Self.sessionWireError(for: error)))
             throw Self.sessionWireError(for: error)
         }
-        defer { finishPackageMutation() }
+        defer { finishPackageMutation(mutationToken) }
 
         let outcome: WireUpdateOutcome?
         do {
@@ -1450,5 +1930,83 @@ extension RuntimeHost {
         }
         finishOperation(operationID, result: .succeeded(.none))
         return (handle, outcome)
+    }
+}
+
+/// `NWPathMonitor` wrapper for the §3.4 network rules. `satisfied` starts
+/// true — a check must not be skipped before the first sample; `inexpensive`
+/// starts false so a background download defers until the path is known.
+final class UpdatePathMonitor: @unchecked Sendable {
+    private let monitor = NWPathMonitor()
+    private let queue = DispatchQueue(label: "io.apkrun.update-path")
+    private let lock = NSLock()
+    private var satisfiedPath = true
+    private var inexpensivePath = false
+
+    init() {
+        monitor.pathUpdateHandler = { [weak self] path in
+            self?.lock.lock()
+            self?.satisfiedPath = path.status == .satisfied
+            self?.inexpensivePath = !path.isExpensive && !path.isConstrained
+            self?.lock.unlock()
+        }
+        monitor.start(queue: queue)
+    }
+
+    var satisfied: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return satisfiedPath
+    }
+
+    var inexpensive: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return inexpensivePath
+    }
+}
+
+extension RuntimeHost {
+    /// `HIDIdleTime` equivalent (update-system.md §3.5): seconds since the
+    /// last user input, via `CGEventSourceSecondsSinceLastEventType`.
+    static func hostIdleSeconds() -> TimeInterval {
+        guard let anyEvent = CGEventType(rawValue: ~0) else { return 0 }
+        return CGEventSource.secondsSinceLastEventType(
+            .combinedSessionState, eventType: anyEvent)
+    }
+
+    /// True while the Mac runs on external power (§3.5): IOPowerSources'
+    /// "time remaining" sentinel for AC.
+    static func hostOnACPower() -> Bool {
+        IOPSGetTimeRemainingEstimate() == -2.0
+    }
+}
+
+extension RuntimeHost {
+    static func configBool(_ value: String, key _: String) -> Bool? {
+        value == "true" ? true : value == "false" ? false : nil
+    }
+
+    static func invalidConfigValue(_ key: String, _ allowed: String) -> RuntimeWireError {
+        RuntimeWireError(
+            domain: "runtime", code: "runtime.invalidConfigValue",
+            message: "\(key) must be \(allowed)")
+    }
+
+    static func unknownConfigKey(_ key: String) -> RuntimeWireError {
+        RuntimeWireError(
+            domain: "runtime", code: "runtime.unknownConfigKey",
+            message: "unknown setting \(key); run `apkrun config get` to list the keys")
+    }
+
+    static func configInt(
+        _ key: String, _ value: String, range: ClosedRange<Int>,
+        into globals: inout GlobalSettings
+    ) throws {
+        guard let number = Int(value), range.contains(number) else {
+            throw invalidConfigValue(
+                key, "an integer from \(range.lowerBound) to \(range.upperBound)")
+        }
+        globals.extras[key] = value
     }
 }

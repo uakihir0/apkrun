@@ -371,6 +371,9 @@ public struct PackageUpdateStatus: Codable, Sendable, Equatable {
     public var consecutiveFailures: Int
     /// False gates keeping an install waiting (GU1…GU7).
     public var waiting: [WaitingReason]
+    /// The §4.5 reason the last check offered no candidate though the
+    /// provider has versions (`signerDiffers`, `abiMismatch`, `sdkTooLow`).
+    public var incompatibleReason: String?
 
     /// Creates a package update status.
     public init(
@@ -383,7 +386,8 @@ public struct PackageUpdateStatus: Codable, Sendable, Equatable {
         lastCheckAt: Date? = nil,
         nextCheckAt: Date? = nil,
         consecutiveFailures: Int = 0,
-        waiting: [WaitingReason] = []
+        waiting: [WaitingReason] = [],
+        incompatibleReason: String? = nil
     ) {
         self.packageID = packageID
         self.choice = choice
@@ -395,6 +399,7 @@ public struct PackageUpdateStatus: Codable, Sendable, Equatable {
         self.nextCheckAt = nextCheckAt
         self.consecutiveFailures = consecutiveFailures
         self.waiting = waiting
+        self.incompatibleReason = incompatibleReason
     }
 }
 
@@ -774,6 +779,182 @@ public struct RuntimeSetUpdateAuthorityControlReply: Codable, Sendable {
     /// Creates a control reply.
     public init(status: PackageUpdateStatus? = nil, error: RuntimeWireError? = nil) {
         self.status = status
+        self.error = error
+    }
+}
+
+/// A `rollbackPackage` control request (update-system.md §8.5).
+public struct RuntimeRollbackPackageControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The package to roll back to `previous/`.
+    public var packageID: RuntimePackageID
+    /// Permits the §7.3 uninstall + first-install fallback; only the
+    /// confirmed "Restore (erases data)" choice sets it.
+    public var allowDataLoss: Bool
+
+    /// Creates a control request.
+    public init(
+        header: APIRequestHeader,
+        packageID: RuntimePackageID,
+        allowDataLoss: Bool = false
+    ) {
+        self.header = header
+        self.packageID = packageID
+        self.allowDataLoss = allowDataLoss
+    }
+}
+
+/// The `rollbackPackage` reply.
+public struct RuntimeRollbackPackageControlReply: Codable, Sendable {
+    /// The version rolled back to, on success.
+    public var rolledBackTo: RuntimeVersionCode?
+    /// True when no `previous/` set or no rollback mechanism exists (§7.3).
+    public var unavailable: Bool?
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates a control reply.
+    public init(
+        rolledBackTo: RuntimeVersionCode? = nil,
+        unavailable: Bool? = nil,
+        error: RuntimeWireError? = nil
+    ) {
+        self.rolledBackTo = rolledBackTo
+        self.unavailable = unavailable
+        self.error = error
+    }
+}
+
+/// An `updateSkipped` control request (update-system.md §8.4): adds or
+/// removes a versionCode on the package's skip list.
+public struct RuntimeUpdateSkipControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The package whose skip list changes.
+    public var packageID: RuntimePackageID
+    /// The versionCode to skip or unskip.
+    public var versionCode: RuntimeVersionCode
+    /// True adds the version ("Skip This Version"); false removes it
+    /// ("Try Again", `apkrun update unskip`).
+    public var skipped: Bool
+
+    /// Creates a control request.
+    public init(
+        header: APIRequestHeader,
+        packageID: RuntimePackageID,
+        versionCode: RuntimeVersionCode,
+        skipped: Bool
+    ) {
+        self.header = header
+        self.packageID = packageID
+        self.versionCode = versionCode
+        self.skipped = skipped
+    }
+}
+
+/// The `updateSkipped` reply.
+public struct RuntimeUpdateSkipControlReply: Codable, Sendable {
+    /// The failure on error.
+    public var error: RuntimeWireError?
+
+    /// Creates a control reply.
+    public init(error: RuntimeWireError? = nil) {
+        self.error = error
+    }
+}
+
+/// Starts a package repair asynchronously (package-store.md §11.1,
+/// runtime-api.md §8.4): a `broken` package is reinstalled from `current/`.
+public struct RuntimeBeginRepairPackageControlRequest: Codable, Equatable, Sendable {
+    /// The authenticated request metadata. Its operation ID is reused by the returned handle.
+    public let header: APIRequestHeader
+    /// The package to repair.
+    public let request: RuntimePackageRequest
+
+    /// Creates a begin-repair request.
+    public init(header: APIRequestHeader, request: RuntimePackageRequest) {
+        self.header = header
+        self.request = request
+    }
+}
+
+/// The result or structured failure for a begin-repair request.
+public struct RuntimeBeginRepairPackageControlReply: Codable, Equatable, Sendable {
+    /// The long-running repair handle, present on success.
+    public let result: OperationHandle?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates a successful reply.
+    public init(result: OperationHandle) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
+/// A `getConfig` control request (configuration.md §2.7). `keys` nil means
+/// every known `updates.*` key.
+public struct RuntimeConfigGetControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// Keys to read; nil selects every `updates.*` key.
+    public var keys: [String]?
+
+    /// Creates a control request.
+    public init(header: APIRequestHeader, keys: [String]? = nil) {
+        self.header = header
+        self.keys = keys
+    }
+}
+
+/// The `getConfig` reply: the current values.
+public struct RuntimeConfigGetControlReply: Codable, Sendable {
+    /// The settings values keyed by name.
+    public var values: [String: String]?
+    /// The failure on error, for example `config.unknownKey`.
+    public var error: RuntimeWireError?
+
+    /// Creates a control reply.
+    public init(values: [String: String]? = nil, error: RuntimeWireError? = nil) {
+        self.values = values
+        self.error = error
+    }
+}
+
+/// A `setConfig` control request (configuration.md §2.7).
+public struct RuntimeConfigSetControlRequest: Codable, Sendable {
+    /// The common request header.
+    public var header: APIRequestHeader
+    /// The `updates.*` key to write.
+    public var key: String
+    /// The new value.
+    public var value: String
+
+    /// Creates a control request.
+    public init(header: APIRequestHeader, key: String, value: String) {
+        self.header = header
+        self.key = key
+        self.value = value
+    }
+}
+
+/// The `setConfig` reply: the values after the write.
+public struct RuntimeConfigSetControlReply: Codable, Sendable {
+    /// The settings values keyed by name.
+    public var values: [String: String]?
+    /// The failure on error, for example `config.invalidValue`.
+    public var error: RuntimeWireError?
+
+    /// Creates a control reply.
+    public init(values: [String: String]? = nil, error: RuntimeWireError? = nil) {
+        self.values = values
         self.error = error
     }
 }

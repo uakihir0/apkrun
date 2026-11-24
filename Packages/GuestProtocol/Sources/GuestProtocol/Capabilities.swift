@@ -21,6 +21,7 @@ public enum GuestCapability: String, CaseIterable, Sendable {
     case filesShared = "files.shared.v1"
     case locale = "locale.v1"
     case audio = "audio.v1"
+    case microphone = "microphone.v1"
     case diagnostics = "diagnostics.v1"
     case bulk = "bulk.v1"
     case storeInstall = "store.install.v1"

@@ -200,6 +200,42 @@ final class RuntimeEventHub: @unchecked Sendable {
         )
     }
 
+    /// Publishes an app-session event on the `sessions` topic (host-ui.md §5.2).
+    func publishSessionChange(_ change: SessionChange) {
+        publish(
+            QueuedEvent(
+                topic: .sessions,
+                time: Date(),
+                operationID: nil,
+                payload: .sessions(change)
+            )
+        )
+    }
+
+    /// Publishes a maintenance event on the `maintenance` topic (runtime-api.md §8.3).
+    func publishMaintenanceEvent(_ event: MaintenanceEvent) {
+        publish(
+            QueuedEvent(
+                topic: .maintenance,
+                time: Date(),
+                operationID: nil,
+                payload: .maintenance(event)
+            )
+        )
+    }
+
+    /// Publishes a `healthChanged` event on the `health` topic (§13).
+    func publishHealthEvent(_ event: HealthEvent) {
+        publish(
+            QueuedEvent(
+                topic: .health,
+                time: Date(),
+                operationID: nil,
+                payload: .health(event)
+            )
+        )
+    }
+
     /// Publishes an integration event on the `integrations` topic (§16.2).
     func publishIntegrationChange(_ change: IntegrationChange) {
         publish(

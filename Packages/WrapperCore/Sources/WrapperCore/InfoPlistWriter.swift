@@ -40,6 +40,7 @@ public enum InfoPlistWriter {
             "APKRunWrapperKind": kind.rawValue,
             "APKRunLauncherVersion": build.launcherVersion,
             "APKRunLauncherAPI": build.launcherAPI,
+            "APKRunBuildIdentity": build.buildIdentity,
         ]
         if let category {
             plist["LSApplicationCategoryType"] = category.lsApplicationCategoryType

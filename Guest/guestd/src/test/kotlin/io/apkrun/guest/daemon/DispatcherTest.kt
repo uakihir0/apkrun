@@ -2,13 +2,19 @@ package io.apkrun.guest.daemon
 
 import io.apkrun.guest.protocol.GuestCapability
 import io.apkrun.guest.protocol.GuestFailure
+import io.apkrun.guest.protocol.v1.ActivateNotification
 import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.ClearPolicy
 import io.apkrun.guest.protocol.v1.ClipData
 import io.apkrun.guest.protocol.v1.CollectDiagnostics
 import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
+import io.apkrun.guest.protocol.v1.DismissNotification
+import io.apkrun.guest.protocol.v1.ExportStart
 import io.apkrun.guest.protocol.v1.GuestErrorCode
+import io.apkrun.guest.protocol.v1.Health
 import io.apkrun.guest.protocol.v1.ImePolicy
+import io.apkrun.guest.protocol.v1.ImportFiles
+import io.apkrun.guest.protocol.v1.ImportResult
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchOutcome
 import io.apkrun.guest.protocol.v1.LaunchResult
@@ -20,12 +26,22 @@ import io.apkrun.guest.protocol.v1.PackageSummary
 import io.apkrun.guest.protocol.v1.Ping
 import io.apkrun.guest.protocol.v1.QueryPackage
 import io.apkrun.guest.protocol.v1.Request
+import io.apkrun.guest.protocol.v1.ResolveExport
+import io.apkrun.guest.protocol.v1.ResolveUrl
 import io.apkrun.guest.protocol.v1.Response
+import io.apkrun.guest.protocol.v1.SetClockFormat
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
+import io.apkrun.guest.protocol.v1.SetLocale
+import io.apkrun.guest.protocol.v1.SetMicrophoneAccess
+import io.apkrun.guest.protocol.v1.SetNotificationForwarding
+import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
+import io.apkrun.guest.protocol.v1.SetTimeZone
+import io.apkrun.guest.protocol.v1.SetUrlRedirect
 import io.apkrun.guest.protocol.v1.Shutdown
 import io.apkrun.guest.protocol.v1.Snapshot
 import io.apkrun.guest.protocol.v1.StopApplication
 import io.apkrun.guest.protocol.v1.StopMode
+import io.apkrun.guest.protocol.v1.SyncTime
 import io.apkrun.guest.runtime.ServiceMethodMissing
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -50,6 +66,10 @@ private class FakeOperations : AgentOperations {
     var clearedDisplay: ClearDisplay? = null
     var queriedPackage: QueryPackage? = null
     var listedPackages: ListPackages? = null
+    var localeRequest: SetLocale? = null
+    var timeZoneRequest: SetTimeZone? = null
+    var clockFormatRequest: SetClockFormat? = null
+    var syncTimeRequest: SyncTime? = null
     var lastClipboard: ClipData? = null
     /**
      * Released by the first operation that starts. Tests that need an op to be in flight wait on
@@ -70,6 +90,11 @@ private class FakeOperations : AgentOperations {
     }
 
     override fun snapshot(): Snapshot = Snapshot.getDefaultInstance()
+
+    override fun health(): Health {
+        enter()
+        return Health.newBuilder().setAgentUptimeMs(42).build()
+    }
 
     override fun setDisplayPolicy(request: SetDisplayPolicy) = enter()
 
@@ -107,15 +132,55 @@ private class FakeOperations : AgentOperations {
             .build()
     }
 
+    override fun setLocale(request: SetLocale) {
+        localeRequest = request
+    }
+
+    override fun setTimeZone(request: SetTimeZone) {
+        timeZoneRequest = request
+    }
+
+    override fun setClockFormat(request: SetClockFormat) {
+        clockFormatRequest = request
+    }
+
+    override fun syncTime(request: SyncTime) {
+        syncTimeRequest = request
+    }
+
     override fun setClipboard(request: ClipData) {
         enter()
         lastClipboard = request
     }
 
+    override fun activateNotification(request: ActivateNotification) = enter()
+
+    override fun dismissNotification(request: DismissNotification) = enter()
+
+    override fun setNotificationForwarding(request: SetNotificationForwarding) = enter()
+
+    override fun setUrlRedirect(request: SetUrlRedirect) = enter()
+
+    override fun setMicrophoneAccess(request: SetMicrophoneAccess) = enter()
+
+    override fun resolveUrl(request: ResolveUrl) = enter()
+
     override fun collectDiagnostics(request: CollectDiagnostics): CollectDiagnosticsResult {
         enter()
         return CollectDiagnosticsResult.getDefaultInstance()
     }
+
+    override fun importFiles(request: ImportFiles): ImportResult {
+        enter()
+        return ImportResult.getDefaultInstance()
+    }
+
+    override fun resolveExport(request: ResolveExport): ExportStart {
+        enter()
+        return ExportStart.getDefaultInstance()
+    }
+
+    override fun setSharedFolderAccess(request: SetSharedFolderAccess) = enter()
 }
 
 class DispatcherTest {
@@ -125,6 +190,8 @@ class DispatcherTest {
             GuestCapability.DISPLAY,
             GuestCapability.LAUNCH,
             GuestCapability.INPUT,
+            GuestCapability.PACKAGES,
+            GuestCapability.LOCALE,
         )
 
     private fun policy(displayId: Int): Request =
@@ -170,6 +237,21 @@ class DispatcherTest {
         val response = dispatcher(FakeOperations()).dispatch(1, request, everything)
         assertEquals(42L, response.getPing().getNonce())
         assertEquals(1_000L, response.getPing().getGuestUptimeMs())
+    }
+
+    @Test
+    fun syncTimeIsUnsupportedInTheDevelopmentShellAgent() = runBlocking {
+        val request =
+            Request.newBuilder()
+                .setSyncTime(SyncTime.newBuilder().setUnixTimeMs(1_800_000_000_123L).setRttMs(37))
+                .build()
+
+        val response =
+            dispatcher(FakeOperations()).dispatch(1, request, everything + GuestCapability.LOCALE)
+
+        assertEquals(GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED, response.getError().getCode())
+        assertTrue(response.getError().getMessage().contains("privileged APKRun agent"))
+        assertFalse(GuestCapability.LOCALE in Connection.IMPLEMENTED)
     }
 
     @Test
@@ -250,6 +332,63 @@ class DispatcherTest {
             PackageFilter.PACKAGE_FILTER_ALL,
             operations.listedPackages?.getFilter(),
         )
+    }
+
+    @Test
+    fun localeSettersUseLocaleCapabilityAndReturnEmptyResults() = runBlocking {
+        val operations = FakeOperations()
+        val dispatcher = dispatcher(operations)
+        val locale = SetLocale.newBuilder().addBcp47("ja-JP").build()
+        val timeZone = SetTimeZone.newBuilder().setTzId("Asia/Tokyo").build()
+        val clockFormat =
+            SetClockFormat.newBuilder()
+                .setFormat(io.apkrun.guest.protocol.v1.ClockFormat.CLOCK_FORMAT_TWENTY_FOUR)
+                .build()
+
+        val localeResponse =
+            dispatcher.dispatch(
+                1,
+                Request.newBuilder().setSetLocale(locale).build(),
+                setOf(GuestCapability.LOCALE),
+            )
+        val timeZoneResponse =
+            dispatcher.dispatch(
+                2,
+                Request.newBuilder().setSetTimeZone(timeZone).build(),
+                setOf(GuestCapability.LOCALE),
+            )
+        val clockFormatResponse =
+            dispatcher.dispatch(
+                3,
+                Request.newBuilder().setSetClockFormat(clockFormat).build(),
+                setOf(GuestCapability.LOCALE),
+            )
+
+        assertTrue(localeResponse.hasSetLocale())
+        assertEquals(locale, operations.localeRequest)
+        assertTrue(timeZoneResponse.hasSetTimeZone())
+        assertEquals(timeZone, operations.timeZoneRequest)
+        assertTrue(clockFormatResponse.hasSetClockFormat())
+        assertEquals(clockFormat, operations.clockFormatRequest)
+    }
+
+    @Test
+    fun localeCapabilityIsAdvertisedByTheDevelopmentAgent() {
+        assertTrue(GuestCapability.LOCALE in Connection.IMPLEMENTED)
+    }
+
+    @Test
+    fun syncTimeUsesTheLocaleCapabilityAndReachesTheOperation() = runBlocking {
+        val request =
+            Request.newBuilder()
+                .setSyncTime(SyncTime.newBuilder().setUnixTimeMs(1_800_000_000_000L).setRttMs(42))
+                .build()
+        val operations = FakeOperations()
+        val response = dispatcher(operations).dispatch(1, request, everything)
+
+        assertTrue(response.hasSyncTime())
+        assertEquals(1_800_000_000_000L, operations.syncTimeRequest?.unixTimeMs)
+        assertEquals(42, operations.syncTimeRequest?.rttMs)
     }
 
     @Test

@@ -13,6 +13,10 @@ public enum ProviderRegistry {
         bookmark: Data? = nil,
         developerModeEnabled: Bool
     ) throws(UpdateFailure) -> UpdateProviderRef {
+        // A bare `fdroid` spec names the main repository (§4.5).
+        if spec == "fdroid" {
+            return try FDroidProvider.providerRef(for: "")
+        }
         let parts = spec.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2, let type = ProviderType(rawValue: String(parts[0])) else {
             throw UpdateFailure.providerMetadataInvalid(detail: "unknown provider spec")
@@ -37,19 +41,29 @@ public enum ProviderRegistry {
             return UpdateProviderRef(
                 type: .direct,
                 configuration: .direct(url: try Self.directURL(body)))
-        case .fdroid, .github:
-            // Parsed in the provider's own task (#52, #53).
-            throw UpdateFailure.providerNotConfigured
+        case .fdroid:
+            return try FDroidProvider.providerRef(for: body)
+        case .github:
+            return try GitHubProvider.providerRef(for: body)
         }
     }
 
-    /// A direct manifest URL: HTTPS, or a loopback HTTP URL in debug builds
-    /// for the local test service (update-system.md §4.4).
-    private static func directURL(_ spec: String) throws(UpdateFailure) -> String {
+    /// A direct manifest URL: HTTPS at most 2048 characters with no user
+    /// info, or a loopback HTTP URL in debug builds for the local test
+    /// service (direct-provider-manifest.md §8).
+    static func directURL(_ spec: String) throws(UpdateFailure) -> String {
+        guard spec.utf8.count <= 2048 else {
+            throw UpdateFailure.providerMetadataInvalid(
+                detail: "direct provider URL is over 2048 characters")
+        }
         guard let url = URL(string: spec), let scheme = url.scheme?.lowercased(),
             url.host != nil
         else {
             throw UpdateFailure.providerMetadataInvalid(detail: "direct provider needs a URL")
+        }
+        guard url.user == nil, url.password == nil else {
+            throw UpdateFailure.providerMetadataInvalid(
+                detail: "direct provider URL must not carry user info")
         }
         if scheme == "https" { return spec }
         #if DEBUG
@@ -80,9 +94,12 @@ public enum ProviderRegistry {
                     reason: "local provider bookmark cannot be resolved")
             }
             return LocalProvider(ref: ref, root: root, displayPath: path)
-        case .direct, .fdroid, .github:
-            // Direct (#51), F-Droid (#52), GitHub (#53).
-            throw UpdateFailure.providerNotConfigured
+        case .direct:
+            return try DirectProvider(ref: ref)
+        case .fdroid:
+            return try FDroidProvider(ref: ref)
+        case .github:
+            return try GitHubProvider(ref: ref)
         }
     }
 
@@ -241,8 +258,10 @@ public struct LocalProvider: UpdateProvider {
         let total = candidate.artifacts.reduce(Int64(0)) { $0 + ($1.size ?? 0) }
         var written: Int64 = 0
         var copied: [RemoteArtifact] = []
-        for artifact in candidate.artifacts {
-            let target = destination.directory.appendingPathComponent(artifact.url.lastPathComponent)
+        for (index, artifact) in candidate.artifacts.enumerated() {
+            let target = destination.directory
+                .appendingPathComponent(
+                    artifact.storedFileName(index: index, in: candidate.artifacts))
             do {
                 try FileManager.default.removeItemIfPresent(at: target)
                 // clonefile where the filesystem supports it, else a copy.
@@ -266,9 +285,7 @@ public struct LocalProvider: UpdateProvider {
             return .container(copied[0].url)
         }
         guard
-            let base = copied.first(where: {
-                $0.url.lastPathComponent == "app.apk" || $0.url.lastPathComponent == "base.apk"
-            })
+            let base = copied.first(where: { $0.kind == .apk })
         else {
             throw UpdateFailure.providerMetadataInvalid(detail: "downloaded set has no base APK")
         }

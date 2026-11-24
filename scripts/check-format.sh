@@ -19,7 +19,7 @@ production_swift=()
 test_swift=()
 while IFS= read -r -d '' path; do
     case "$path" in
-        */Generated/* | */ErrorCatalog.generated.swift | */fixtures/* | Tests/Fixtures/*)
+        */Generated/* | */ErrorCatalog.generated.swift | */CLIStrings.generated.swift | */LauncherStrings.generated.swift | */fixtures/* | Tests/Fixtures/*)
             continue
             ;;
         */Tests/* | */UITests/* | Tests/*)

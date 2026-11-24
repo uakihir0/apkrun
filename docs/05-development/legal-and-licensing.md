@@ -1,6 +1,6 @@
 # Legal and Licensing
 
-This guide holds the engineering rules for licenses: what APKRun may use, ship, and publish; how notices are produced; and what a release must carry. It is not legal advice. The legal review of these rules is tracked in R-10 ([risks.md](../04-plan/risks.md)). `scripts/check-licenses.sh` (planned, #94) checks the SPDX values of this guide against the license files.
+This guide holds the engineering rules for licenses: what APKRun may use, ship, and publish; how notices are produced; and what a release must carry. It is not legal advice. The legal review of these rules is tracked in R-10 ([risks.md](../04-plan/risks.md)). `scripts/check-licenses.sh` (#94) checks the SPDX values of this guide against the license files.
 
 ---
 
@@ -8,9 +8,9 @@ This guide holds the engineering rules for licenses: what APKRun may use, ship, 
 
 ### 1.1 Status
 
-- The project license is open question OQ-40 ([open-questions.md](../04-plan/open-questions.md)). It is decided in an ADR before the launcher binary is given to other people (#90), and before the v0.4 public demo at the latest ([roadmap.md](../04-plan/roadmap.md) §3.4).
-- Until the ADR is accepted, source files carry no license header, and nothing from outside the project is added except under §3 and §4.
-- The notices of §6 and §7 name the chosen license.
+- The project license is Apache-2.0, decided by [ADR-0019](../01-architecture/decisions/0019-project-license-apache2.md) (OQ-40).
+- Source files carry one line, `SPDX-License-Identifier: Apache-2.0`, in the file's comment style, applied as files are touched and in one mechanical pass. Derived files keep their own header (§3.1).
+- The notices of §6 and §7 name Apache-2.0.
 
 ### 1.2 Requirements for the choice
 
@@ -136,6 +136,12 @@ LGPL-3.0-only
 LGPL-3.0-or-later
 MPL-2.0
 X11
+LicenseRef-Android-SDK-License
+SGI-B-2.0
+Beerware
+Public Domain
+Public-Domain
+Libpng
 ```
 
 The tooling list applies only to `ships: tooling` entries of `kind: prebuilt` or `kind: source`. Those are downloaded by a script, pinned by hash or commit, and never committed, uploaded as a CI artifact, or published. The Alpine test guest is the main case ([vm.md](../02-design/vm.md) §12).
@@ -147,7 +153,8 @@ The tooling list applies only to `ships: tooling` entries of `kind: prebuilt` or
 | `A OR B` | passes if one side is allowed. For components in a notice output, include every license file upstream ships |
 | `A AND B` | passes if every part is allowed |
 | `A WITH E` | passes only if the whole expression is on the list |
-| empty, missing, `NOASSERTION`, `LicenseRef-*` | fails |
+| empty, missing, `NOASSERTION` | fails |
+| `LicenseRef-*` | fails unless the whole expression is on the applicable list with a committed license copy (an identified license we reviewed, e.g. `LicenseRef-Android-SDK-License`) |
 | anything else, for a distributed or tooling component | fails (AGPL, SSPL, BUSL, non-commercial licenses) |
 
 These rules apply to components APKRun distributes or uses as build or test tooling. A `ships: reference` entry must still have an identified license and a committed copy of its source license, but is not checked against a redistribution list.
@@ -156,7 +163,7 @@ These rules apply to components APKRun distributes or uses as build or test tool
 
 1. A component with runtime impact needs an ADR first ([AGENTS.md](../../AGENTS.md) §6.6; [decisions/README.md](../01-architecture/decisions/README.md)).
 2. The pull request adds the lock entry with `license`, `licenseFiles`, and `ships`, and the license copies of §6.1 ([build-system.md](build-system.md) §6.8).
-3. `scripts/check-licenses.sh` passes in the same pull request (planned, #94; required for every new component).
+3. `scripts/check-licenses.sh` passes in the same pull request (#94; required for every new component).
 4. A pin update re-reads the upstream license files. A changed license updates `license`, and the pull request says so.
 5. A distributed or tooling component whose license is not allowed is replaced or removed. Replacement needs an ADR and its own task.
 
@@ -200,7 +207,7 @@ These rules apply to components APKRun distributes or uses as build or test tool
 
 - `licenseFiles` lists paths inside the upstream source (`COPYING`, `LICENSE`, `NOTICE`).
 - A copy of each is committed as `ThirdParty/licenses/<name>/<file>`. `scripts/release/generate-notices.py --refresh <name>` fetches the pinned source and refreshes the copies. For Gradle and Cargo packages without a license file in the artifact, the copy comes from the upstream repository at the pinned version.
-- The `third-party` CI job runs `scripts/release/generate-notices.py --check`: every shipped app notice has a committed copy, and each `kind: source` app or derived copy matches its pinned source byte for byte. The full check of reference sources and resolved Swift, Gradle, and Cargo packages is planned (#94).
+- The `third-party` CI job runs `scripts/release/generate-notices.py --check`: every shipped app notice has a committed copy, and each `kind: source` app or derived copy matches its pinned source byte for byte. `scripts/check-licenses.sh` (#94) runs the full check: identified reference licenses, committed copies, resolved Swift packages, and the SPDX allow-lists.
 
 ### 6.2 Generation
 
@@ -225,7 +232,7 @@ The Guest Agent APK is covered by the Kotlin entries. The launcher has no third-
 
 | Check | Where |
 |---|---|
-| allowed license per distributed or tooling entry; a committed copy per lock entry; identified reference licenses; every resolved package listed; RiftVM markers name the pin | `scripts/check-licenses.sh` (planned, #94); T0 tests with a sample lock that lacks one license, and with the real lock |
+| allowed license per distributed or tooling entry; a committed copy per lock entry; identified reference licenses; every resolved package listed; RiftVM markers name the pin | `scripts/check-licenses.sh` (#94); T0 tests with a sample lock that lacks one license, and with the real lock |
 | generator output for a sample lock equals a golden file | T0 script test in `lint` |
 | Release build contains the notices of each `ships: app` and `derived` entry | `scripts/release/check-release-build.sh` ([build-system.md](build-system.md) §3.1) |
 | notices visible in APKRun.app and in the image | test C10-8 ([test-strategy.md](../04-plan/test-strategy.md) §8.7) |
@@ -248,7 +255,7 @@ APKRun.app's Help menu has **Third-Party Notices**, which opens `ThirdPartyNotic
 
 ### 7.2 License data of the image build
 
-After `m dist`, `scripts/aosp/build-product.sh` reads the license metadata of the installed modules from the AOSP SBOM or notice data (exact command fixed by #94). It then:
+After `m dist`, `scripts/aosp/build-product.sh` reads the license metadata of the installed modules from the AOSP SBOM or notice data (the Android build's `aosp_sbom` target or `out/.../module-info.json` notice data, whichever the pinned AOSP provides). It then:
 
 - fails if an installed module has no license metadata;
 - lists modules with `proprietary` or `by_exception_only` for the decision of §4.3;

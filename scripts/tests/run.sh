@@ -27,6 +27,7 @@ ruby "$script_dir/test_workflow_runners.rb" "$repo_root"
 "$script_dir/test_network_error_classification.sh"
 "$script_dir/test_codegen.sh"
 "$script_dir/test_check_format.sh"
+"$script_dir/test_check_sepolicy.sh"
 "$script_dir/test_run_gate_dwell.sh"
 "$script_dir/test_gate_artifacts.sh"
 "$script_dir/test_gate_status.sh"
@@ -1239,7 +1240,7 @@ def workflow_errors(workflow, trigger_key)
   unless workflow.fetch("permissions") == { "contents" => "read" }
     errors << "workflow permissions must remain contents: read"
   end
-  expected_jobs = %w[lint codegen third-party build test-swift test-graphics test-images]
+  expected_jobs = %w[lint codegen third-party build test-swift test-graphics test-images fuzz-short]
   unless workflow.fetch("jobs").keys.sort == expected_jobs.sort
     errors << "CI jobs must match the required job set"
   end

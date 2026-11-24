@@ -1,4 +1,5 @@
 import CryptoKit
+import DiagnosticsCore
 import Foundation
 import RuntimeAPI
 import Testing
@@ -79,7 +80,7 @@ import Testing
 
 // MARK: - T1: generation, conflicts, registry, validator
 
-private func makeLauncherStub(at dir: URL) throws -> URL {
+func makeLauncherStub(at dir: URL) throws -> URL {
     let executable = dir.appendingPathComponent("APKRunLauncher")
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/clang")
@@ -99,7 +100,7 @@ private func makeLauncherStub(at dir: URL) throws -> URL {
     return executable
 }
 
-private struct Fixture {
+struct Fixture {
     let root: URL
     let destination: URL
     let staging: URL
@@ -124,6 +125,29 @@ private struct Fixture {
 
     func cleanup() {
         try? FileManager.default.removeItem(at: root)
+    }
+
+    /// A single-APK `BootstrapSet` like the store hands to
+    /// `stageForDistribution` for a distribution request.
+    func bootstrapPayload(package: String = "com.example.game") throws -> BootstrapSet {
+        let source = root.appendingPathComponent("base.apk")
+        let bytes = Data("fixture-apk".utf8)
+        try bytes.write(to: source)
+        let digest =
+            "sha256:" + SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let entry = BootstrapFileEntry(name: "base.apk", sha256: digest, size: Int64(bytes.count))
+        return BootstrapSet(
+            document: BootstrapDocument(
+                packageId: package,
+                versionCode: 1,
+                setDigest: BootstrapSetDigest.compute(files: [entry]),
+                signers: ["sha256:" + String(repeating: "1", count: 64)],
+                files: [entry]),
+            files: [
+                BootstrapSet.SourceFile(
+                    name: "base.apk", sourceURL: source, sha256: digest,
+                    size: Int64(bytes.count))
+            ])
     }
 
     func configuration(
@@ -197,6 +221,61 @@ private func sha256Tree(at url: URL) throws -> [String: String] {
     for banned in ["versionCode", "versionName", "apkPath", "digest", "sha256"] {
         #expect(!json.lowercased().contains(banned.lowercased()), "wrapper.json contains \(banned)")
     }
+}
+
+@Test func generatedBundleContainsNoAPKFile() async throws {
+    // #49: the wrapper is independent of the APK file — the bundle never
+    // embeds the source archive (wrapper.md §14, FR-WRP-03).
+    let fixture = try await Fixture()
+    defer { fixture.cleanup() }
+    let generated = try await fixture.generator().generate(fixture.request())
+    let enumerator = FileManager.default.enumerator(
+        at: generated.bundleURL, includingPropertiesForKeys: nil)
+    let files = enumerator?.allObjects.compactMap { $0 as? URL } ?? []
+    for file in files where file.pathExtension == "apk" {
+        Issue.record("generated bundle contains APK file \(file.path)")
+    }
+}
+
+@Test func wrapperFileHashesGiveAStableSortedList() throws {
+    // #50 step 1: the G9 check compares this list before and after an
+    // update — a fixed directory must always produce the same sorted
+    // (path, sha256) entries.
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("apkrun-hashes-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(
+        at: root.appendingPathComponent("Contents/Resources"),
+        withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+        at: root.appendingPathComponent("Contents/MacOS"),
+        withIntermediateDirectories: true)
+    try Data("launcher".utf8).write(
+        to: root.appendingPathComponent("Contents/MacOS/APKRunLauncher"))
+    try Data("plist".utf8).write(
+        to: root.appendingPathComponent("Contents/Info.plist"))
+    try Data("json".utf8).write(
+        to: root.appendingPathComponent("Contents/Resources/wrapper.json"))
+
+    let hashes = try WrapperFileHashes.compute(bundleURL: root)
+    #expect(
+        hashes.map(\.path) == [
+            "Contents/Info.plist",
+            "Contents/MacOS/APKRunLauncher",
+            "Contents/Resources/wrapper.json",
+        ])
+    let sha256 = { (bytes: String) in
+        SHA256.hash(data: Data(bytes.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+    #expect(hashes[0].sha256 == sha256("plist"))
+    #expect(hashes[1].sha256 == sha256("launcher"))
+    #expect(hashes[2].sha256 == sha256("json"))
+    // A second pass over the same directory is identical, and an xattr
+    // (the kind Spotlight adds) does not change the list.
+    setxattr(
+        root.appendingPathComponent("Contents/Info.plist").path,
+        "com.apple.FinderInfo", "x", 1, 0, 0)
+    #expect(try WrapperFileHashes.compute(bundleURL: root) == hashes)
 }
 
 @Test func generationIsByteIdentical() async throws {
@@ -392,4 +471,316 @@ private func sha256Tree(at url: URL) throws -> [String: String] {
     let siblings = try FileManager.default.contentsOfDirectory(atPath: fixture.root.path)
     #expect(!siblings.contains { $0.hasSuffix(".tmp") })
     #expect(siblings.contains("registry.json"))
+}
+
+// MARK: - T0: placeStagedWrapper support (wrapper.md §6.3)
+
+@Test func pendingEntryMatchesStagingToken() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.cleanup() }
+    let registry = fixture.registry
+    var entry = WrapperRegistryEntry(
+        bundleId: "io.apkrun.android.com.example.game",
+        packageId: "com.example.game",
+        kind: .local,
+        state: .pending,
+        path: fixture.destination.appendingPathComponent("Game.app").path,
+        cdhash: "cd",
+        launcherVersion: "0.1.0",
+        launcherAPI: "1.0",
+        fileName: "Game",
+        displayName: "Game",
+        createdAt: Date()
+    )
+    entry.stagingPath =
+        fixture.staging
+        .appendingPathComponent("tok-123", isDirectory: true)
+        .appendingPathComponent("Game.app").path
+    try await registry.markPending(entry)
+    #expect(await registry.pendingEntry(stagingToken: "tok-123")?.bundleId == entry.bundleId)
+    #expect(await registry.pendingEntry(stagingToken: "other") == nil)
+}
+
+@Test func registrationCheckWarnsWhenLaunchServicesForgets() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.cleanup() }
+    _ = try await fixture.generator().generate(fixture.request())
+    let context = HealthContext(
+        daemonAvailable: true,
+        runtimeRunning: false,
+        paths: APKRunPaths(
+            allowingHomeOverride: true,
+            environment: ["APKRUN_HOME": fixture.root.path]
+        )
+    )
+    let known = WrapperHealthChecks.registration(fixture.registry) { _ in true }
+    #expect(await known.run(context).state == .pass)
+    let unknown = WrapperHealthChecks.registration(fixture.registry) { _ in false }
+    let result = await unknown.run(context)
+    #expect(result.state == .warning)
+    #expect(result.error?.code == "wrapper.launchServicesMissing")
+}
+
+// MARK: - T0: DistributionWrapperBuilder (wrapper.md §11)
+
+/// Records every call and answers from a canned table so the argument
+/// lists of the §11 tools can be asserted without spawning anything.
+final class FakeToolRunner: WrapperToolRunner, @unchecked Sendable {
+    struct Call: Equatable {
+        var executable: String
+        var arguments: [String]
+    }
+
+    private(set) var calls: [Call] = []
+    var answers: [(String) -> ToolResult?] = []
+
+    func run(executable: String, arguments: [String]) throws -> ToolResult {
+        calls.append(Call(executable: executable, arguments: arguments))
+        for answer in answers {
+            if let result = answer(executable + " " + arguments.joined(separator: " ")) {
+                return result
+            }
+        }
+        return ToolResult(status: 0)
+    }
+}
+
+private func distributionIdentity() -> String {
+    "Developer ID Application: APKRun Tests (ABCDE12345)"
+}
+
+/// A fake that passes both `xcrun --find` checks and lists the identity.
+private func passingRunner(_ runner: FakeToolRunner = FakeToolRunner()) -> FakeToolRunner {
+    runner.answers.append { line in
+        guard line.contains("--find") || line.contains("find-identity") else {
+            return nil
+        }
+        return ToolResult(
+            status: 0,
+            stdout: """
+                  1) 1234ABCD "\(distributionIdentity())"
+                    1 valid identities found
+                """)
+    }
+    return runner
+}
+
+@Test func distributionPrecheckFindsToolsAndIdentity() throws {
+    let runner = passingRunner()
+    let builder = DistributionWrapperBuilder(runner: runner)
+    try builder.precheck(identity: distributionIdentity())
+    #expect(
+        runner.calls[0]
+            == .init(executable: "/usr/bin/xcrun", arguments: ["--find", "notarytool"]))
+    #expect(
+        runner.calls[1]
+            == .init(executable: "/usr/bin/xcrun", arguments: ["--find", "stapler"]))
+    #expect(
+        runner.calls[2]
+            == .init(
+                executable: "/usr/bin/security",
+                arguments: ["find-identity", "-v", "-p", "codesigning"]))
+}
+
+@Test func distributionPrecheckReportsMissingTool() throws {
+    let runner = FakeToolRunner()
+    runner.answers.append { line in
+        line.contains("stapler") ? ToolResult(status: 1, stderr: "xcrun: error") : nil
+    }
+    runner.answers.append { _ in
+        ToolResult(
+            status: 0,
+            stdout: " 1) ABCD \"Developer ID Application: APKRun Tests (ABCDE12345)\"\n")
+    }
+    let builder = DistributionWrapperBuilder(runner: runner)
+    #expect(throws: WrapperFailure.distributionToolMissing("stapler")) {
+        try builder.precheck(identity: distributionIdentity())
+    }
+}
+
+@Test func distributionPrecheckReportsUnknownIdentity() throws {
+    let runner = FakeToolRunner()
+    runner.answers.append { _ in ToolResult(status: 0, stdout: " 1) ABCD \"Other Name (XX)\"\n") }
+    let builder = DistributionWrapperBuilder(runner: runner)
+    #expect(throws: WrapperFailure.identityNotFound(distributionIdentity())) {
+        try builder.precheck(identity: distributionIdentity())
+    }
+}
+
+@Test func distributionSignUsesDeveloperIDFlags() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.cleanup() }
+    let runner = passingRunner()
+    let builder = DistributionWrapperBuilder(
+        runner: runner, securityCheck: { _, _ in true })
+    let generated = try await fixture.generator().generate(fixture.request())
+    let bundleID = "io.apkrun.android.com.example.game"
+    let (cdhash, _) = try builder.sign(
+        bundleURL: generated.bundleURL,
+        bundleID: bundleID,
+        identity: distributionIdentity())
+    #expect(cdhash.count == 40)
+    let signCall = runner.calls.first { $0.executable == "/usr/bin/codesign" }
+    #expect(
+        signCall?.arguments
+            == [
+                "--force",
+                "--sign", distributionIdentity(),
+                "--identifier", bundleID,
+                "--options", "runtime",
+                "--timestamp",
+                generated.bundleURL.path,
+            ])
+    let verifyCall = runner.calls.last { $0.executable == "/usr/bin/codesign" }
+    #expect(verifyCall?.arguments == ["--verify", "--strict", generated.bundleURL.path])
+}
+
+@Test func distributionNotarizeSubmitsAndStaples() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.cleanup() }
+    let runner = passingRunner()
+    runner.answers.append { line in
+        line.contains("notarytool submit")
+            ? ToolResult(
+                status: 0,
+                stdout: """
+                    {"id": "SUB-1", "status": "Accepted"}
+                    """)
+            : nil
+    }
+    runner.answers.append { line in
+        line.contains("spctl")
+            ? ToolResult(status: 0, stderr: "source=Notarized Developer ID\n")
+            : nil
+    }
+    let builder = DistributionWrapperBuilder(
+        runner: runner, securityCheck: { _, _ in true })
+    let generated = try await fixture.generator().generate(fixture.request())
+    let bundleID = "io.apkrun.android.com.example.game"
+    _ = try builder.sign(
+        bundleURL: generated.bundleURL,
+        bundleID: bundleID,
+        identity: distributionIdentity())
+    let result = try await builder.notarize(
+        bundleURL: generated.bundleURL,
+        name: "Game",
+        keychainProfile: "apkrun-notary",
+        workDirectory: fixture.staging)
+    #expect(result.submissionID == "SUB-1")
+    #expect(result.assessment.contains("Notarized Developer ID"))
+    #expect(result.zipURL.lastPathComponent == "Game.zip")
+    let submitCall = runner.calls.first { $0.arguments.contains("notarytool") }
+    #expect(
+        submitCall?.arguments
+            == [
+                "notarytool", "submit",
+                fixture.staging.appendingPathComponent("Game.zip").path,
+                "--keychain-profile", "apkrun-notary",
+                "--wait", "--output-format", "json",
+            ])
+    #expect(
+        runner.calls.contains {
+            $0.executable == "/usr/bin/xcrun"
+                && $0.arguments == ["stapler", "staple", generated.bundleURL.path]
+        })
+}
+
+@Test func distributionNotarizeReportsInvalid() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.cleanup() }
+    let runner = passingRunner()
+    runner.answers.append { line in
+        line.contains("notarytool submit")
+            ? ToolResult(
+                status: 0,
+                stdout: """
+                    {"id": "SUB-9", "status": "Invalid", "statusSummary": "signature invalid"}
+                    """)
+            : nil
+    }
+    runner.answers.append { line in
+        line.contains("notarytool log")
+            ? ToolResult(status: 0, stdout: "Issue 1: the binary is not signed\n")
+            : nil
+    }
+    let builder = DistributionWrapperBuilder(
+        runner: runner, securityCheck: { _, _ in true })
+    let generated = try await fixture.generator().generate(fixture.request())
+    do {
+        _ = try await builder.notarize(
+            bundleURL: generated.bundleURL,
+            name: "Game",
+            keychainProfile: "apkrun-notary",
+            workDirectory: fixture.staging)
+        Issue.record("expected notarizationFailed")
+    } catch let failure as WrapperFailure {
+        guard case .notarizationFailed(let submissionID, let summary) = failure else {
+            Issue.record("expected notarizationFailed, got \(failure)")
+            return
+        }
+        #expect(submissionID == "SUB-9")
+        #expect(summary.contains("not signed"))
+        #expect(failure.code == "notarizationFailed")
+        #expect(failure.qualifiedCode == "wrapper.notarizationFailed")
+    }
+}
+
+@Test func notarySubmissionParsesStatuses() {
+    let accepted = DistributionWrapperBuilder.parseNotarySubmission(
+        """
+        {"id": "SUB-1", "status": "Accepted"}
+        """)
+    #expect(accepted?.status == "Accepted")
+    #expect(accepted?.submissionID == "SUB-1")
+    let invalid = DistributionWrapperBuilder.parseNotarySubmission(
+        """
+        {"id": "SUB-2", "status": "Invalid", "statusSummary": "bad"}
+        """)
+    #expect(invalid?.status == "Invalid")
+    #expect(invalid?.summary == "bad")
+    let inProgress = DistributionWrapperBuilder.parseNotarySubmission(
+        """
+        {"id": "SUB-3", "status": "In Progress", "message": "Timeout waiting"}
+        """)
+    #expect(inProgress?.status == "In Progress")
+    #expect(inProgress?.submissionID == "SUB-3")
+    #expect(DistributionWrapperBuilder.parseNotarySubmission("not json") == nil)
+}
+
+@Test func stageForDistributionBuildsPortableUnregistered() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.cleanup() }
+    let generator = fixture.generator()
+    var configuration = try fixture.request().configuration
+    configuration.kind = .distribution
+    configuration.bootstrap = try fixture.bootstrapPayload()
+    let staged = try await generator.stageForDistribution(
+        WrapperGenerationRequest(
+            configuration: configuration,
+            destination: .directory(fixture.staging),
+            replace: .never),
+        stagingDirectory: fixture.staging,
+        fileName: "Game")
+    let plistURL = staged.appendingPathComponent("Contents/Info.plist")
+    let plist =
+        try PropertyListSerialization.propertyList(
+            from: Data(contentsOf: plistURL), format: nil) as? [String: Any]
+    #expect(plist?["APKRunWrapperKind"] as? String == "distribution")
+    // §11 step 1: staging only — nothing is registered.
+    let entries = await fixture.registry.entries()
+    #expect(entries.isEmpty)
+}
+
+@Test func stageForDistributionRejectsOtherKinds() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.cleanup() }
+    let generator = fixture.generator()
+    do {
+        _ = try await generator.stageForDistribution(
+            fixture.request(),
+            stagingDirectory: fixture.staging,
+            fileName: "Game")
+        Issue.record("expected a WrapperFailure")
+    } catch is WrapperFailure {
+    }
 }

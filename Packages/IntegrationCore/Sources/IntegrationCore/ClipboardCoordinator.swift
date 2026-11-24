@@ -7,6 +7,24 @@ import RuntimeAPI
 public protocol IntegrationChannel: Sendable {
     /// Sends one host clip to the guest; throws ``IntegrationFailure/guestUnavailable`` without an agent.
     func setClipboard(_ clip: GPClipData) async throws(IntegrationFailure)
+    /// Whether the session advertises `clipboard.image.v1` (guest-protocol.md §5.3).
+    func supportsImages() async -> Bool
+    /// Uploads PNG bytes on the bulk stream and answers its transfer ID
+    /// (guest-protocol.md §10).
+    func uploadClipboardImage(_ png: Data) async throws(IntegrationFailure) -> UInt64
+    /// The payload of an announced inbound transfer, or nil on abort/timeout.
+    func inboundTransfer(_ transferID: UInt64) async -> Data?
+}
+
+extension IntegrationChannel {
+    /// Channels without bulk support report no image capability.
+    public func supportsImages() async -> Bool { false }
+    /// Channels without bulk support cannot upload.
+    public func uploadClipboardImage(_ png: Data) async throws(IntegrationFailure) -> UInt64 {
+        throw .guestUnavailable
+    }
+    /// Channels without bulk support never resolve transfers.
+    public func inboundTransfer(_ transferID: UInt64) async -> Data? { nil }
 }
 
 /// Copies clips between the Mac and the guest of the focused session (desktop-integration.md §4).
@@ -106,11 +124,20 @@ public actor ClipboardCoordinator {
         if let html = item.html, Int64(html.utf8.count) > Self.htmlByteLimit {
             throw .clipboardTooLarge(bytes: Int64(html.utf8.count), limit: Self.htmlByteLimit)
         }
-        if let image = item.image,
-            Int64(image.png.count) > Self.imageByteLimit
-                || max(image.pixelWidth, image.pixelHeight) > Self.imagePixelLimit
+        // An image over the limits is dropped, not refused: text and HTML
+        // still go, and the ack carries the drop (desktop-integration.md §4.4).
+        var image = item.image
+        var droppedImageTooLarge = false
+        if let candidate = image,
+            Int64(candidate.png.count) > Self.imageByteLimit
+                || max(candidate.pixelWidth, candidate.pixelHeight) > Self.imagePixelLimit
         {
-            throw .clipboardTooLarge(bytes: Int64(image.png.count), limit: Self.imageByteLimit)
+            image = nil
+            droppedImageTooLarge = true
+            if item.text == nil && item.html == nil {
+                throw .clipboardTooLarge(
+                    bytes: Int64(candidate.png.count), limit: Self.imageByteLimit)
+            }
         }
         if let text = item.text, Int64(text.utf8.count) > Self.textByteLimit {
             throw .clipboardTooLarge(bytes: Int64(text.utf8.count), limit: Self.textByteLimit)
@@ -124,9 +151,29 @@ public actor ClipboardCoordinator {
         clip.truncated = item.truncated
         clip.html = item.html ?? ""
         clip.sensitive = item.sensitive
+        if let image = image {
+            // An image needs `clipboard.image.v1`; without it an image-only
+            // clip answers UNSUPPORTED and a mixed clip still sends its text
+            // (desktop-integration.md §4.4).
+            guard await channel.supportsImages() else {
+                guard item.text != nil || item.html != nil else {
+                    throw .notSupportedOnImage(capability: "clipboard.image.v1")
+                }
+                try await channel.setClipboard(clip)
+                lastHostDigest = item.digest
+                return ClipAck(seq: seq, droppedImageTooLarge: droppedImageTooLarge)
+            }
+            let transferID = try await channel.uploadClipboardImage(image.png)
+            var wire = GPClipImage()
+            wire.mimeType = "image/png"
+            wire.width = UInt32(image.pixelWidth)
+            wire.height = UInt32(image.pixelHeight)
+            wire.transferID = transferID
+            clip.image = wire
+        }
         try await channel.setClipboard(clip)
         lastHostDigest = item.digest
-        return ClipAck(seq: seq)
+        return ClipAck(seq: seq, droppedImageTooLarge: droppedImageTooLarge)
     }
 
     /// Handles one `ClipboardChanged` event from the guest (§4.3).
@@ -156,7 +203,11 @@ public actor ClipboardCoordinator {
                 return
             }
         }
-        guard let item = Self.item(for: clip), item.digest != lastHostDigest else {
+        let imageBytes =
+            clip.hasImage ? await channel.inboundTransfer(clip.image.transferID) : nil
+        guard let item = Self.item(for: clip, imageBytes: imageBytes),
+            item.digest != lastHostDigest
+        else {
             return
         }
         // The accepted guest clip becomes the pasteboard's content; forgetting
@@ -190,14 +241,45 @@ public actor ClipboardCoordinator {
         await policy.evaluate(kind, package: package, context: context)
     }
 
-    /// Builds the wire `ClipItem` of a guest clip (§11.2).
-    public static func item(for clip: GPClipData) -> ClipItem? {
-        guard let digest = digest(text: clip.text) else {
+    /// Builds the wire `ClipItem` of a guest clip (§11.2). `imageBytes` is
+    /// the resolved payload of `clip.image`, fetched by the caller. The
+    /// bytes are verified on the host — the announced dimensions are not
+    /// trusted: a bad PNG or one over the limits is dropped while the
+    /// clip's text and HTML still go through.
+    public static func item(for clip: GPClipData, imageBytes: Data? = nil) -> ClipItem? {
+        var image: ClipImage?
+        if clip.hasImage, let imageBytes,
+            let size = pngPixelSize(imageBytes),
+            Int64(imageBytes.count) <= imageByteLimit,
+            max(size.0, size.1) <= imagePixelLimit
+        {
+            image = ClipImage(
+                png: imageBytes,
+                pixelWidth: size.0,
+                pixelHeight: size.1)
+        }
+        // The dedup digest covers every part of the clip (the guest's
+        // contentHash does the same), so a second copy with the same text
+        // but a different image is not swallowed as an echo.
+        let clipDigest: RuntimeSHA256Digest?
+        if let image, let imageDigest = digest(imageBytes: image.png) {
+            var hasher = SHA256()
+            hasher.update(data: Data(clip.text.utf8))
+            hasher.update(data: Data(clip.html.utf8))
+            hasher.update(data: Data(imageDigest.rawValue.utf8))
+            clipDigest = RuntimeSHA256Digest(
+                rawValue: "sha256:"
+                    + hasher.finalize().map { String(format: "%02x", $0) }.joined())
+        } else {
+            clipDigest = digest(text: clip.text)
+        }
+        guard let digest = clipDigest else {
             return nil
         }
         return ClipItem(
             text: clip.text.isEmpty ? nil : clip.text,
             html: clip.html.isEmpty ? nil : clip.html,
+            image: image,
             sensitive: clip.sensitive,
             digest: digest,
             truncated: clip.truncated
@@ -206,7 +288,33 @@ public actor ClipboardCoordinator {
 
     /// The §4.4 digest: SHA-256 over the NFC-normalized text's UTF-8 bytes.
     public static func digest(text: String) -> RuntimeSHA256Digest? {
+        guard !text.isEmpty else { return nil }
         let hash = SHA256.hash(data: Data(text.precomposedStringWithCanonicalMapping.utf8))
+        return RuntimeSHA256Digest(
+            rawValue: "sha256:" + hash.map { String(format: "%02x", $0) }.joined())
+    }
+
+    /// The pixel size a PNG declares in its IHDR chunk, or nil when the
+    /// bytes are not a PNG. Host-side verification of image clips (§4.4):
+    /// the guest's announced dimensions are never trusted.
+    public static func pngPixelSize(_ data: Data) -> (Int, Int)? {
+        let signature: [UInt8] = [137, 80, 78, 71, 13, 10, 26, 10]
+        let bytes = [UInt8](data.prefix(24))
+        guard bytes.count == 24, Array(bytes[0...7]) == signature,
+            Array(bytes[12...15]) == Array("IHDR".utf8)
+        else {
+            return nil
+        }
+        let width = bytes[16...19].reduce(0) { $0 << 8 | Int($1) }
+        let height = bytes[20...23].reduce(0) { $0 << 8 | Int($1) }
+        guard width > 0, height > 0 else { return nil }
+        return (width, height)
+    }
+
+    /// The §4.4 digest of an image clip: SHA-256 over the PNG bytes.
+    public static func digest(imageBytes: Data) -> RuntimeSHA256Digest? {
+        guard !imageBytes.isEmpty else { return nil }
+        let hash = SHA256.hash(data: imageBytes)
         return RuntimeSHA256Digest(
             rawValue: "sha256:" + hash.map { String(format: "%02x", $0) }.joined())
     }

@@ -39,6 +39,28 @@ public protocol HostNotificationSink: Sendable {
     /// update-system.md §6 — a candidate whose signer or provider metadata
     /// does not match is the case the user needs to see.
     func notifyUpdateRefused(_ notification: UpdateNotification) async
+    /// Posts the §8.3 "rolled back" notification — the failed version was
+    /// reverted and will not be offered again; app data is untouched.
+    func notifyUpdateRolledBack(_ notification: UpdateNotification) async
+    /// Posts the §8.3 "update kept after a failed health check"
+    /// notification: the user chooses Keep <new>, Roll Back, or
+    /// Restore <old> (erases data) when no rollback mechanism exists.
+    func notifyUpdateKeptAfterFailedHealthCheck(_ notification: UpdateNotification) async
+    /// Posts the §9 "Updated" notification: an automatic update passed its
+    /// health check. The coordinator calls it only when
+    /// `updates.notifyInstalled` is on.
+    func notifyUpdateInstalled(_ notification: UpdateNotification) async
+}
+
+extension HostNotificationSink {
+    /// Sinks that cannot render the §8.3 notices may drop them; the phases
+    /// and history still record the outcome.
+    public func notifyUpdateRolledBack(_ notification: UpdateNotification) async {}
+    /// Sinks that cannot render the §8.3 notices may drop them; the phases
+    /// and history still record the outcome.
+    public func notifyUpdateKeptAfterFailedHealthCheck(_ notification: UpdateNotification) async {}
+    /// Sinks that cannot render the "Updated" notice may drop it.
+    public func notifyUpdateInstalled(_ notification: UpdateNotification) async {}
 }
 
 /// The result of one coordinator check run.
@@ -91,6 +113,9 @@ public actor UpdateCoordinator {
     private let validator: UpdateValidator
     /// H1's budget (§8.1): 30 s for Android to report the staged set.
     private let healthCheckBudget: Duration
+    /// `updates.notifyInstalled` (§9): post "Updated" after a passed
+    /// health check.
+    private let installedNotificationEnabled: @Sendable () -> Bool
     /// Injected for tests: the poll tick between H1 queries.
     private let healthCheckTickSleep: @Sendable () async -> Void
     /// The hard size cap of one downloaded set (§5); 8 GiB.
@@ -117,7 +142,8 @@ public actor UpdateCoordinator {
         healthCheckBudget: Duration = .seconds(30),
         healthCheckTickSleep: @escaping @Sendable () async -> Void = {
             try? await Task.sleep(for: .seconds(1))
-        }
+        },
+        installedNotificationEnabled: @escaping @Sendable () -> Bool = { false }
     ) {
         self.store = store
         self.stateStore = stateStore
@@ -130,6 +156,7 @@ public actor UpdateCoordinator {
         self.validator = validator
         self.healthCheckBudget = healthCheckBudget
         self.healthCheckTickSleep = healthCheckTickSleep
+        self.installedNotificationEnabled = installedNotificationEnabled
     }
 
     /// The current phase of a package, restoring a persisted `available` or
@@ -189,31 +216,41 @@ public actor UpdateCoordinator {
 
         setPhase(packageID, .checking)
         let settings = try? await store.packageSettings(for: packageID)
+        // Providers that find versions but no compatible one (§4.5
+        // `signerDiffers`) report through the note instead of failing the
+        // check; it is recorded in state and history below.
+        let incompatibleNote = IncompatibleNoteBox()
+        let cursorRefresh = CursorRefreshBox()
+        var providerContext = context
+        providerContext.incompatibleNote = { incompatibleNote.record($0) }
+        providerContext.cursorRefresh = { cursorRefresh.record($0) }
         do {
             let provider = try resolveProvider(providerRef)
-            let candidate = try await provider.check(installed, context: context)
+            let candidate = try await provider.check(installed, context: providerContext)
             guard let candidate else {
                 await recordCheck(
                     row: row, record: record, outcome: .upToDate,
-                    failures: 0, now: started, trigger: trigger)
+                    failures: 0, now: started, trigger: trigger,
+                    incompatibleReason: incompatibleNote.reason,
+                    refreshedCursor: cursorRefresh.cursor)
                 return .upToDate
             }
 
-            // Save the cursor of every processed candidate (§4.2) and persist
-            // the `available` phase (§10.1).
+            // Persist the `available` phase (§10.1). The candidate's cursor
+            // is *not* consumed here: a found-but-undealt candidate (a
+            // deferred download, a check-only report) is not processed —
+            // the cursor is written when the run reaches a terminal
+            // outcome (install, skip, terminal failure) so the next check
+            // finds it again (§4.2).
             let newCursor = candidate.cursor
             await stateStore.update(packageID) { state in
                 state.lastCheckAt = started
                 state.nextCheckAt = Self.nextCheck(
                     after: started, intervalHours: checkIntervalHours, failures: 0)
                 state.consecutiveFailures = 0
-                // A `--check-only` report does not consume the candidate: the
-                // next real check must find it again (§4.2 cursors mark
-                // processed candidates only).
-                if !checkOnly {
-                    state.cursor = newCursor
-                }
                 state.phase = "available"
+                // A found candidate clears a recorded §4.5 note.
+                state.incompatibleReason = nil
                 state.candidate = PackageUpdateState.CandidateSummary(
                     versionCode: candidate.declaredVersionCode,
                     versionName: candidate.declaredVersionName,
@@ -236,10 +273,14 @@ public actor UpdateCoordinator {
                 await stateStore.update(packageID) { $0.notifiedCursor = newCursor }
             }
             // TODO(#39): automatic continues into downloading → validating → staged.
+            let note: String? =
+                providerRef.type == .github
+                    && candidate.artifacts.contains(where: { $0.sha256 == nil })
+                ? "No checksum published" : nil
             await appendHistory(
                 record: record, to: candidate.declaredVersionCode,
                 provider: providerRef.type, trigger: trigger,
-                outcome: "available", failure: nil, started: started)
+                outcome: "available", failure: nil, started: started, note: note)
             await stateStore.flush()
             return .available(candidate)
         } catch let failure {
@@ -408,9 +449,9 @@ public actor UpdateCoordinator {
         // Hash every artifact the provider declared a digest for (§5): the
         // digest covers the file as streamed, so a file that differs on disk
         // after the download is a mismatch.
-        for declared in candidate.artifacts where declared.sha256 != nil {
+        for (index, declared) in candidate.artifacts.enumerated() where declared.sha256 != nil {
             let file = ticketInfo.directory.appendingPathComponent(
-                declared.url.lastPathComponent)
+                declared.storedFileName(index: index, in: candidate.artifacts))
             let observed = Self.fileDigest(at: file)
             guard let observed, observed == declared.sha256 else {
                 try? await store.discardDownload(ticket: ticket)
@@ -451,7 +492,15 @@ public actor UpdateCoordinator {
         started: Date
     ) async {
         await stateStore.update(packageID) { state in
-            state.cursor = candidate.cursor
+            // A transient failure (unreachable, rate-limited) does not
+            // consume the candidate: the next check offers it again. Only
+            // terminal failures mark the cursor processed (§4.2).
+            switch failure {
+            case .providerUnreachable, .providerRateLimited:
+                break
+            default:
+                state.cursor = candidate.cursor
+            }
             state.phase = nil
             state.candidate = nil
         }
@@ -604,8 +653,11 @@ public actor UpdateCoordinator {
         case staged
         /// Installed and H1 confirmed.
         case installed(from: VersionCode, to: VersionCode)
-        /// H1 did not confirm within its 30 s budget; the new version is kept
-        /// until #44's rollback or the user's choice (§8.3).
+        /// Rolled back to the previous set after a failed health check; the
+        /// failed versionCode was skipped (§8.3–§8.4). App data is untouched.
+        case rolledBack(UpdateFailure)
+        /// The health check failed but no rollback ran — autoRollback is off
+        /// or no mechanism exists; the new version stays installed (§8.3).
         case keptAfterFailedHealthCheck(UpdateFailure)
         /// The run ended with an install failure.
         case failed(UpdateFailure)
@@ -669,7 +721,8 @@ public actor UpdateCoordinator {
                 provider: candidate.provider.type,
                 signerDigests: preview.artifactSet.signerDigests,
                 cursor: candidate.cursor,
-                reopenAfterInstall: closeRunningApp)
+                reopenAfterInstall: closeRunningApp,
+                userRequested: trigger == .userInitiated || trigger == .manual)
         }
         await stateStore.flush()
 
@@ -843,6 +896,9 @@ public actor UpdateCoordinator {
             await self.drainQueuedInstalls(
                 first: next, trigger: trigger, runtime: runtime, gate: gate)
         }
+        // §3.5: the idle stop runs only after the reopen could claim a
+        // session — stopping first would drop a reopened app.
+        await runtime.updatesIdle()
         return outcome
     }
 
@@ -883,6 +939,7 @@ public actor UpdateCoordinator {
             // try the one after it.
             next = await gate.finishInstall(admitted)
         }
+        await runtime.updatesIdle()
     }
 
     /// `installStaged` plus the H1 confirmation, called with the gate's
@@ -919,43 +976,38 @@ public actor UpdateCoordinator {
                 trigger: trigger, started: started)
         }
 
-        // H1 (§8.1): Android reports the staged versionCode and signer set
-        // within 30 s.
+        // §8.1 health check (H1–H4 at the level of §8.1), then §8.3 outcomes.
         setPhase(packageID, .healthChecking)
-        let deadline = ContinuousClock.now + healthCheckBudget
-        var confirmed = false
-        var found: VersionCode?
-        while true {
-            if let info = try? await store.installedPackageInfo(packageID) {
-                found = info.versionCode
-                if info.versionCode == expectedVersionCode,
-                    Set(info.signingDigests) == expectedSigners
-                {
-                    confirmed = true
-                    break
-                }
-            }
-            guard ContinuousClock.now < deadline else { break }
-            await healthCheckTickSleep()
-        }
-        guard confirmed else {
-            let failure = UpdateFailure.healthCheckFailed(
-                detail: "versionNotConfirmed(found: \(found.map(String.init) ?? "none"))")
-            let reason = RollbackReason.healthCheckFailed(failure)
-            await stateStore.update(packageID) { state in
-                state.cursor = cursor
-                state.phase = nil
-                state.candidate = nil
-                state.stagedAt = nil
-            }
-            setPhase(packageID, .completed(.keptAfterFailedHealthCheck(reason: reason)))
-            await appendHistory(
-                record: record, to: expectedVersionCode,
+        let settings = try? await store.packageSettings(for: packageID)
+        let launchEnabled = settings?.update["healthCheckLaunch"] != "false"
+        let autoRollback = settings?.update["autoRollback"] != "false"
+        let hasLauncher =
+            ((try? await store.installedPackageInfo(packageID))?.launchableComponent) != nil
+        let level = HealthCheckLevel.level(
+            hasLauncherActivity: hasLauncher,
+            healthCheckLaunchEnabled: launchEnabled,
+            hasProducedFrame: await runtime.hasDrawnFrame(packageID))
+        let checker = UpdateHealthChecker(
+            installedInfo: { packageID in
+                try await self.store.installedPackageInfo(packageID)
+            },
+            launch: { packageID, timeouts in
+                await runtime.healthCheckLaunch(packageID, timeouts: timeouts)
+            },
+            sleep: { _ in await self.healthCheckTickSleep() })
+        if let healthFailure = await checker.run(
+            packageID,
+            expectedVersionCode: expectedVersionCode,
+            expectedSigners: expectedSigners,
+            level: level,
+            timeouts: UpdateHealthCheckTimeouts(metadata: healthCheckBudget))
+        {
+            return await finishFailedHealthCheck(
+                packageID, record: record, cursor: cursor,
+                expectedVersionCode: expectedVersionCode,
                 provider: provider, trigger: trigger,
-                outcome: "keptAfterFailedHealthCheck", failure: failure.errorCode,
-                started: started)
-            await stateStore.flush()
-            return .keptAfterFailedHealthCheck(failure)
+                healthFailure: healthFailure,
+                autoRollback: autoRollback, started: started)
         }
 
         await stateStore.update(packageID) { state in
@@ -967,12 +1019,170 @@ public actor UpdateCoordinator {
         let outcome = UpdateOutcome.updated(
             from: record.versionCode, to: updated.versionCode)
         setPhase(packageID, .completed(outcome))
+        if installedNotificationEnabled() {
+            await notifier?.notifyUpdateInstalled(
+                UpdateNotification(
+                    packageID: packageID, displayName: record.displayName,
+                    versionCode: updated.versionCode, versionName: nil))
+        }
         await appendHistory(
             record: record, to: updated.versionCode,
             provider: provider, trigger: trigger,
             outcome: "updated", failure: nil, started: started)
         await stateStore.flush()
         return .installed(from: record.versionCode, to: updated.versionCode)
+    }
+
+    /// §8.3: the health check failed after a successful install. With
+    /// `update.autoRollback` on (the default) the store rolls back to the
+    /// previous set and the failed versionCode is skipped. A rollback that
+    /// cannot run — no mechanism or no previous set — keeps the update and
+    /// notifies the user; one that runs and fails marks the package
+    /// `broken`. With autoRollback off the update stays installed and the
+    /// user gets the kept notification. App data is never rolled back.
+    private func finishFailedHealthCheck(
+        _ packageID: PackageID,
+        record: PackageRecord,
+        cursor: ProviderCursor?,
+        expectedVersionCode: VersionCode,
+        provider: ProviderType?,
+        trigger: UpdateTrigger,
+        healthFailure: HealthCheckFailure,
+        autoRollback: Bool,
+        started: Date
+    ) async -> UpdateInstallOutcome {
+        let failure = UpdateFailure.healthCheckFailed(detail: healthFailure.detail)
+        let reason = RollbackReason.healthCheckFailed(failure)
+        await stateStore.update(packageID) { state in
+            state.cursor = cursor
+            state.phase = nil
+            state.candidate = nil
+            state.stagedAt = nil
+        }
+        if autoRollback {
+            setPhase(packageID, .rollingBack(reason))
+            do {
+                _ = try await store.rollback(
+                    packageID: packageID, allowDataLoss: false,
+                    reason: "healthCheck.\(healthFailure.step)")
+                try? await store.recordHealth(packageID, result: .failed)
+                await stateStore.update(packageID) { state in
+                    if !state.skippedVersions.contains(expectedVersionCode) {
+                        state.skippedVersions.append(expectedVersionCode)
+                    }
+                }
+                setPhase(packageID, .completed(.rolledBack(reason: reason)))
+                await appendHistory(
+                    record: record, to: expectedVersionCode,
+                    provider: provider, trigger: trigger,
+                    outcome: "rolledBack", failure: failure.errorCode,
+                    started: started)
+                await notifier?.notifyUpdateRolledBack(
+                    UpdateNotification(
+                        packageID: packageID, displayName: record.displayName,
+                        versionCode: expectedVersionCode, versionName: nil))
+                await stateStore.flush()
+                return .rolledBack(failure)
+            } catch PackageStoreFailure.rollbackUnavailable {
+                // §8.3: no mechanism or no previous set — keep the update;
+                // the notification offers Keep <new> / Restore <old> (erases
+                // data).
+            } catch PackageStoreFailure.rollbackFailed(let detail) {
+                try? await store.markBroken(packageID, reason: .rollbackFailed)
+                return await finishFailedInstall(
+                    packageID, record: record, cursor: cursor,
+                    candidateVersionCode: expectedVersionCode, provider: provider,
+                    failure: .rollbackFailed(detail: detail),
+                    trigger: trigger, started: started)
+            } catch {
+                try? await store.markBroken(packageID, reason: .rollbackFailed)
+                return await finishFailedInstall(
+                    packageID, record: record, cursor: cursor,
+                    candidateVersionCode: expectedVersionCode, provider: provider,
+                    failure: .rollbackFailed(detail: "\(error)"),
+                    trigger: trigger, started: started)
+            }
+        }
+        // Kept: autoRollback off, or rollback unavailable (§8.3). The user
+        // rolls back manually (`apkrun rollback`, §8.5) or restores the old
+        // version accepting data loss.
+        try? await store.recordHealth(packageID, result: .failed)
+        setPhase(packageID, .completed(.keptAfterFailedHealthCheck(reason: reason)))
+        await appendHistory(
+            record: record, to: expectedVersionCode,
+            provider: provider, trigger: trigger,
+            outcome: "keptAfterFailedHealthCheck", failure: failure.errorCode,
+            started: started)
+        await notifier?.notifyUpdateKeptAfterFailedHealthCheck(
+            UpdateNotification(
+                packageID: packageID, displayName: record.displayName,
+                versionCode: expectedVersionCode, versionName: nil))
+        await stateStore.flush()
+        return .keptAfterFailedHealthCheck(failure)
+    }
+
+    /// The result of a §8.5 user-initiated rollback.
+    public enum UpdateRollbackOutcome: Sendable, Equatable {
+        /// Rolled back to the given version; the current one was skipped.
+        case rolledBack(to: VersionCode)
+        /// No `previous/` set or no rollback mechanism (§7.3).
+        case unavailable
+        /// The rollback ran and failed; the package is `broken`.
+        case failed(UpdateFailure)
+    }
+
+    /// §8.5: the user asked to roll back to `previous/`
+    /// (`apkrun rollback <package>`). Runs the same `rollingBack` phase and
+    /// store operation as a health-check rollback with `.userRequested` as
+    /// the reason, and skips the rolled-back version. `allowDataLoss`
+    /// permits the §7.3 uninstall + first-install fallback; only the
+    /// confirmed "Restore (erases data)" path may pass true.
+    public func rollbackPackage(
+        _ packageID: PackageID,
+        allowDataLoss: Bool = false
+    ) async throws -> UpdateRollbackOutcome {
+        let records = (try? await store.listManagedPackages()) ?? []
+        guard let record = records.first(where: { $0.packageId == packageID }) else {
+            throw PackageStoreFailure.packageNotFound
+        }
+        let started = Date()
+        let reason = RollbackReason.userRequested
+        setPhase(packageID, .rollingBack(reason))
+        do {
+            let restored = try await store.rollback(
+                packageID: packageID, allowDataLoss: allowDataLoss,
+                reason: "userRequested")
+            await stateStore.skipVersion(packageID, versionCode: record.versionCode)
+            setPhase(packageID, .completed(.rolledBack(reason: reason)))
+            await appendHistory(
+                record: record, to: record.versionCode,
+                provider: record.updateProvider?.type, trigger: .manual,
+                outcome: "rolledBack", failure: nil, started: started)
+            await notifier?.notifyUpdateRolledBack(
+                UpdateNotification(
+                    packageID: packageID, displayName: record.displayName,
+                    versionCode: record.versionCode, versionName: record.versionName))
+            await stateStore.flush()
+            return .rolledBack(to: restored.versionCode)
+        } catch PackageStoreFailure.rollbackUnavailable {
+            setPhase(packageID, .completed(.keptAfterFailedHealthCheck(reason: reason)))
+            await appendHistory(
+                record: record, to: record.versionCode,
+                provider: record.updateProvider?.type, trigger: .manual,
+                outcome: "rollbackUnavailable", failure: nil, started: started)
+            await stateStore.flush()
+            return .unavailable
+        } catch PackageStoreFailure.rollbackFailed(let detail) {
+            try? await store.markBroken(packageID, reason: .rollbackFailed)
+            let failure = UpdateFailure.rollbackFailed(detail: detail)
+            setPhase(packageID, .completed(.skipped(.installFailed(failure))))
+            await appendHistory(
+                record: record, to: record.versionCode,
+                provider: record.updateProvider?.type, trigger: .manual,
+                outcome: "rollbackFailed", failure: failure.errorCode, started: started)
+            await stateStore.flush()
+            return .failed(failure)
+        }
     }
 
     /// Closes a failed install: saves the cursor and reports
@@ -1016,20 +1226,38 @@ public actor UpdateCoordinator {
         outcome: SkipReason,
         failures: Int,
         now: Date,
-        trigger: UpdateTrigger
+        trigger: UpdateTrigger,
+        incompatibleReason: NoCompatibleArtifactReason? = nil,
+        refreshedCursor: ProviderCursor? = nil
     ) async {
         await stateStore.update(record.packageId) { state in
             state.lastCheckAt = now
             state.nextCheckAt = Self.nextCheck(
                 after: now, intervalHours: checkIntervalHours, failures: failures)
             state.consecutiveFailures = failures
-            state.phase = nil
-            state.candidate = nil
+            state.incompatibleReason = incompatibleReason?.rawValue
+            // A provider that found nothing new may still have refreshed its
+            // listing state (e.g. a new ETag for the same release); keeping it
+            // preserves the conditional fetch on the next check.
+            if let refreshedCursor {
+                state.cursor = refreshedCursor
+            }
+            // A still-staged candidate survives an up-to-date check: the
+            // provider has nothing newer, but §7.2 may yet install the
+            // staged set (and §3.5 counts its stagedAt age).
+            if state.phase != "staged" {
+                state.phase = nil
+                state.candidate = nil
+            }
         }
         setPhase(record.packageId, .completed(.skipped(outcome)))
         await appendHistory(
             record: record, to: nil, provider: record.updateProvider?.type,
-            trigger: trigger, outcome: "skipped.\(outcome.name)", failure: nil, started: now)
+            trigger: trigger, outcome: "skipped.\(outcome.name)",
+            failure: incompatibleReason.map {
+                "update.noCompatibleArtifact/\($0.rawValue)"
+            },
+            started: now)
         await stateStore.flush()
     }
 
@@ -1040,7 +1268,8 @@ public actor UpdateCoordinator {
         trigger: UpdateTrigger,
         outcome: String,
         failure: String?,
-        started: Date
+        started: Date,
+        note: String? = nil
     ) async {
         let finished = Date()
         try? await stateStore.appendHistory(
@@ -1055,7 +1284,8 @@ public actor UpdateCoordinator {
                 failure: failure,
                 phaseDurationsMs: [
                     "checking": Int(finished.timeIntervalSince(started) * 1_000)
-                ]))
+                ],
+                note: note))
     }
 
     /// `nextCheckAt = lastCheckAt + interval ± jitter`; failure backoff is
@@ -1074,5 +1304,27 @@ public actor UpdateCoordinator {
         }
         let jitter = interval * 0.1 * Double.random(in: -1...1)
         return after.addingTimeInterval(interval + jitter)
+    }
+}
+
+/// A `@Sendable`-safe box a provider's `incompatibleNote` writes through.
+private final class IncompatibleNoteBox: @unchecked Sendable {
+    /// The note reported during `check`, if any.
+    private(set) var reason: NoCompatibleArtifactReason?
+
+    /// Records a note; the first reason wins.
+    func record(_ reason: NoCompatibleArtifactReason) {
+        if self.reason == nil { self.reason = reason }
+    }
+}
+
+/// A `@Sendable`-safe box a provider's `cursorRefresh` writes through.
+private final class CursorRefreshBox: @unchecked Sendable {
+    /// The refreshed cursor reported during `check`, if any.
+    private(set) var cursor: ProviderCursor?
+
+    /// Records a cursor; the last write wins.
+    func record(_ cursor: ProviderCursor) {
+        self.cursor = cursor
     }
 }

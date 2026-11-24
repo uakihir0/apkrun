@@ -70,6 +70,11 @@ struct PresentBufferStates: Equatable, Sendable {
     /// Returns the number of buffers that became free.
     @discardableResult
     mutating func consumerDisplayed(upTo sequence: UInt64) -> Int {
+        // An acknowledgement must name a frame that was actually offered. In particular, a future sequence must
+        // not release every outstanding buffer.
+        guard hasOffered(sequence: sequence) else {
+            return 0
+        }
         var released = 0
         for index in states.indices {
             switch states[index] {
@@ -83,6 +88,18 @@ struct PresentBufferStates: Equatable, Sendable {
             }
         }
         return released
+    }
+
+    /// True when the consumer has not yet acknowledged any offered frame.
+    var hasOfferedBuffers: Bool {
+        states.contains { state in
+            if case .offered = state { true } else { false }
+        }
+    }
+
+    /// True when `sequence` belongs to a frame that was offered to the consumer.
+    func hasOffered(sequence: UInt64) -> Bool {
+        states.contains(.offered(sequence: sequence))
     }
 
     /// True when some buffer is `free`. It does not check the in-use state, which `acquire` checks.
@@ -148,5 +165,42 @@ struct LatestFrameScheduler<Request: Sendable>: Sendable {
     /// Forgets the held request. The guest reset calls it, because the resource it names is no longer bound.
     mutating func discardPending() {
         pending = nil
+    }
+}
+
+/// Presentation eligibility for one scanout (display-and-windowing.md §5.2, rules 4–5).
+///
+/// The presenter owns the acknowledgement timer; this value owns the transitions so timeout, visibility, and
+/// acknowledgement behavior can be tested without waiting on wall-clock time.
+struct PresentBackpressureState: Equatable, Sendable {
+    private(set) var isVisible = true
+    private(set) var acknowledgementTimedOut = false
+
+    /// A blit may start only while visible and while the consumer is responding.
+    var canPresent: Bool {
+        isVisible && !acknowledgementTimedOut
+    }
+
+    /// Applies a visibility update and returns whether the current resource should be presented again.
+    ///
+    /// A transition to visible, or a visible update after the acknowledgement watchdog suspended the scanout,
+    /// requests one current present. Repeated visible updates do not schedule duplicate work.
+    mutating func setVisible(_ visible: Bool) -> Bool {
+        let wasPresentable = canPresent
+        isVisible = visible
+        if visible {
+            acknowledgementTimedOut = false
+        }
+        return visible && !wasPresentable
+    }
+
+    /// A valid acknowledgement proves that the consumer is responsive again.
+    mutating func frameDisplayed() {
+        acknowledgementTimedOut = false
+    }
+
+    /// Stops new presents after the caller's one-second outstanding-frame deadline expires.
+    mutating func acknowledgementDeadlineExpired() {
+        acknowledgementTimedOut = true
     }
 }

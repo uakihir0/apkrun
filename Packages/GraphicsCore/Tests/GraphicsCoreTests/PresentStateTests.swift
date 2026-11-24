@@ -158,3 +158,41 @@ import Testing
     let leftover = scheduler.takePending()
     #expect(leftover == nil)
 }
+
+@Test func aFutureAcknowledgementCannotReleaseAnyBuffer() {
+    var states = PresentBufferStates(bufferCount: 3)
+    let index = states.acquire { _ in false }!
+    states.markReady(index, sequence: 4)
+    let before = states
+
+    let released = states.consumerDisplayed(upTo: 5)
+
+    #expect(released == 0)
+    #expect(states == before)
+}
+
+@Test func visibilityAndAcknowledgementControlPresentationEligibility() {
+    var state = PresentBackpressureState()
+    #expect(state.canPresent)
+
+    #expect(state.setVisible(false) == false)
+    #expect(!state.canPresent)
+    let becameVisibleAgain = state.setVisible(true)
+    #expect(becameVisibleAgain)
+    #expect(state.canPresent)
+    let repeatedVisibility = state.setVisible(true)
+    #expect(!repeatedVisibility)
+
+    state.acknowledgementDeadlineExpired()
+    #expect(!state.canPresent)
+    state.frameDisplayed()
+    #expect(state.canPresent)
+
+    state.acknowledgementDeadlineExpired()
+    #expect(state.setVisible(false) == false)
+    state.frameDisplayed()
+    #expect(!state.canPresent)
+    let resumedAfterTimeout = state.setVisible(true)
+    #expect(resumedAfterTimeout)
+    #expect(state.canPresent)
+}

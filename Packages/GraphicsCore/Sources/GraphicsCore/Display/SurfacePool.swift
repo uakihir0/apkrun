@@ -79,6 +79,16 @@ final class SurfacePool {
         states.consumerDisplayed(upTo: sequence)
     }
 
+    /// True when the consumer has not yet acknowledged any offered frame.
+    var hasOfferedBuffers: Bool {
+        states.hasOfferedBuffers
+    }
+
+    /// True when `sequence` belongs to a frame that was offered to the consumer.
+    func hasOffered(sequence: UInt64) -> Bool {
+        states.hasOffered(sequence: sequence)
+    }
+
     /// True when some buffer is free, which `acquire` may still refuse while WindowServer holds it.
     var hasFreeBuffer: Bool {
         states.hasFreeBuffer

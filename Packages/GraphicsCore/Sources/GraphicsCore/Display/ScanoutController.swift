@@ -14,23 +14,31 @@ public struct ScanoutPoolHandle: @unchecked Sendable {
     public let frames: AsyncStream<ScanoutFrame>
 
     private let acknowledgeFrame: @Sendable (UInt64) -> Void
+    private let updateVisibility: @Sendable (Bool) -> Void
 
     /// Creates a pool handle. The optional acknowledgement closure is primarily useful to scanout fakes.
     public init(
         generation: UInt64,
         surfaces: [IOSurface],
         frames: AsyncStream<ScanoutFrame>,
-        acknowledgeFrame: @escaping @Sendable (UInt64) -> Void = { _ in }
+        acknowledgeFrame: @escaping @Sendable (UInt64) -> Void = { _ in },
+        updateVisibility: @escaping @Sendable (Bool) -> Void = { _ in }
     ) {
         self.generation = generation
         self.surfaces = surfaces
         self.frames = frames
         self.acknowledgeFrame = acknowledgeFrame
+        self.updateVisibility = updateVisibility
     }
 
     /// Makes a buffer reusable after its frame is committed by the consumer.
     public func frameDisplayed(sequence: UInt64) {
         acknowledgeFrame(sequence)
+    }
+
+    /// Tells GraphicsCore whether the consumer can display frames from this pool.
+    public func visibilityChanged(isVisible: Bool) {
+        updateVisibility(isVisible)
     }
 
     init(presenter: ScanoutPresenter, device: VirtioGPUDevice) {
@@ -43,6 +51,13 @@ public struct ScanoutPoolHandle: @unchecked Sendable {
                     scanout: presenter.scanout,
                     generation: presenter.generation,
                     sequence: sequence
+                )
+            },
+            updateVisibility: { isVisible in
+                device.visibilityChanged(
+                    scanout: presenter.scanout,
+                    generation: presenter.generation,
+                    isVisible: isVisible
                 )
             }
         )

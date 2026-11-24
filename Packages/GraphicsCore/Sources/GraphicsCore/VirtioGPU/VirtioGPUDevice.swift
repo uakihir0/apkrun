@@ -491,6 +491,20 @@ public final class VirtioGPUDevice: VirtioDeviceModel, @unchecked Sendable {
         presenter?.frameDisplayed(upTo: sequence)
     }
 
+    /// Updates scanout visibility only when the visibility event belongs to its active presenter generation.
+    public func visibilityChanged(scanout: ScanoutID, generation: UInt64, isVisible: Bool) {
+        presenterLifecycleLock.lock()
+        defer { presenterLifecycleLock.unlock() }
+        guard !lock.withLock({ isShuttingDown }) else {
+            return
+        }
+        let presenter = sessionLock.withLock {
+            let current = session.presenter(for: scanout)
+            return current?.generation == generation ? current : nil
+        }
+        presenter?.visibilityChanged(isVisible: isVisible)
+    }
+
     /// Enables `scanout` with `mode` and tells the guest about the change.
     ///
     /// Callable from any thread. A rejected mode throws without changing the table.

@@ -46,6 +46,8 @@ final class ScanoutFrameSequence: @unchecked Sendable {
 public final class ScanoutPresenter: @unchecked Sendable {
     /// The stall timeout of the completion waiter (graphics.md §6.2 step 4).
     static let stallTimeoutNanoseconds: UInt64 = 100_000_000
+    /// Time without an acknowledgement before an offered scanout is treated as not visible (display-and-windowing.md §5.2 rule 4).
+    static let acknowledgementTimeoutNanoseconds: UInt64 = 1_000_000_000
     /// The pause between two polls of a blit fence.
     private static let pollIntervalSeconds: TimeInterval = 0.001
     /// How long `close()` waits for the waiter before it proceeds. The waiter stops within one poll of `close()`.
@@ -72,6 +74,8 @@ public final class ScanoutPresenter: @unchecked Sendable {
     private let targets: [any PresentTarget]
     private let lock = NSLock()
     private var scheduler = LatestFrameScheduler<PresentRequest>()
+    private var backpressure = PresentBackpressureState()
+    private var lastRequest: PresentRequest?
     private var statisticsValue = PresentStatistics()
     /// Blit submit times per buffer index, for the present-time ring (diagnostics.md §9.3).
     private var blitStartUptimeNanos: [Int: UInt64] = [:]
@@ -81,6 +85,9 @@ public final class ScanoutPresenter: @unchecked Sendable {
     private var isClosed = false
     private var isReconfiguring = false
     private let waiter = DispatchQueue(label: "io.apkrun.graphics.present-waiter")
+    private let acknowledgementQueue = DispatchQueue(label: "io.apkrun.graphics.acknowledgement-watchdog")
+    private var acknowledgementTimer: DispatchSourceTimer?
+    private var acknowledgementTimerGeneration: UInt64 = 0
     private let waits = DispatchGroup()
     private let logger = APKLogger(category: GraphicsLogCategory.present)
 
@@ -162,6 +169,11 @@ public final class ScanoutPresenter: @unchecked Sendable {
         lock.withLock { recentPresentDurationsUs }
     }
 
+    /// Whether a flush can start a blit now. Exposed internally for deterministic presenter tests.
+    var canPresent: Bool {
+        lock.withLock { backpressure.canPresent }
+    }
+
     /// The device queue asks for a present of `resource` through `source`, the scanout rectangle of SET_SCANOUT.
     ///
     /// Returns the render work that runs the blit, or `nil` when the frame is held. A held frame is replaced by a newer
@@ -171,7 +183,14 @@ public final class ScanoutPresenter: @unchecked Sendable {
         lock.withLock {
             guard !isClosed, !isReconfiguring else { return nil }
             let request = PresentRequest(resource: resource, source: source)
+            lastRequest = request
+            guard backpressure.canPresent else {
+                scheduler.hold(request)
+                statisticsValue.droppedFrames = scheduler.droppedFrames
+                return nil
+            }
             guard let runnable = scheduler.submit(request) else {
+                statisticsValue.droppedFrames = scheduler.droppedFrames
                 return nil
             }
             if let work = startBlitLocked(runnable) {
@@ -186,9 +205,34 @@ public final class ScanoutPresenter: @unchecked Sendable {
     /// and a held flush starts when a buffer is free.
     public func frameDisplayed(upTo sequence: UInt64) {
         lock.withLock {
+            let wasOffered = pool.hasOffered(sequence: sequence)
             pool.consumerDisplayed(upTo: sequence)
+            guard wasOffered else { return }
+            backpressure.frameDisplayed()
+            resetAcknowledgementTimerLocked()
             // Submitted under the lock, so a close that follows queues its target release after this blit.
             if !isReconfiguring, let work = startPendingLocked() {
+                backend.submitRenderWork(work)
+            }
+        }
+    }
+
+    /// Updates whether the consumer can present this scanout.
+    ///
+    /// Hiding a scanout leaves guest flushes completing while holding only the newest request. Becoming visible
+    /// requests one present of the most recently bound resource, even when no new guest flush arrives.
+    public func visibilityChanged(isVisible: Bool) {
+        lock.withLock {
+            guard !isClosed else { return }
+            let shouldRefresh = backpressure.setVisible(isVisible)
+            if isVisible {
+                scheduleAcknowledgementTimerLockedIfNeeded()
+            }
+            guard shouldRefresh else { return }
+            if scheduler.pending == nil, let lastRequest {
+                scheduler.hold(lastRequest)
+            }
+            if let work = startPendingLocked() {
                 backend.submitRenderWork(work)
             }
         }
@@ -228,6 +272,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
     func guestReset() {
         lock.withLock {
             scheduler.discardPending()
+            lastRequest = nil
         }
     }
 
@@ -239,6 +284,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
             isClosed = true
             isReconfiguring = true
             scheduler.discardPending()
+            cancelAcknowledgementTimerLocked()
             continuation.finish()
             return true
         }
@@ -284,7 +330,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
 
     /// Starts the held flush, if one is waiting and a buffer is free. The caller holds the lock.
     private func startPendingLocked() -> VirGLRenderWork? {
-        guard !isClosed, !isReconfiguring, let request = scheduler.takePending() else {
+        guard !isClosed, !isReconfiguring, backpressure.canPresent, let request = scheduler.takePending() else {
             return nil
         }
         if let work = startBlitLocked(request) {
@@ -350,6 +396,7 @@ public final class ScanoutPresenter: @unchecked Sendable {
                 }
                 recentPresentDurationsUs.append(durationUs)
             }
+            scheduleAcknowledgementTimerLockedIfNeeded()
             continuation.yield(.frameReady(generation: pool.generation, bufferIndex: index, sequence: sequence))
             if let work = startPendingLocked() {
                 backend.submitRenderWork(work)
@@ -366,6 +413,56 @@ public final class ScanoutPresenter: @unchecked Sendable {
             if let work = startPendingLocked() {
                 backend.submitRenderWork(work)
             }
+        }
+    }
+
+    /// Arms the one-shot timer while any offered frame awaits acknowledgement. Additional offers do not extend the
+    /// deadline; a valid `frameDisplayed` restarts it for the remaining offers.
+    private func scheduleAcknowledgementTimerLockedIfNeeded() {
+        guard pool.hasOfferedBuffers, acknowledgementTimer == nil else { return }
+        acknowledgementTimerGeneration &+= 1
+        let generation = acknowledgementTimerGeneration
+        let timer = DispatchSource.makeTimerSource(queue: acknowledgementQueue)
+        timer.schedule(
+            deadline: .now() + .nanoseconds(Int(Self.acknowledgementTimeoutNanoseconds)),
+            leeway: .milliseconds(10)
+        )
+        timer.setEventHandler { [weak self] in
+            self?.acknowledgementDeadlineExpired(generation: generation)
+        }
+        acknowledgementTimer = timer
+        timer.resume()
+    }
+
+    /// Resets the acknowledgement deadline after a valid frame was displayed.
+    private func resetAcknowledgementTimerLocked() {
+        cancelAcknowledgementTimerLocked()
+        scheduleAcknowledgementTimerLockedIfNeeded()
+    }
+
+    /// Cancels the timer and invalidates any handler already queued on its dispatch queue.
+    private func cancelAcknowledgementTimerLocked() {
+        acknowledgementTimerGeneration &+= 1
+        if let acknowledgementTimer {
+            acknowledgementTimer.setEventHandler {}
+            acknowledgementTimer.cancel()
+        }
+        acknowledgementTimer = nil
+    }
+
+    /// The timer callback is generation-pinned so an expired timer cannot hide a scanout after a later acknowledgement.
+    private func acknowledgementDeadlineExpired(generation: UInt64) {
+        lock.withLock {
+            guard
+                generation == acknowledgementTimerGeneration,
+                !isClosed,
+                pool.hasOfferedBuffers
+            else {
+                return
+            }
+            acknowledgementTimer = nil
+            acknowledgementTimerGeneration &+= 1
+            backpressure.acknowledgementDeadlineExpired()
         }
     }
 }

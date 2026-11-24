@@ -206,6 +206,48 @@ private func blitCalls(_ engine: FakeVirGLEngine) -> [FakeVirGLEngine.Call] {
     presenter.close()
 }
 
+@Test func hiddenScanoutCoalescesFlushesAndRequestsOneCurrentFrameWhenShown() async throws {
+    let harness = try PresenterHarness()
+    let presenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
+    let initial = harness.send(
+        bindAndFlush(resource: 3, rect: fullRect) + [flushRequest(resource: 3, rect: fullRect)]
+    )
+    try await eventually { initial.completionCounts == [1, 1, 1] && presenter.statistics.framesPresented == 1 }
+    let poolHandle = harness.device.poolHandle(for: scanoutZero)!
+    poolHandle.visibilityChanged(isVisible: false)
+
+    let hidden = harness.send([flushRequest(resource: 3, rect: fullRect), flushRequest(resource: 3, rect: fullRect)])
+    try await eventually { hidden.completionCounts == [1, 1] }
+    #expect(presenter.statistics.framesPresented == 1)
+    #expect(blitCalls(harness.engine).count == 1)
+    #expect(presenter.statistics.droppedFrames == 1)
+
+    poolHandle.visibilityChanged(isVisible: true)
+    try await eventually { presenter.statistics.framesPresented == 2 }
+    #expect(blitCalls(harness.engine).count == 2)
+    presenter.close()
+}
+
+@Test func anUnacknowledgedOfferStopsPresentsUntilTheConsumerDisplaysIt() async throws {
+    let harness = try PresenterHarness()
+    let presenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)
+    let initial = harness.send(
+        bindAndFlush(resource: 3, rect: fullRect) + [flushRequest(resource: 3, rect: fullRect)]
+    )
+    try await eventually { initial.completionCounts == [1, 1, 1] && presenter.statistics.framesPresented == 1 }
+    try await eventually { !presenter.canPresent }
+
+    let blocked = harness.send([flushRequest(resource: 3, rect: fullRect)])
+    try await eventually { blocked.completionCounts == [1] }
+    #expect(presenter.statistics.framesPresented == 1)
+    #expect(blitCalls(harness.engine).count == 1)
+
+    presenter.frameDisplayed(upTo: 1)
+    try await eventually { presenter.statistics.framesPresented == 2 }
+    #expect(blitCalls(harness.engine).count == 2)
+    presenter.close()
+}
+
 @Test func aFailedBlitReturnsItsBufferAndCountsARendererFailure() async throws {
     let harness = try PresenterHarness()
     let presenter = try harness.device.attachPresenter(scanoutZero, width: 8, height: 4)

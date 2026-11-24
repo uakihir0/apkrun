@@ -43,46 +43,43 @@ targets=(
     "github-releases|UpdateCoreFuzz|Packages/UpdateCore"
 )
 
-# Resolve the pinned swift.org toolchain.
-resolve_toolchain() {
+# TOOLCHAINS is ignored by swift build (the swiftbuild driver resolves the
+# compiler itself), so call the toolchain's own swift binary instead. The
+# toolchain must also compile against a macOS SDK of its own generation or
+# older: a macOS 27 SDK injects -target-arch-variant, which swift.org
+# toolchains before Swift 6.4 do not understand. Probe the installed
+# toolchains and SDKs, newest first, and use the first compatible pair.
+toolchain_dirs() {
     if [[ -d "${SWIFT_FUZZ_TOOLCHAIN:-}" ]]; then
-        printf '%s' "$SWIFT_FUZZ_TOOLCHAIN"
-        return
+        printf '%s\n' "$SWIFT_FUZZ_TOOLCHAIN"
     fi
-    local dir candidate
+    local dir
     for dir in "$HOME/Library/Developer/Toolchains" "/Library/Developer/Toolchains"; do
         [[ -d "$dir" ]] || continue
-        candidate="$(find "$dir" -maxdepth 1 -name "${SWIFT_FUZZ_TOOLCHAIN}*.xctoolchain" -type d | sort | tail -1)"
-        if [[ -n "$candidate" ]]; then
-            basename "$candidate" .xctoolchain
-            return
-        fi
-        # Newest installed swift.org toolchain as a fallback.
-        candidate="$(find "$dir" -maxdepth 1 -name "org.swift.*.xctoolchain" -type d | sort | tail -1)"
-        [[ -n "$candidate" ]] || candidate="$(find "$dir" -maxdepth 1 -name "swift-*.xctoolchain" -type d | sort | tail -1)"
-        if [[ -n "$candidate" ]]; then
-            basename "$candidate" .xctoolchain
-            return
-        fi
-    done
-    printf 'run-fuzz: no swift.org toolchain found; install the %s toolchain from swift.org\n' "$SWIFT_FUZZ_TOOLCHAIN" >&2
-    return 78
+        find "$dir" -maxdepth 1 -name '*.xctoolchain' -type d
+    done | sort -r
 }
-
-toolchain="$(resolve_toolchain)" || exit $?
-
-# TOOLCHAINS is ignored by swift build (the swiftbuild driver resolves the
-# compiler itself), so call the toolchain's own swift binary instead.
-toolchain_dir=""
-for dir in "$HOME/Library/Developer/Toolchains" "/Library/Developer/Toolchains"; do
-    if [[ -d "$dir/$toolchain.xctoolchain" ]]; then
-        toolchain_dir="$dir/$toolchain.xctoolchain"
-        break
-    fi
-done
-[[ -n "$toolchain_dir" && -x "$toolchain_dir/usr/bin/swift" ]] \
-    || { printf 'run-fuzz: %s has no usr/bin/swift\n' "$toolchain_dir" >&2; exit 78; }
-fuzz_swift="$toolchain_dir/usr/bin/swift"
+sdk_dirs() {
+    find /Applications -path '*/Platforms/MacOSX.platform/Developer/SDKs/MacOSX*.sdk' \
+        -maxdepth 6 -type d 2>/dev/null | sort -r
+}
+fuzz_swift=""
+sdk=""
+while IFS= read -r candidate_dir; do
+    [[ -x "$candidate_dir/usr/bin/swift" ]] || continue
+    while IFS= read -r candidate_sdk; do
+        if printf 'import Foundation\n' \
+            | "$candidate_dir/usr/bin/swift" -sdk "$candidate_sdk" -typecheck - >/dev/null 2>&1; then
+            fuzz_swift="$candidate_dir/usr/bin/swift"
+            sdk="$candidate_sdk"
+            break 2
+        fi
+    done < <(sdk_dirs)
+done < <(toolchain_dirs)
+[[ -n "$fuzz_swift" ]] \
+    || { printf 'run-fuzz: no installed toolchain compiles against any installed macOS SDK (need %s or newer)\n' "$SWIFT_FUZZ_TOOLCHAIN" >&2; exit 78; }
+export SDKROOT="$sdk"
+printf 'run-fuzz: %s against %s\n' "$(basename "$(dirname "$(dirname "$fuzz_swift")")")" "$(basename "$sdk")"
 
 run_one() {
     local product="$1" name="$2"

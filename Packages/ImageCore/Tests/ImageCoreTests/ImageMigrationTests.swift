@@ -42,21 +42,25 @@ private struct MigrationSandbox {
         ImageMigrationService(store: instances, diagnostics: .testing())
     }
 
-    func bundle(_ name: String, version: String) throws -> URL {
+    func bundle(_ name: String, version: String, minimumImageVersion: String? = nil) throws -> URL {
         try SignedBundleFixture.write(
             to: root.appendingPathComponent("source-\(name)", isDirectory: true),
-            version: version
+            version: version,
+            minimumImageVersion: minimumImageVersion
         )
     }
 }
 
 private let oldVersion = "2026.10.0-cf1-arm64"
 private let newVersion = "2026.10.1-cf1-arm64"
+private let upgradeFloor = "2026.10.0"
 
 private func installPair(_ sandbox: MigrationSandbox) async throws -> (InstalledImage, InstalledImage) {
     let store = sandbox.images
     let source = try await store.install(from: .directory(try sandbox.bundle("a", version: oldVersion)))
-    let target = try await store.install(from: .directory(try sandbox.bundle("b", version: newVersion)))
+    let target = try await store.install(
+        from: .directory(try sandbox.bundle("b", version: newVersion, minimumImageVersion: upgradeFloor))
+    )
     return (source, target)
 }
 
@@ -114,7 +118,9 @@ func checkAllowedRejectsASourceOlderThanTheMinimum() async throws {
     let ancient = try await store.install(
         from: .directory(try sandbox.bundle("old", version: "2026.09.0-cf1-arm64"))
     )
-    let target = try await store.install(from: .directory(try sandbox.bundle("b", version: newVersion)))
+    let target = try await store.install(
+        from: .directory(try sandbox.bundle("b", version: newVersion, minimumImageVersion: upgradeFloor))
+    )
     await #expect(
         throws: ImageFailure.migrationSourceTooOld(source: "2026.09.0-cf1-arm64", minimum: "2026.10.0")
     ) {

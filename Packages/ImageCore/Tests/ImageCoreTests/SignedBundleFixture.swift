@@ -40,11 +40,14 @@ let testImageTrust = ImageTrustStore(keys: [
 /// with one written byte at the start, so the tests can see whether clones keep the holes.
 enum SignedBundleFixture {
     /// Writes a bundle under `directory`. `base` is the Android build part of the version, such as `cf1`.
+    /// `minimumImageVersion` is the `upgradeFrom` floor the manifest declares; the bundle's own
+    /// version is used when it is omitted.
     @discardableResult
     static func write(
         to directory: URL,
         version: String = "2026.10.0-cf1-arm64",
-        kernel: Data = Data(repeating: 0x42, count: 64)
+        kernel: Data = Data(repeating: 0x42, count: 64),
+        minimumImageVersion: String? = nil
     ) throws -> URL {
         let fileManager = FileManager.default
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -67,7 +70,9 @@ enum SignedBundleFixture {
             try data.write(to: directory.appendingPathComponent(path))
         }
         try sparseFile(at: directory.appendingPathComponent("disks/os.img"))
-        try sparseFile(at: directory.appendingPathComponent("templates/userdata.img"))
+        // The userdata template must carry a real GPT: `InstanceDiskProvisioner`
+        // clones it, rewrites both GPT copies, and verifies the protective MBR.
+        try writeGPTTemplate(at: directory.appendingPathComponent("templates/userdata.img"))
 
         var files: [[String: Any]] = []
         for path in [
@@ -77,7 +82,9 @@ enum SignedBundleFixture {
             let url = directory.appendingPathComponent(path)
             files.append(["path": path, "size": try size(of: url), "sha256": try sha256(of: url)])
         }
-        let manifest = try manifestDocument(version: version, files: files)
+        let manifest = try manifestDocument(
+            version: version, files: files, minimumImageVersion: minimumImageVersion
+        )
         let manifestBytes =
             try JSONSerialization.data(
                 withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys]
@@ -93,6 +100,34 @@ enum SignedBundleFixture {
             + "signature: \(signature.base64EncodedString())\n"
         try Data(signatureFile.utf8).write(to: directory.appendingPathComponent("manifest.sig"))
         return directory
+    }
+
+    /// The 3 MiB "before" disk of the shared Python GPT fixture
+    /// (`Images/tools/tests/fixtures/gpt/provision.json`): a valid protective MBR plus both GPT
+    /// copies with a `misc` and a `userdata` partition. InstanceDiskProvisionerTests reads the
+    /// same fixture.
+    private static func writeGPTTemplate(at url: URL) throws {
+        struct GPTFixture: Decodable {
+            struct Side: Decodable {
+                var size: Int
+                var sectors: [String: String]
+            }
+            var before: Side
+        }
+        let fixtureURL = imageRepositoryRoot.appendingPathComponent(
+            "Images/tools/tests/fixtures/gpt/provision.json"
+        )
+        let fixture = try JSONDecoder().decode(
+            GPTFixture.self, from: Data(contentsOf: fixtureURL)
+        ).before
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.truncate(atOffset: UInt64(fixture.size))
+        for (lba, base64) in fixture.sectors {
+            let sector = try #require(Data(base64Encoded: base64))
+            try handle.write(toOffset: UInt64(lba)! * 512, contentsOf: sector)
+        }
     }
 
     /// A 4 MiB file whose first byte is written and whose tail is a hole. APFS allocates the gap
@@ -123,7 +158,9 @@ enum SignedBundleFixture {
 
     /// The §4 document for the fixture's files. Console ports and GPU profiles come from the
     /// shared §4.1 example, which the Python fixtures check.
-    private static func manifestDocument(version: String, files: [[String: Any]]) throws -> [String: Any] {
+    private static func manifestDocument(
+        version: String, files: [[String: Any]], minimumImageVersion: String?
+    ) throws -> [String: Any] {
         let exampleURL = imageRepositoryRoot.appendingPathComponent(
             "Images/tools/tests/fixtures/runtime-manifests/valid/stock-cf16373615.json"
         )
@@ -188,16 +225,21 @@ enum SignedBundleFixture {
                     "path": "templates/userdata.img",
                     "readOnly": false,
                     "identifier": "apkrun-data",
-                    "logicalSize": 4 * megabyte,
+                    "logicalSize": 3 * megabyte,
                     "userdataStrategy": "blankFormattable",
-                    "partitions": [["label": "userdata", "firstLBA": 2048, "size": megabyte, "sha256": hash]],
+                    "partitions": [
+                        ["label": "misc", "firstLBA": 2048, "size": 1024 * 512, "sha256": hash],
+                        ["label": "userdata", "firstLBA": 4096, "size": 512 * 512, "sha256": hash],
+                    ],
                 ]
             ],
             "consolePorts": example["consolePorts"]!,
             "gpuProfiles": example["gpuProfiles"]!,
-            "requirements": ["minimumRuntimeVersion": "0.1.0", "guestProtocol": ["min": 1, "max": 1], "agents": []],
+            "requirements": ["minimumRuntimeVersion": "1.0.0", "guestProtocol": ["min": 1, "max": 1], "agents": []],
             "userdata": ["schemaVersion": 1, "upgradableFrom": [1]],
-            "compatibility": ["upgradeFrom": ["minimumImageVersion": String(short)]],
+            "compatibility": [
+                "upgradeFrom": ["minimumImageVersion": minimumImageVersion ?? String(short)]
+            ],
             "files": files,
         ]
     }

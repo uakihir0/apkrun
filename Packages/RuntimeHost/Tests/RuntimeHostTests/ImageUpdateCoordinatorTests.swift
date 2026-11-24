@@ -53,6 +53,36 @@ final class VersionBox: @unchecked Sendable {
     var value: ImageCore.ImageVersion?
 }
 
+/// Lets a test hold a `migrate` hook mid-flight and observe when it was entered.
+private actor ApplyGate {
+    private var entered = false
+    private var released = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func enter() {
+        entered = true
+        entryWaiters.forEach { $0.resume() }
+        entryWaiters.removeAll()
+    }
+
+    func waitForEntry() async {
+        if entered { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        releaseWaiters.forEach { $0.resume() }
+        releaseWaiters.removeAll()
+    }
+
+    func waitForRelease() async {
+        if released { return }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+}
+
 @Test func applyRunsTheMigrationAndEndsIdle() async throws {
     let box = VersionBox()
     let (directory, coordinator) = coordinatorFixture("apply") { version, _, _ in
@@ -97,33 +127,54 @@ final class VersionBox: @unchecked Sendable {
 }
 
 @Test func concurrentApplyIsRefused() async throws {
+    let gate = ApplyGate()
     let (directory, coordinator) = coordinatorFixture("busy") { _, _, _ in
-        try? await Task.sleep(for: .milliseconds(200))
+        await gate.enter()
+        await gate.waitForRelease()
     }
     defer { try? FileManager.default.removeItem(at: directory) }
     let from = try version("2026.01.1")
     let to = try version("2026.02.1")
     await coordinator.noteReady(to)
 
+    // Hold the first apply inside its migrate hook so the busy gate is taken
+    // before the second call reaches the actor.
     async let first: () = coordinator.apply(to, from: from)
+    await gate.waitForEntry()
     await #expect(throws: ImageFailure.self) {
         try await coordinator.apply(to, from: from)
     }
+    await gate.release()
     try await first
 }
 
 @Test func reconcileSettlesAnInterruptedApplyingPhase() async throws {
-    let (directory, coordinator) = coordinatorFixture("reconcile")
+    let gate = ApplyGate()
+    let (directory, coordinator) = coordinatorFixture("reconcile") { _, _, _ in
+        await gate.enter()
+        await gate.waitForRelease()
+    }
     defer { try? FileManager.default.removeItem(at: directory) }
     let from = try version("2026.01.1")
     let to = try version("2026.02.1")
     await coordinator.noteReady(to)
-    // Simulate a daemon exit mid-apply by writing the applying state directly.
-    await coordinator.reconcile(currentImage: to)
-    let snapshot = await coordinator.stateSnapshot()
+    // Simulate a daemon exit mid-apply: a real apply holds `.applying` in the
+    // state file, and a fresh coordinator settles it on restart.
+    async let apply: () = coordinator.apply(to, from: from)
+    await gate.waitForEntry()
+    let paths = APKRunPaths(allowingHomeOverride: true, environment: ["APKRUN_HOME": directory.path])
+    let restarted = ImageUpdateCoordinator(
+        paths: paths,
+        diagnostics: .live(paths: paths),
+        publish: { _ in },
+        migrate: { _, _, _ in }
+    )
+    await restarted.reconcile(currentImage: to)
+    let snapshot = await restarted.stateSnapshot()
     #expect(snapshot.phase == .idle)
     #expect(snapshot.lastResult == .installed(to))
-    _ = from
+    await gate.release()
+    try await apply
 }
 
 @Test func gcRetainSetKeepsReadyAndRecentRejections() async throws {

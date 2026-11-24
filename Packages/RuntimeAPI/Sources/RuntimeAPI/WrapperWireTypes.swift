@@ -555,6 +555,132 @@ public struct RuntimeCreateWrapperControlReply: Codable, Equatable, Sendable {
     }
 }
 
+/// The `buildDistributionWrapper` request (runtime-api.md §10.8): a
+/// Developer ID signed, optionally notarized portable wrapper written to
+/// `outputDirectory`. It is never placed or registered.
+public struct DistributionWrapperRequest: Codable, Equatable, Sendable {
+    /// The installed package to wrap.
+    public var packageID: RuntimePackageID
+    /// The directory the `<name>.app` and `<name>.zip` products land in.
+    public var outputDirectory: URL
+    /// A file name that overrides wrapper.md §4.3 (without `.app`).
+    public var fileName: String?
+    /// The display name; `nil` = the package's name.
+    public var displayName: String?
+    /// The icon source; `nil` = the Android icon.
+    public var icon: WrapperIconChoice?
+    /// The Developer ID signing identity, e.g.
+    /// `Developer ID Application: Name (TEAMID)`.
+    public var identity: String
+    /// Whether to notarize and staple the wrapper.
+    public var notarize: Bool
+    /// The `notarytool` keychain profile; required with `notarize`.
+    public var keychainProfile: String?
+
+    /// The client confirmed the APK may be redistributed; `false` fails
+    /// the request with `runtime.malformedRequest` (wrapper.md §11).
+    public var redistributionConfirmed: Bool
+
+    /// Creates a distribution-wrapper request.
+    public init(
+        packageID: RuntimePackageID,
+        outputDirectory: URL,
+        fileName: String? = nil,
+        displayName: String? = nil,
+        icon: WrapperIconChoice? = nil,
+        identity: String,
+        notarize: Bool = false,
+        keychainProfile: String? = nil,
+        redistributionConfirmed: Bool
+    ) {
+        self.packageID = packageID
+        self.outputDirectory = outputDirectory
+        self.fileName = fileName
+        self.displayName = displayName
+        self.icon = icon
+        self.identity = identity
+        self.notarize = notarize
+        self.keychainProfile = keychainProfile
+        self.redistributionConfirmed = redistributionConfirmed
+    }
+}
+
+/// The finished distribution products (runtime-api.md §10.8).
+public struct DistributionWrapperResult: Codable, Equatable, Sendable {
+    /// The delivered `<name>.app`.
+    public var appURL: URL
+    /// The delivered `<name>.zip` (the stapled archive when notarized).
+    public var zipURL: URL
+    /// The deterministic bundle ID.
+    public var bundleID: String
+    /// The 40-hex code directory hash of the Developer ID signature.
+    public var cdhash: String
+    /// The team ID of the signing identity.
+    public var teamID: String?
+    /// Whether the bundle was notarized and stapled.
+    public var notarized: Bool
+    /// The notary submission ID, only when `notarized`.
+    public var submissionID: String?
+    /// The `spctl` assessment line, only when `notarized`.
+    public var assessment: String?
+
+    /// Creates a distribution result.
+    public init(
+        appURL: URL,
+        zipURL: URL,
+        bundleID: String,
+        cdhash: String,
+        teamID: String? = nil,
+        notarized: Bool,
+        submissionID: String? = nil,
+        assessment: String? = nil
+    ) {
+        self.appURL = appURL
+        self.zipURL = zipURL
+        self.bundleID = bundleID
+        self.cdhash = cdhash
+        self.teamID = teamID
+        self.notarized = notarized
+        self.submissionID = submissionID
+        self.assessment = assessment
+    }
+}
+
+/// Starts a `distributionWrapper` operation on the control endpoint.
+public struct RuntimeBuildDistributionWrapperControlRequest: Codable, Equatable, Sendable {
+    /// The request metadata.
+    public let header: APIRequestHeader
+    /// What to build.
+    public let request: DistributionWrapperRequest
+
+    /// Creates a distribution-wrapper control request.
+    public init(header: APIRequestHeader, request: DistributionWrapperRequest) {
+        self.header = header
+        self.request = request
+    }
+}
+
+/// The operation handle or typed error returned by
+/// `buildDistributionWrapper`.
+public struct RuntimeBuildDistributionWrapperControlReply: Codable, Equatable, Sendable {
+    /// The operation handle, present on acceptance.
+    public let result: OperationHandle?
+    /// The structured failure, present on failure.
+    public let error: RuntimeWireError?
+
+    /// Creates an accepted reply.
+    public init(result: OperationHandle) {
+        self.result = result
+        error = nil
+    }
+
+    /// Creates a failed reply.
+    public init(error: RuntimeWireError) {
+        result = nil
+        self.error = error
+    }
+}
+
 /// A launcher's `importBootstrap` control request (runtime-api.md §10.2):
 /// its bundle ID resolves the approved registry entry, `bootstrapJSON` is the
 /// `Contents/Resources/bootstrap/bootstrap.json` bytes, and the APK files

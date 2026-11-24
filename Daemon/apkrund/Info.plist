@@ -24,5 +24,7 @@
 	<string>$(CONFIGURATION)</string>
 	<key>APKRunEmbeddedRuntime</key>
 	<false/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>APKRun uses the microphone only for Android apps whose Microphone integration is on.</string>
 </dict>
 </plist>

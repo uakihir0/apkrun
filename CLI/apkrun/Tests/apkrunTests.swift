@@ -591,12 +591,38 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
 }
 
 #if APKRUN_EMBEDDED_RUNTIME
+    @Test func developerPowerCommandsParseBothActions() async throws {
+        let sleep = try await APKRunCommand.asyncParseAsRoot(["dev", "power", "sleep"])
+        #expect((sleep as? DevPowerCommand)?.action == "sleep")
+
+        let wake = try await APKRunCommand.asyncParseAsRoot(["dev", "power", "wake"])
+        #expect((wake as? DevPowerCommand)?.action == "wake")
+    }
+
+    @Test func developerPowerCommandRejectsUnknownActions() async throws {
+        var command = try #require(
+            await APKRunCommand.asyncParseAsRoot(["dev", "power", "hibernate"]) as? DevPowerCommand
+        )
+        do {
+            try await command.run()
+            Issue.record("An unsupported developer power action unexpectedly succeeded.")
+        } catch CLIFailure.invalidArgument(let argument, let reason) {
+            #expect(argument == "action")
+            #expect(reason == "power")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
     @Test func runtimeControlCommandsParseStatusStartAndStop() async throws {
         let status = try await APKRunCommand.asyncParseAsRoot(["runtime", "status", "--json"])
         #expect((status as? RuntimeStatusCommand)?.json == true)
 
         let start = try await APKRunCommand.asyncParseAsRoot(["runtime", "start"])
         #expect(start is RuntimeStartCommand)
+
+        let heldStart = try await APKRunCommand.asyncParseAsRoot(["runtime", "start", "--hold"])
+        #expect((heldStart as? RuntimeStartCommand)?.hold == true)
 
         let stop = try await APKRunCommand.asyncParseAsRoot(["runtime", "stop"])
         #expect(stop is RuntimeStopCommand)
@@ -878,6 +904,10 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
 
 @Test func updateHelpMatchesGolden() {
     #expect(UpdateCommand.helpMessage() == golden("help-update.txt"))
+}
+
+@Test func doctorHelpMatchesGolden() {
+    #expect(DoctorCommand.helpMessage() == golden("help-doctor.txt"))
 }
 
 #if APKRUN_EMBEDDED_RUNTIME
@@ -1427,6 +1457,81 @@ private let releaseBuildInfo = BuildInfo(
             WrapCommandSupport.verificationText(broken)
                 == golden("wrap-verify-problems.txt"))
     }
+
+    @Test func wrapGoldenDistributionTexts() {
+        let plain = DistributionWrapperResult(
+            appURL: URL(fileURLWithPath: "/Users/devin/HelloText.app"),
+            zipURL: URL(fileURLWithPath: "/Users/devin/HelloText.zip"),
+            bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+            cdhash: "0123456789abcdef0123456789abcdef01234567",
+            teamID: "ABCDE12345",
+            notarized: false
+        )
+        #expect(
+            WrapCommandSupport.distributionText(plain)
+                == golden("wrap-distribution.txt"))
+        let notarized = DistributionWrapperResult(
+            appURL: plain.appURL,
+            zipURL: plain.zipURL,
+            bundleID: plain.bundleID,
+            cdhash: plain.cdhash,
+            teamID: plain.teamID,
+            notarized: true,
+            submissionID: "SUB-1",
+            assessment: "source=Notarized Developer ID"
+        )
+        #expect(
+            WrapCommandSupport.distributionText(notarized)
+                == golden("wrap-distribution-notarized.txt"))
+    }
+
+    /// #93: human output localizes line by line under a ja locale; interpolated
+    /// literals splice their captures into the ja template in placeholder order.
+    @Test func wrapGoldenJapaneseTexts() {
+        CLIStrings.forcedLanguage = "ja"
+        defer { CLIStrings.forcedLanguage = nil }
+        #expect(
+            CLIStrings.text(WrapCommandSupport.resultText(helloWrapperInfo()))
+                == golden("wrap-success-ja.txt"))
+        #expect(
+            CLIStrings.text(WrapCommandSupport.infoText(helloWrapperInfo()))
+                == golden("wrap-info-ja.txt"))
+        let verification = WrapperVerification(
+            bundleURL: URL(fileURLWithPath: "/Applications/HelloText.app"),
+            bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+            packageID: "io.apkrun.fixture.hellotext",
+            kind: .local,
+            registered: true,
+            cdhash: "0123456789abcdef0123456789abcdef01234567"
+        )
+        #expect(
+            CLIStrings.text(WrapCommandSupport.verificationText(verification))
+                == golden("wrap-verify-valid-ja.txt"))
+        let plain = DistributionWrapperResult(
+            appURL: URL(fileURLWithPath: "/Users/devin/HelloText.app"),
+            zipURL: URL(fileURLWithPath: "/Users/devin/HelloText.zip"),
+            bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+            cdhash: "0123456789abcdef0123456789abcdef01234567",
+            teamID: "ABCDE12345",
+            notarized: false
+        )
+        #expect(
+            CLIStrings.text(WrapCommandSupport.distributionText(plain))
+                == golden("wrap-distribution-ja.txt"))
+    }
+
+    /// #93/#60: `apkrun doctor` human lines pass through the same line-localizing
+    /// writer as the rest of the CLI.
+    @Test func doctorOutputLocalizesJapanese() {
+        CLIStrings.forcedLanguage = "ja"
+        defer { CLIStrings.forcedLanguage = nil }
+        let report = """
+            ✕ apkrund.reachable — Background service
+            Fixed: Guest Agent restart
+            ✓ vm.virtualizationSupported — Virtualization
+            """
+        #expect(CLIStrings.text(report) == golden("doctor-report-ja.txt"))
+    }
 #endif
 
 // MARK: - #80 `apkrun settings`
@@ -1476,4 +1581,18 @@ struct SettingsCommandTests {
             message: "APKRun doesn't manage an app named com.nope.")
         #expect(ExitCodes.code(for: failure) == 4)
     }
+}
+
+/// cli.md §4.6: restart-applied keys say so after `config set`.
+@Test func configSetAppliesNoteCoversSpecKeys() {
+    for key in [
+        "runtime.memoryGiB", "runtime.cpuCount", "audio.output",
+        "graphics.safeMode", "developer.enabled",
+    ] {
+        #expect(ConfigSetCommand.appliesNote(for: key) == "Applies the next time Android starts.")
+    }
+    #expect(
+        ConfigSetCommand.appliesNote(for: "runtime.userdataGiB")
+            == "Applies after Reset Android.")
+    #expect(ConfigSetCommand.appliesNote(for: "updates.checkIntervalHours") == nil)
 }

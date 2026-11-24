@@ -34,6 +34,7 @@ import Testing
     #expect(try await client.connect() == hello)
     #expect(try await client.runtimeStatus() == status)
     #expect(try await client.startRuntime() == status)
+    #expect(try await client.startRuntime(hold: true) == status)
     #expect(try await client.stopRuntime() == status)
     #expect(try await client.resetRuntime() == status)
 
@@ -57,9 +58,17 @@ import Testing
     #expect(endpointRequest.claimedIdentity == "io.apkrun.cli.dev")
 
     #expect(snapshot.statusRequests.count == 2)
-    #expect(snapshot.startRequests.count == 1)
+    #expect(snapshot.startRequests.count == 2)
     #expect(snapshot.stopRequests.count == 1)
     #expect(snapshot.resetRequests.count == 1)
+    let defaultStartRequest = try JSONDecoder().decode(StartRuntimeRequest.self, from: snapshot.startRequests[0])
+    #expect(defaultStartRequest.header.apiVersion == APIVersion.current)
+    #expect(defaultStartRequest.header.clientKind == RuntimeClientKind.cli)
+    #expect(defaultStartRequest.hold == nil)
+    let heldStartRequest = try JSONDecoder().decode(StartRuntimeRequest.self, from: snapshot.startRequests[1])
+    #expect(heldStartRequest.header.apiVersion == APIVersion.current)
+    #expect(heldStartRequest.header.clientKind == RuntimeClientKind.cli)
+    #expect(heldStartRequest.hold == true)
     let resetRequest = try JSONDecoder().decode(
         RuntimeResetControlRequest.self,
         from: snapshot.resetRequests[0]
@@ -405,11 +414,11 @@ import Testing
         try await client.restartRuntime()
     }
 
-    for _ in 0..<1_000 {
+    for _ in 0..<200 {
         if transport.snapshot().restartRequests.count == 1 {
             break
         }
-        await Task.yield()
+        try await Task.sleep(for: .milliseconds(10))
     }
     #expect(transport.snapshot().restartRequests.count == 1)
     restart.cancel()
@@ -1407,6 +1416,7 @@ private struct BrokerErrorEnvelope: Encodable {
 }
 
 private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBrokerChannel, RuntimeControlChannel,
+    RuntimeMaintenanceChannel,
     @unchecked Sendable
 {
     private let helloData: Data
@@ -1427,6 +1437,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private let cancelOperationData: Data
     private let launchData: Data
     private let terminateData: Data
+    private let closeSessionData: Data
     private let lock = NSLock()
     private var serviceNameValue: String?
     private var brokerRequirementValue: String?
@@ -1469,6 +1480,9 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     private var failNextBeginInstallImportedValue = false
     private var failNextBeginUninstallPackageValue = false
     private var failNextOperationStatusValue = false
+    private var maintenanceConnectionsValue = 0
+    private var maintenanceRequestsValue: [Data] = []
+    private let maintenanceReplyData: Data
     private var endpointBusyRejectionsValue: Int
     private var eventSinkValue: RuntimeEventSinkReceiver?
     private var connectionEventHandlerValue: (@Sendable () -> Void)?
@@ -1507,6 +1521,7 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
             endpoint = RuntimeXPCListenerEndpoint(value: NSObject())
         }
         endpointBusyData = try JSONEncoder().encode(RuntimeEndpointReply.rejected(.busy))
+        maintenanceReplyData = try JSONEncoder().encode(MaintenanceControlReply())
         endpointBusyRejectionsValue = endpointBusyRejections
         if let status {
             statusData = try JSONEncoder().encode(RuntimeControlReply(status: status))
@@ -1597,6 +1612,9 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         )
         launchData = try JSONEncoder().encode(launchReply ?? defaultLaunchReply)
         terminateData = try JSONEncoder().encode(terminateReply ?? defaultTerminateReply)
+        closeSessionData = try JSONEncoder().encode(
+            RuntimeCloseSessionControlReply(hadSession: true)
+        )
     }
 
     func makeBroker(
@@ -1609,6 +1627,22 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
             brokerRequirementValue = signingRequirement
         }
         return self
+    }
+
+    func makeMaintenance(
+        endpoint: RuntimeXPCListenerEndpoint,
+        signingRequirement: String
+    ) throws(RuntimeControlClientError) -> any RuntimeMaintenanceChannel {
+        guard endpoint.value is NSObject else {
+            throw .malformedReply
+        }
+        lock.withLock { maintenanceConnectionsValue += 1 }
+        return self
+    }
+
+    func perform(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        lock.withLock { maintenanceRequestsValue.append(request) }
+        return maintenanceReplyData
     }
 
     func makeControl(
@@ -1630,6 +1664,34 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
     func hello(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         lock.withLock { helloRequestsValue.append(request) }
         return helloData
+    }
+
+    func installImage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data {
+        throw .remoteFailure(code: "unsupported", message: "unsupported in mock", parameters: [:])
+    }
+
+    func applyImage(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .remoteFailure(code: "unsupported", message: "unsupported in mock", parameters: [:])
+    }
+
+    func rollbackImage(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .remoteFailure(code: "unsupported", message: "unsupported in mock", parameters: [:])
+    }
+
+    func imageStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .remoteFailure(code: "unsupported", message: "unsupported in mock", parameters: [:])
+    }
+
+    func deleteImageRecoveryPoint(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .remoteFailure(code: "unsupported", message: "unsupported in mock", parameters: [:])
+    }
+
+    func imageFeedAction(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .remoteFailure(code: "unsupported", message: "unsupported in mock", parameters: [:])
+    }
+
+    func createDiagnostics(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data {
+        throw .remoteFailure(code: "unsupported", message: "unsupported in mock", parameters: [:])
     }
 
     func requestEndpoint(_ request: Data) async throws(RuntimeControlClientError) -> RuntimeBrokerEndpointReply {
@@ -1948,6 +2010,18 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
     }
 
+    func selfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func noteSelfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func checkSelfUpdate(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void) {
         lock.withLock { connectionEventHandlerValue = handler }
     }
@@ -1986,11 +2060,22 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         return terminateData
     }
 
+    func closeSession(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        closeSessionData
+    }
+
     func verifyWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
     }
 
     func createWrapper(
+        _ request: Data,
+        icon: FileHandle?
+    ) async throws(RuntimeControlClientError) -> Data {
+        throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func buildDistributionWrapper(
         _ request: Data,
         icon: FileHandle?
     ) async throws(RuntimeControlClientError) -> Data {
@@ -2043,6 +2128,25 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
 
     func requestApproval(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         throw .transportFailure(domain: "NSCocoaErrorDomain", code: 4099)
+    }
+
+    func healthReport(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        do {
+            return try JSONEncoder().encode(
+                WireHealthReport(
+                    results: [],
+                    verdict: "healthy",
+                    statusLine: "All good",
+                    fixed: [],
+                    error: nil
+                ))
+        } catch {
+            throw .encodingFailure
+        }
+    }
+
+    func applyHealthFixes(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await healthReport(request)
     }
 
     func perfStatistics(_ request: Data) async throws(RuntimeControlClientError) -> Data {
@@ -2246,7 +2350,9 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
                 resetRequests: resetRequestsValue,
                 brokerConnections: brokerConnectionsValue,
                 controlConnections: controlConnectionsValue,
-                brokerInvalidations: brokerInvalidationsValue
+                brokerInvalidations: brokerInvalidationsValue,
+                maintenanceRequests: maintenanceRequestsValue,
+                maintenanceConnections: maintenanceConnectionsValue
             )
         }
     }
@@ -2332,5 +2438,43 @@ private final class MockRuntimeTransport: RuntimeXPCConnectionFactory, RuntimeBr
         let brokerConnections: Int
         let controlConnections: Int
         let brokerInvalidations: Int
+        let maintenanceRequests: [Data]
+        let maintenanceConnections: Int
     }
+}
+
+@Test func maintenanceClientSendsFrozenOperationToMaintenanceEndpoint() async throws {
+    let configuration = try RuntimeControlClientConfiguration(
+        clientKind: .app,
+        claimedIdentity: "io.apkrun.APKRun.dev",
+        buildIdentity: .development,
+        clientVersion: "0.1.0",
+        clientBuild: 1
+    )
+    let hello = RuntimeHelloReply(
+        runtimeVersion: "0.1.0",
+        runtimeBuild: 1,
+        apiVersion: APIVersion.current,
+        hostState: "updating"
+    )
+    let transport = try MockRuntimeTransport(hello: hello, status: nil)
+    let client = MaintenanceControlClient(
+        configuration: configuration, connectionFactory: transport)
+
+    _ = try await client.completeHostUpdate()
+
+    let snapshot = transport.snapshot()
+    let requests = snapshot.maintenanceRequests
+    #expect(requests.count == 1)
+    let decoded = try JSONDecoder().decode(
+        MaintenanceControlRequest.self, from: requests[0])
+    #expect(decoded.operation == .completeHostUpdate)
+
+    // The frozen endpoint is requested without a control endpoint, in every
+    // host state (runtime-api.md §12.1).
+    let endpointRequests = snapshot.endpointRequests
+    #expect(endpointRequests.count == 1)
+    let endpointRequest = try JSONDecoder().decode(
+        RuntimeEndpointRequest.self, from: endpointRequests[0])
+    #expect(endpointRequest.kind == .maintenance)
 }

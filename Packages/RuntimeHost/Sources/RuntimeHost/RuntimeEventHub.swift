@@ -212,6 +212,30 @@ final class RuntimeEventHub: @unchecked Sendable {
         )
     }
 
+    /// Publishes a maintenance event on the `maintenance` topic (runtime-api.md §8.3).
+    func publishMaintenanceEvent(_ event: MaintenanceEvent) {
+        publish(
+            QueuedEvent(
+                topic: .maintenance,
+                time: Date(),
+                operationID: nil,
+                payload: .maintenance(event)
+            )
+        )
+    }
+
+    /// Publishes a `healthChanged` event on the `health` topic (§13).
+    func publishHealthEvent(_ event: HealthEvent) {
+        publish(
+            QueuedEvent(
+                topic: .health,
+                time: Date(),
+                operationID: nil,
+                payload: .health(event)
+            )
+        )
+    }
+
     /// Publishes an integration event on the `integrations` topic (§16.2).
     func publishIntegrationChange(_ change: IntegrationChange) {
         publish(
@@ -233,7 +257,9 @@ final class RuntimeEventHub: @unchecked Sendable {
                     subscribers[connectionID] = nil
                     continue
                 }
-                guard subscriber.topics.contains(event.topic) else { continue }
+                guard subscriber.topics.contains(event.topic) else {
+                    continue
+                }
                 if case .operations(.finished(let finishedID, _)) = event.payload {
                     subscriber.lastProgressDelivery[Self.operationProgressKey(finishedID)] = nil
                 }

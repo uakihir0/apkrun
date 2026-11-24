@@ -40,6 +40,7 @@ struct HomeView: View {
             ToolbarItem {
                 Button("Add App…", systemImage: "plus") { showFilePicker = true }
                     .keyboardShortcut("o", modifiers: .command)
+                    .accessibilityIdentifier("home.addApp")
             }
             ToolbarItem {
                 Picker("Sort", selection: $sort) {
@@ -70,6 +71,16 @@ struct HomeView: View {
         .sheet(isPresented: Bindable(model.addFlow).isPresented) {
             AddFlowView()
                 .environment(model.addFlow)
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { model.reportRequest != nil },
+                set: { if !$0 { model.reportRequest = nil } })
+        ) {
+            if let request = model.reportRequest {
+                DiagnosticsReportSheet(
+                    model: DiagnosticsReportModel(request: request))
+            }
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             for provider in providers {
@@ -121,9 +132,11 @@ struct HomeView: View {
     private var unreachableBanner: some View {
         HStack {
             Image(systemName: "exclamationmark.triangle")
+                .accessibilityHidden(true)
             Text("APKRun's background service isn't running.")
             Spacer()
             Button("Restart Service") { model.restartService() }
+                .accessibilityIdentifier("home.restartService")
             Button("Troubleshooting…") {
                 model.requestedSettingsPane = "troubleshooting"
             }
@@ -267,6 +280,7 @@ private struct AppsListView: View {
             Image(systemName: "arrow.down.app")
                 .font(.system(size: 44))
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             Text("Add your first Android app")
                 .font(.title3)
             Text("Drag APK, APKS, or XAPK files here to add")
@@ -469,6 +483,7 @@ private struct OtherAppsListView: View {
                     Image(systemName: "app")
                         .frame(width: 40, height: 40)
                         .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                     VStack(alignment: .leading) {
                         Text(package.displayName).font(.headline)
                         Text("Android version \(package.versionName ?? "—")")

@@ -383,6 +383,13 @@
                 let digests = preview.signerDigests.map(\.rawValue).joined(separator: ", ")
                 lines.append("Signer SHA-256: \(digests)")
             }
+            if let compatibility = preview.compatibility {
+                lines.append("Compatibility: \(compatibility.label)")
+                for issue in compatibility.issues {
+                    lines.append(
+                        "  - \(safeTerminalText(issue.title["en"] ?? issue.id))")
+                }
+            }
             return lines.joined(separator: "\n")
         }
 

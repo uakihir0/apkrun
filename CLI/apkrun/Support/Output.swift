@@ -3,12 +3,12 @@ import Foundation
 
 enum Output {
     static func write(_ text: String) {
-        FileHandle.standardOutput.write(Data((text + "\n").utf8))
+        FileHandle.standardOutput.write(Data((CLIStrings.text(text) + "\n").utf8))
     }
 
     static func writeLogLine(_ text: String, toStandardError: Bool = false) {
         let handle = toStandardError ? FileHandle.standardError : FileHandle.standardOutput
-        handle.write(Data((text + "\n").utf8))
+        handle.write(Data((CLIStrings.text(text) + "\n").utf8))
     }
 
     static func versionHuman(_ version: BuildInfo) -> String {

@@ -155,7 +155,7 @@ public actor AppWrapperGenerator {
             }
             try BootstrapDocumentCodec.validate(payload.document)
         case .distribution:
-            throw .verificationFailed("distribution wrappers are #89")
+            throw .verificationFailed("distribution wrappers build through stageForDistribution, not perform")
         }
 
         // 1. validate the package ID syntax, the name, the icon, the template.
@@ -352,7 +352,7 @@ public actor AppWrapperGenerator {
             }
             try BootstrapDocumentCodec.validate(payload.document)
         case .distribution:
-            throw .verificationFailed("distribution wrappers are #89")
+            throw .verificationFailed("distribution wrappers build through stageForDistribution, not perform")
         }
         let template = environment.launcher.executableURL
         guard fileManager.fileExists(atPath: template.path),
@@ -373,6 +373,46 @@ public actor AppWrapperGenerator {
         )
         let cdhash = try WrapperSigner.sign(bundleURL: stagedBundle, bundleID: bundleID)
         return (stagedBundle, cdhash)
+    }
+
+    /// Builds the unsigned distribution bundle inside `stagingDirectory`
+    /// (wrapper.md §11 step 1): a portable bundle whose
+    /// `APKRunWrapperKind` is `distribution`. It is never signed ad-hoc —
+    /// `DistributionWrapperBuilder` signs it with the caller's Developer ID
+    /// — and never placed or registered. Returns the staged bundle URL.
+    public func stageForDistribution(
+        _ request: WrapperGenerationRequest,
+        stagingDirectory: URL,
+        fileName: String
+    ) throws(WrapperFailure) -> URL {
+        let configuration = request.configuration
+        guard configuration.kind == .distribution else {
+            throw .verificationFailed("stageForDistribution needs kind distribution")
+        }
+        guard let payload = configuration.bootstrap,
+            payload.files.map(\.name) == payload.document.files.map(\.name)
+        else {
+            throw .verificationFailed("distribution wrapper needs a matching bootstrap set")
+        }
+        try BootstrapDocumentCodec.validate(payload.document)
+        let template = environment.launcher.executableURL
+        guard fileManager.fileExists(atPath: template.path),
+            WrapperCodeSign.isARM64(template),
+            WrapperCodeSign.signatureIsValid(bundleURL: template),
+            WrapperCodeSign.cdhash(of: template) != nil
+        else {
+            throw .launcherTemplateInvalid("missing, unsigned, or not arm64")
+        }
+        let bundleID = BundleIDMapper.map(configuration.packageID)
+        let stagedBundle = stagingDirectory.appendingPathComponent(
+            "\(fileName).app", isDirectory: true)
+        try writeBundle(
+            at: stagedBundle,
+            fileName: fileName,
+            bundleID: bundleID,
+            configuration: configuration
+        )
+        return stagedBundle
     }
 
     /// Writes the file tree of wrapper.md §2 for a non-portable wrapper.

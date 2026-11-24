@@ -104,6 +104,19 @@ struct APKRunApp: App {
         }
         .windowResizability(.contentSize)
         .defaultLaunchBehavior(approvalOnly ? .suppressed : .automatic)
+        .commands {
+            // legal-and-licensing.md §6.4: the Help menu opens the
+            // third-party notices shipped in the app bundle.
+            CommandGroup(replacing: .help) {
+                Button("Third-Party Notices") {
+                    if let url = Bundle.main.url(
+                        forResource: "ThirdPartyNotices", withExtension: "html"
+                    ) {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
+        }
 
         settingsScene
     }
@@ -136,6 +149,18 @@ private final class ApprovalWindowDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // §3.7 first-launch tasks run before any view uses the runtime.
+        Task { @MainActor in
+            if let refreshCount = try? await FirstLaunchController()
+                .completeUpdateIfNeeded(),
+                refreshCount > 0
+            {
+                FirstLaunchRefreshPrompt.show(wrapperCount: refreshCount)
+            }
+        }
+        // §3.2: Sparkle starts when the build carries a feed; the
+        // controller itself skips --notify and --approve launches.
+        SelfUpdateController.shared.start()
         cancellable = ApprovalCenter.shared.$current.sink { [weak self] prompt in
             if prompt != nil {
                 self?.showApprovalWindow()
@@ -163,7 +188,7 @@ private final class ApprovalWindowDelegate: NSObject, NSApplicationDelegate {
 }
 
 @MainActor
-private enum RuntimeRegistrationCommand {
+enum RuntimeRegistrationCommand {
     private static let registeredPlistHashKey = "registeredAgentPlistSHA256"
 
     static func run() -> Never {

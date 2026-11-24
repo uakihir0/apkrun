@@ -61,7 +61,7 @@ final class MenuBarModel: ObservableObject {
     @Published var isShowingStopConfirmation = false
 
     private static let observedTopics: [EventTopic] = [
-        .runtime, .sessions, .updates, .health,
+        .runtime, .sessions, .updates, .health, .integrations,
     ]
 
     private let service: (any MenuBarRuntimeService)?
@@ -69,10 +69,17 @@ final class MenuBarModel: ObservableObject {
     private let subscriptionRetryInitialDelay: Duration
     private var hasStarted = false
     private var listenerGeneration: UInt64 = 0
+    /// The packages the guest reports as recording (desktop-integration.md
+    /// §8.2); the menu shows one line per recording app.
+    var recordingPackages: [String] = []
+    /// Package ID → display name of the last snapshot load.
+    private(set) var packageDisplayNames: [String: String] = [:]
     private var reloadIsRunning = false
     private var reloadWasRequested = false
     private var topicsRequiringSnapshotAfterReconnect: Set<EventTopic> = []
     private var snapshotRetryTask: Task<Void, Never>?
+    /// The latest state per health check from the `health` topic.
+    private var healthStates: [String: String] = [:]
     private var subscriptionRetryTasks: [EventTopic: Task<Void, Never>] = [:]
     private var eventTasks: [EventTopic: Task<Void, Never>] = [:]
 
@@ -243,6 +250,7 @@ final class MenuBarModel: ObservableObject {
                     )
                 )
             }
+            self.packageDisplayNames = displayNames
             runningSessions.sort { lhs, rhs in
                 let comparison = lhs.displayName.localizedStandardCompare(rhs.displayName)
                 return comparison == .orderedSame
@@ -255,7 +263,7 @@ final class MenuBarModel: ObservableObject {
                 sessions: runningSessions,
                 hasOpenSessions: !sessions.isEmpty,
                 availableUpdates: nil,
-                liveHealthNeedsAttention: nil,
+                liveHealthNeedsAttention: healthStates.values.contains("failure"),
                 developerModeEnabled: nil
             )
             isConnected = true
@@ -340,7 +348,17 @@ final class MenuBarModel: ObservableObject {
         generation: UInt64
     ) {
         eventTasks[topic] = Task { [weak self] in
-            for await _ in stream {
+            for await envelope in stream {
+                if case .health(let event) = envelope.payload {
+                    self?.healthStates[event.result.id] = event.result.state
+                }
+                // §8.2: the menu shows ‹App› is using the microphone while the
+                // guest reports recording — package IDs only (NFR-SEC-05).
+                if case .integrations(let change) = envelope.payload,
+                    case .recordingChanged(let packageIDs) = change
+                {
+                    self?.recordingPackages = packageIDs.map { $0.rawValue }
+                }
                 guard
                     !Task.isCancelled, let self,
                     self.hasStarted, self.listenerGeneration == generation

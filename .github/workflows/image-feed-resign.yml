@@ -1,0 +1,71 @@
+name: image-feed-resign
+
+# Feed resign (runtime-maintenance.md §4.1): extends `expiresAt` before the
+# feed goes stale without shipping a new image. Re-signs the existing entries
+# with sequence+1. `workflow_dispatch` only; `dry-run` publishes nothing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [dry-run, publish]
+        default: dry-run
+      channel:
+        type: choice
+        options: [stable, beta]
+        default: stable
+      feed-url:
+        description: "the current feed.json URL to carry entries from"
+        required: true
+      sequence:
+        description: "the new sequence; must exceed the live one"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  resign:
+    runs-on: xcode-27
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Fetch the live feed
+        run: curl -fsSL "${{ inputs.feed-url }}" -o /tmp/live-feed.json
+
+      - name: Decode the signing key
+        env:
+          IMAGE_FEED_KEY: ${{ secrets.IMAGE_FEED_ED25519_KEY }}
+        run: |
+          if [ "${{ inputs.mode }}" = "dry-run" ]; then
+            openssl genpkey -algorithm ED25519 -out /tmp/feed-key.pem
+          else
+            echo "$IMAGE_FEED_KEY" | base64 -d > /tmp/feed-key.pem
+          fi
+          chmod 600 /tmp/feed-key.pem
+
+      - name: Resign the feed
+        run: |
+          python3 scripts/release/image-feed.py --resign \
+            --keep /tmp/live-feed.json \
+            --channel "${{ inputs.channel }}" \
+            --sequence "${{ inputs.sequence }}" \
+            --key /tmp/feed-key.pem \
+            --out out/feed/apkrun/images
+
+      - name: Upload the resigned feed
+        uses: actions/upload-artifact@b7a0d30a8eebaa4cde4e7e38cc97019066d10d64 # v4.6.2
+        with:
+          name: image-feed-resign-${{ inputs.channel }}-${{ inputs.sequence }}
+          path: out/feed/apkrun/images/
+
+      - name: Publish the feed
+        if: inputs.mode == 'publish'
+        run: |
+          echo "Publishing is not configured yet (OQ-01); rsync out/feed/ here."
+          exit 1

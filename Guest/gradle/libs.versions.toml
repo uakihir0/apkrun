@@ -6,12 +6,15 @@
 agp = "9.4.1"
 coroutines = "1.11.0"
 junit = "4.13.2"
+jazzer = "0.24.0"
 ktfmt = "0.64"
 protobuf = "4.31.1"
 protobufPlugin = "0.10.0"
 
 [libraries]
 junit = { module = "junit:junit", version.ref = "junit" }
+# Jazzer fuzzing for the guest protocol decoders (test-strategy.md §7.2, #92).
+jazzer-junit = { module = "com.code-intelligence:jazzer-junit", version.ref = "jazzer" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 ktfmt = { module = "com.facebook:ktfmt", version.ref = "ktfmt" }
 protobuf-javalite = { module = "com.google.protobuf:protobuf-javalite", version.ref = "protobuf" }

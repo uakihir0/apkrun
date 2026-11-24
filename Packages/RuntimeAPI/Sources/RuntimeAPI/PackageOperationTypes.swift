@@ -299,6 +299,52 @@ public enum RuntimeImportRelation: Codable, Sendable, Equatable {
     }
 }
 
+/// One known issue of a compatibility-database entry (diagnostics.md
+/// §10.2). Strings are keyed by locale (`en`, `ja`).
+public struct RuntimeCompatibilityIssue: Codable, Sendable, Equatable {
+    /// The stable issue identifier.
+    public var id: String
+    /// The issue title, keyed by locale.
+    public var title: [String: String]
+    /// The workaround, keyed by locale, when one exists.
+    public var workaround: [String: String]?
+
+    /// Creates an issue.
+    public init(id: String, title: [String: String], workaround: [String: String]? = nil) {
+        self.id = id
+        self.title = title
+        self.workaround = workaround
+    }
+}
+
+/// The compatibility-database verdict for one package
+/// (diagnostics.md §10.3; API 1.37). It is advice and never blocks
+/// an install.
+public struct RuntimeCompatibilityInfo: Codable, Sendable, Equatable {
+    /// The level word: `works`, `compatibilityMode`, or `unsupported`.
+    public var level: String
+    /// The display label ("Works", "Works with limitations",
+    /// "Unsupported").
+    public var label: String
+    /// The known issues.
+    public var issues: [RuntimeCompatibilityIssue]
+    /// The setting keys the entry recommends.
+    public var recommendedKeys: [String]
+
+    /// Creates a compatibility verdict.
+    public init(
+        level: String,
+        label: String,
+        issues: [RuntimeCompatibilityIssue] = [],
+        recommendedKeys: [String] = []
+    ) {
+        self.level = level
+        self.label = label
+        self.issues = issues
+        self.recommendedKeys = recommendedKeys
+    }
+}
+
 /// A non-fatal observation from APK inspection.
 public enum RuntimeImportWarning: Codable, Sendable, Equatable {
     case missingHardwareFeature(feature: String)
@@ -333,6 +379,9 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
     /// The provider the Add sheet may offer to enable (§4.7); only a
     /// suggestion — it is off until the user turns it on.
     public var suggestedProvider: String?
+    /// The compatibility-database verdict, `nil` for an unknown app
+    /// (diagnostics.md §10.3; API 1.37).
+    public var compatibility: RuntimeCompatibilityInfo?
 
     private enum CodingKeys: String, CodingKey {
         case ticket
@@ -346,6 +395,7 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
         case relation
         case warnings
         case suggestedProvider
+        case compatibility
     }
 
     /// Creates an import preview.
@@ -360,7 +410,8 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
         excludedSplits: [String] = [],
         relation: RuntimeImportRelation,
         warnings: [RuntimeImportWarning] = [],
-        suggestedProvider: String? = nil
+        suggestedProvider: String? = nil,
+        compatibility: RuntimeCompatibilityInfo? = nil
     ) {
         self.ticket = ticket
         self.packageID = packageID
@@ -373,6 +424,7 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
         self.relation = relation
         self.warnings = warnings
         self.suggestedProvider = suggestedProvider
+        self.compatibility = compatibility
     }
 
     /// Decodes previews from earlier API minors that did not include signer digests.
@@ -389,6 +441,8 @@ public struct RuntimeImportPreview: Codable, Sendable, Equatable {
         relation = try container.decode(RuntimeImportRelation.self, forKey: .relation)
         warnings = try container.decode([RuntimeImportWarning].self, forKey: .warnings)
         suggestedProvider = try container.decodeIfPresent(String.self, forKey: .suggestedProvider)
+        compatibility = try container.decodeIfPresent(
+            RuntimeCompatibilityInfo.self, forKey: .compatibility)
     }
 }
 
@@ -528,6 +582,9 @@ public struct RuntimePackageDetails: Codable, Sendable, Equatable {
     /// The last known-good set kept for rollback, when one exists
     /// (package-store.md §7.2; API 1.25).
     public var previous: RuntimeArtifactSlot?
+    /// The compatibility-database verdict, `nil` for an unknown app
+    /// (diagnostics.md §10.3; API 1.37).
+    public var compatibility: RuntimeCompatibilityInfo?
 
     /// Creates package details.
     public init(
@@ -536,7 +593,8 @@ public struct RuntimePackageDetails: Codable, Sendable, Equatable {
         artifactBytes: Int64,
         androidDataBytes: Int64? = nil,
         staged: RuntimeStagedArtifact? = nil,
-        previous: RuntimeArtifactSlot? = nil
+        previous: RuntimeArtifactSlot? = nil,
+        compatibility: RuntimeCompatibilityInfo? = nil
     ) {
         self.summary = summary
         self.files = files
@@ -544,6 +602,7 @@ public struct RuntimePackageDetails: Codable, Sendable, Equatable {
         self.androidDataBytes = androidDataBytes
         self.staged = staged
         self.previous = previous
+        self.compatibility = compatibility
     }
 }
 
@@ -921,6 +980,36 @@ public struct RuntimeTerminateResult: Codable, Sendable, Equatable {
     }
 }
 
+/// Closes a package session per `window.closeBehavior`
+/// (display-and-windowing.md §7.6).
+public struct RuntimeCloseSessionRequest: Codable, Sendable, Equatable {
+    /// The package whose session should close.
+    public var packageID: RuntimePackageID
+    /// The policy to apply; `nil` reads the package's saved
+    /// `window.closeBehavior` (`stop` when unset).
+    public var policy: WireClosePolicy?
+
+    /// Creates a close request.
+    public init(packageID: RuntimePackageID, policy: WireClosePolicy? = nil) {
+        self.packageID = packageID
+        self.policy = policy
+    }
+}
+
+/// The outcome of a session close request.
+public struct RuntimeCloseSessionResult: Codable, Sendable, Equatable {
+    /// The package whose session was closed.
+    public var packageID: RuntimePackageID
+    /// Whether the runtime had an active session to close.
+    public var hadSession: Bool
+
+    /// Creates a close result.
+    public init(packageID: RuntimePackageID, hadSession: Bool) {
+        self.packageID = packageID
+        self.hadSession = hadSession
+    }
+}
+
 /// A stable, transport-safe runtime failure with a user-facing fallback message.
 public struct RuntimeWireError: Error, Codable, Sendable, Equatable {
     /// The error domain, such as `runtime` or `store`.
@@ -955,6 +1044,11 @@ public struct RuntimeWireError: Error, Codable, Sendable, Equatable {
     /// Creates a package-store-domain error.
     public static func store(_ code: String, message: String, remediation: String? = nil) -> Self {
         Self(domain: "store", code: "store.\(code)", message: message, remediation: remediation)
+    }
+
+    /// Creates a maintenance-domain error (runtime-api.md §12).
+    public static func maintenance(_ code: String, message: String, remediation: String? = nil) -> Self {
+        Self(domain: "maintenance", code: "maintenance.\(code)", message: message, remediation: remediation)
     }
 }
 

@@ -134,6 +134,19 @@ class Daemon(internal val scope: CoroutineScope) {
                     UrlRedirect.instance = it
                 }
             }
+    internal val microphone =
+        MicrophoneGate(
+                events,
+                AndroidOpsAccess(SystemContext.get()),
+                AndroidRecordingAccess(SystemContext.get(), callbackHandler),
+                AndroidRecordablePackages(SystemContext.get()),
+            )
+            .also { gate ->
+                gate.start()
+                // Newly installed packages keep their default silence until the
+                // host's next push (desktop-integration.md §8.2).
+                MicrophoneGate.watchPackageAdded(SystemContext.get(), gate)
+            }
     internal val input =
         InputService(
             boundsOf = { displayId ->
@@ -159,7 +172,9 @@ class Daemon(internal val scope: CoroutineScope) {
                     clipboard,
                     notifications,
                     urlRedirect,
+                    microphone,
                     filesBridge,
+                    input,
                 ),
             uptimeMillis = { SystemClock.elapsedRealtime() },
         )

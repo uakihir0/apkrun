@@ -296,6 +296,7 @@ class Connection(
                 GuestCapability.URL,
                 GuestCapability.FILES,
                 GuestCapability.FILES_SHARED,
+                GuestCapability.MICROPHONE,
             )
     }
 }

@@ -203,6 +203,46 @@ public struct GuestSetUrlRedirect: GuestOperation {
     }
 }
 
+/// SetMicrophoneAccess, guest protocol operation 53 (guest-protocol.md §7.1,
+/// desktop-integration.md §8.2): the packages allowed to use the microphone.
+/// The gate applies app-ops to every user package, so packages absent from
+/// the list are denied and packages installed later are denied until the
+/// next push (desktop-integration.md §8.2).
+public struct GuestSetMicrophoneAccess: GuestOperation {
+    /// The guest acknowledges the set with `Empty`.
+    public typealias Result = GPEmpty
+    /// The stable guest protocol operation number.
+    public static let number = 53
+
+    /// The packages allowed to use the microphone.
+    public let packages: [String]
+
+    /// Creates a set-access request.
+    public init(packages: [String]) {
+        self.packages = packages
+    }
+
+    /// The operation name used in diagnostics.
+    public var operationName: String { "SetMicrophoneAccess" }
+    /// The Guest Agent capability required for this operation.
+    public var capability: GuestCapability { .microphone }
+    /// The per-call timeout.
+    public var timeout: Duration { .seconds(5) }
+
+    /// Builds the versioned wire request.
+    public func request() -> GPRequest.OneOf_Op {
+        var request = GPSetMicrophoneAccess()
+        request.packages = packages
+        return .setMicrophoneAccess(request)
+    }
+
+    /// Extracts the empty acknowledgement.
+    public static func decode(_ result: GPResponse.OneOf_Result) -> GPEmpty? {
+        if case .setMicrophoneAccess(let empty) = result { return empty }
+        return nil
+    }
+}
+
 /// ResolveUrl, guest protocol operation 50 (guest-protocol.md §7.1,
 /// desktop-integration.md §7.2). Answers one `OpenUrlOnHost` event: the host
 /// opened it (`openedOnHost`), Android should open the kept intent

@@ -130,11 +130,116 @@ jobs:
         run: scripts/bootstrap
       - name: Verify corpus signer digests against apksigner
         run: scripts/dev/verify-corpus.sh
+      - name: Run the compatibility corpus
+        run: Tests/Compatibility/run-compatibility.sh
       - name: Upload corpus evidence
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: corpus-${{ github.sha }}
-          path: build/corpus/
+          path: |
+            build/corpus/
+            Tests/Compatibility/out/
+          if-no-files-found: warn
+          retention-days: 30
+
+  notarize:
+    name: notarize (distribution wrapper)
+    if: github.ref == 'refs/heads/main'
+    runs-on:
+      - self-hosted
+      - macOS
+      - apkrun-lab
+    timeout-minutes: 30
+    environment: signing
+    env:
+      APKRUN_CI: "1"
+      APKRUN_DEVELOPER_ID: ${{ vars.APKRUN_DEVELOPER_ID }}
+      APKRUN_NOTARY_KEY_ID: ${{ secrets.APKRUN_NOTARY_KEY_ID }}
+      APKRUN_NOTARY_ISSUER: ${{ secrets.APKRUN_NOTARY_ISSUER }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Store the notarization API key
+        env:
+          APKRUN_NOTARY_KEY_P8: ${{ secrets.APKRUN_NOTARY_KEY_P8 }}
+        run: |
+          mkdir -p build/notary
+          echo "$APKRUN_NOTARY_KEY_P8" | base64 -d > build/notary/key.p8
+      - name: Install pinned repository tools
+        run: scripts/bootstrap
+      - name: Notarize and staple the Release build smoke check
+        run: |
+          # Exercises notarize.sh end to end on the lab Mac; the full
+          # distribution-wrapper path needs a real package and is covered
+          # by the T1 signing fixtures.
+          scripts/generate-project.sh
+          app="$(scripts/release/assemble-bundle.sh \
+              --build 0 --derived-data build/nightly/notarize/DerivedData \
+              --developer-id "$APKRUN_DEVELOPER_ID" | tail -1)"
+          scripts/release/notarize.sh "$app" \
+              --key build/notary/key.p8 \
+              --key-id "$APKRUN_NOTARY_KEY_ID" \
+              --issuer "$APKRUN_NOTARY_ISSUER"
+
+  fuzz-long:
+    name: fuzz-long (all targets, 1h)
+    if: github.ref == 'refs/heads/main'
+    runs-on: xcode-27
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install pinned repository tools
+        run: scripts/bootstrap
+      - name: Compute verified build cache key
+        id: cache-key
+        run: echo "key=$(scripts/build-third-party.sh --print-cache-key virgl-runtime)" >> "$GITHUB_OUTPUT"
+      - name: Restore verified graphics libraries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v4
+        with:
+          path: ThirdParty/out
+          key: ${{ steps.cache-key.outputs.key }}
+      - name: Build pinned graphics libraries
+        run: scripts/build-third-party.sh virgl-runtime
+      - name: Install the pinned fuzz toolchain
+        run: |
+          source scripts/tool-versions.env
+          toolchain_dir="$HOME/Library/Developer/Toolchains"
+          mkdir -p "$toolchain_dir"
+          if ! compgen -G "$toolchain_dir/${SWIFT_FUZZ_TOOLCHAIN}*.xctoolchain" > /dev/null; then
+            # SWIFT_FUZZ_TOOLCHAIN is e.g. swift-6.2.3; swift.org publishes
+            # https://download.swift.org/<tag>/xcode/<PKG>/<PKG>-osx.pkg.
+            tag="$(printf '%s' "$SWIFT_FUZZ_TOOLCHAIN" | tr '[:upper:]' '[:lower:]')-release"
+            pkg="${SWIFT_FUZZ_TOOLCHAIN}-RELEASE"
+            curl -fsSL -o /tmp/swift.pkg "https://download.swift.org/${tag}/xcode/${pkg}/${pkg}-osx.pkg"
+            sudo installer -pkg /tmp/swift.pkg -target /
+          fi
+      - name: Restore the growing corpus
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v4
+        with:
+          path: Tests/Fixtures/fuzz/
+          # A unique key per run: actions/cache never overwrites an existing
+          # key, so the corpus grows every night and restores find the
+          # newest copy via restore-keys.
+          key: apkrun-fuzz-corpus-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: apkrun-fuzz-corpus-${{ github.ref_name }}-
+      - name: Fuzz every parser
+        run: |
+          for target in virtio-gpu-request resource-table guest-frame-swift container-reader apk-signing-block aapt2-badging direct-manifest fdroid-index github-releases; do
+            scripts/run-fuzz.sh "$target" --seconds 400
+            # libFuzzer writes new coverage into the corpus directory itself
+            # (Tests/Fixtures/fuzz/<target>); the cache carries it forward.
+          done
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: fuzz-artifacts-nightly-${{ github.sha }}
+          path: build/fuzz/
           if-no-files-found: warn
           retention-days: 30

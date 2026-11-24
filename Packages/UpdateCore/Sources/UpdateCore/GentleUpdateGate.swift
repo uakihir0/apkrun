@@ -127,7 +127,7 @@ public actor GentleUpdateGate {
             break
         case .suspended where userInitiated:
             break
-        case .stopped where !userInitiated:
+        case .stopped:
             if await !runtime.mayStartForUpdateInstall() {
                 blocks.append(.runtimeNotReady)
             }

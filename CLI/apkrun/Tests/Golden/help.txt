@@ -24,12 +24,19 @@ SUBCOMMANDS:
   stop                    Stop an Android app session.
   integrations            Inspect desktop integrations of an Android app.
   shared-folders          List, add, and remove folders shared with Android
+                          apps.
   update                  Check for, list, and manage Android app updates.
+  image                   Manage Android images and image updates.
   operations              Inspect or cancel long-running APKRun operations.
   wrap                    Install an APK and create its Mac app, or wrap an
                           installed app.
   wrapper                 Inspect the Mac apps APKRun created.
   settings                Show or change the settings of one Android app.
   config                  Read and write daemon settings.
+  self-update             Check for, install, and finish APKRun updates.
+  doctor                  Check APKRun's health and repair what is safe to
+                          repair.
+  diagnostics             Write a diagnostics bundle (ZIP) with host and guest
+                          state.
 
   See 'apkrun help <subcommand>' for detailed help.

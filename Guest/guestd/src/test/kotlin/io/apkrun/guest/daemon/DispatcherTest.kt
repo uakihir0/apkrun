@@ -11,6 +11,7 @@ import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
 import io.apkrun.guest.protocol.v1.DismissNotification
 import io.apkrun.guest.protocol.v1.ExportStart
 import io.apkrun.guest.protocol.v1.GuestErrorCode
+import io.apkrun.guest.protocol.v1.Health
 import io.apkrun.guest.protocol.v1.ImePolicy
 import io.apkrun.guest.protocol.v1.ImportFiles
 import io.apkrun.guest.protocol.v1.ImportResult
@@ -31,6 +32,7 @@ import io.apkrun.guest.protocol.v1.Response
 import io.apkrun.guest.protocol.v1.SetClockFormat
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.SetLocale
+import io.apkrun.guest.protocol.v1.SetMicrophoneAccess
 import io.apkrun.guest.protocol.v1.SetNotificationForwarding
 import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
 import io.apkrun.guest.protocol.v1.SetTimeZone
@@ -88,6 +90,11 @@ private class FakeOperations : AgentOperations {
     }
 
     override fun snapshot(): Snapshot = Snapshot.getDefaultInstance()
+
+    override fun health(): Health {
+        enter()
+        return Health.newBuilder().setAgentUptimeMs(42).build()
+    }
 
     override fun setDisplayPolicy(request: SetDisplayPolicy) = enter()
 
@@ -153,6 +160,8 @@ private class FakeOperations : AgentOperations {
     override fun setNotificationForwarding(request: SetNotificationForwarding) = enter()
 
     override fun setUrlRedirect(request: SetUrlRedirect) = enter()
+
+    override fun setMicrophoneAccess(request: SetMicrophoneAccess) = enter()
 
     override fun resolveUrl(request: ResolveUrl) = enter()
 
@@ -228,6 +237,21 @@ class DispatcherTest {
         val response = dispatcher(FakeOperations()).dispatch(1, request, everything)
         assertEquals(42L, response.getPing().getNonce())
         assertEquals(1_000L, response.getPing().getGuestUptimeMs())
+    }
+
+    @Test
+    fun syncTimeIsUnsupportedInTheDevelopmentShellAgent() = runBlocking {
+        val request =
+            Request.newBuilder()
+                .setSyncTime(SyncTime.newBuilder().setUnixTimeMs(1_800_000_000_123L).setRttMs(37))
+                .build()
+
+        val response =
+            dispatcher(FakeOperations()).dispatch(1, request, everything + GuestCapability.LOCALE)
+
+        assertEquals(GuestErrorCode.GUEST_ERROR_CODE_UNSUPPORTED, response.getError().getCode())
+        assertTrue(response.getError().getMessage().contains("privileged APKRun agent"))
+        assertFalse(GuestCapability.LOCALE in Connection.IMPLEMENTED)
     }
 
     @Test

@@ -926,6 +926,9 @@ extension RuntimeHost {
             throw Self.unknownConfigKey(key)
         }
         try GlobalSettings.store(globals, to: paths.settingsFile)
+        // The idle controller applies new suspend/stop deadlines at once;
+        // it is not re-read until the next daemon start otherwise.
+        Task { await reloadIdleSettingsIfIdleKey(key) }
         // A changed `integrations.enabled.*`/`defaults.*` may alter the
         // guest's forwarding allowlist; push it so titles and text stop
         // leaving Android at once.
@@ -948,6 +951,12 @@ extension RuntimeHost {
                 eventHub.publishRuntimeChange(.configurationChanged(keys: update.changedKeys))
                 enqueueLocaleTimeTrigger(.hostPreferencesChanged)
             }
+        }
+        // `maintenance.*` is read live by APKRun.app's self-update wiring
+        // (configuration.md §2.6); the change event reaches it on the
+        // runtime topic like `updateConfiguration` does.
+        if key.hasPrefix("maintenance.") {
+            eventHub.publishRuntimeChange(.configurationChanged(keys: [key]))
         }
         return updateConfigValues(keys: nil)
     }
@@ -1074,16 +1083,19 @@ extension RuntimeHost {
 
         // A non-checkOnly run can install: hold the package-mutation guard so
         // stop/restart/reset cannot interrupt a stage→install transaction.
-        if !checkOnly {
+        // Acquiring it can boot a stopped runtime, so skip it when there is
+        // nothing to check.
+        var mutationToken: UUID?
+        if !checkOnly, !selected.isEmpty {
             do {
-                try beginPackageMutation()
+                mutationToken = try await beginPackageMutation()
             } catch {
                 finishOperation(
                     operationID, result: .failed(Self.sessionWireError(for: error)))
                 throw Self.sessionWireError(for: error)
             }
         }
-        defer { if !checkOnly { finishPackageMutation() } }
+        defer { if let mutationToken { finishPackageMutation(mutationToken) } }
 
         let results = await service.checkPackages(
             selected, context: service.providerContext(userInitiated: true),
@@ -1206,12 +1218,13 @@ extension RuntimeHost {
         }
         // A rollback is a package mutation: it blocks stop/restart/reset
         // like installs and uninstalls do (update-system.md §8.5).
+        let mutationToken: UUID
         do {
-            try beginPackageMutation()
+            mutationToken = try await beginPackageMutation()
         } catch {
             throw Self.sessionWireError(for: error)
         }
-        defer { finishPackageMutation() }
+        defer { finishPackageMutation(mutationToken) }
         do {
             switch try await service.rollbackPackage(
                 packageID: packageID, allowDataLoss: allowDataLoss)
@@ -1562,7 +1575,7 @@ extension RuntimeHost {
                 else {
                     return
                 }
-                await handling.endSessionForUpdate(packageID: wireID)
+                await handling.endSessionForUpdate(packageID: wireID, reason: .updating)
             },
             reopenPackage: { [weak self] packageID in
                 guard let self,
@@ -1572,7 +1585,16 @@ extension RuntimeHost {
                 else {
                     return
                 }
-                try await handling.reopenPackageSession(packageID: wireID)
+                // The service-level reopen bypasses the host `launch` that
+                // holds `.session` activity; hold it here or the resumed app
+                // would be eligible for idle suspend/stop.
+                await self.acquireSessionActivityIfNeeded(wireID)
+                do {
+                    try await handling.reopenPackageSession(packageID: wireID)
+                } catch {
+                    await self.releaseSessionActivityIfInactive(wireID)
+                    throw error
+                }
             },
             ready: { [weak self] reason in
                 // Daemon startup creates the supervisor asynchronously; an
@@ -1617,12 +1639,12 @@ extension RuntimeHost {
                 // The host's package-mutation guard makes a stop, restart,
                 // or reset wait for a queued install resuming without its
                 // original client request.
-                try await self.beginPackageMutation()
+                let token = try await self.beginPackageMutation()
                 let inner = await self.updateIdleController.assertActivity(.storeOperation)
                 return UpdateActivityAssertion {
                     inner.release()
                     Task {
-                        await self.finishPackageMutation()
+                        await self.finishPackageMutation(token)
                         await self.stopUpdateBootedRuntimeIfIdle()
                     }
                 }
@@ -1848,14 +1870,15 @@ extension RuntimeHost {
         // An update is a package mutation: it blocks stop/restart/reset like
         // installs and uninstalls do, so Android cannot be torn down while a
         // stage→install transaction is open.
+        let mutationToken: UUID
         do {
-            try beginPackageMutation()
+            mutationToken = try await beginPackageMutation()
         } catch {
             finishOperation(
                 operationID, result: .failed(Self.sessionWireError(for: error)))
             throw Self.sessionWireError(for: error)
         }
-        defer { finishPackageMutation() }
+        defer { finishPackageMutation(mutationToken) }
 
         let outcome: WireUpdateOutcome?
         do {

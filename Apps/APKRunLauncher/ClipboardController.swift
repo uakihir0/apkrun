@@ -148,7 +148,7 @@ final class ClipboardController {
     /// an image over 16 MiB or 8192 px per side does not cross.
     private func showImageLimitMessage() {
         let alert = NSAlert()
-        alert.messageText = "The image is too large to paste."
+        alert.messageText = LauncherStrings.text("The image is too large to paste.")
         alert.informativeText =
             "Images over 16 MB or 8192 pixels per side are not sent. The text still went through."
         alert.alertStyle = .informational

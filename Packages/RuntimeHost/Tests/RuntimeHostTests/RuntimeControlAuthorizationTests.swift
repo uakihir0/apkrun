@@ -59,4 +59,11 @@ import Testing
     #expect(!RuntimeControlOperation.configuration.allows(.launcher))
     #expect(!RuntimeControlOperation.updateConfiguration.allows(.launcher))
     #expect(allOperations.allSatisfy { !$0.allows(.wrapper) })
+
+    // §7.6: window close belongs to the window-owning clients only.
+    #expect(RuntimeControlOperation.closeSession.allows(.wrapper))
+    #expect(RuntimeControlOperation.closeSession.allows(.launcher))
+    #expect(!RuntimeControlOperation.closeSession.allows(.app))
+    #expect(!RuntimeControlOperation.closeSession.allows(.menuBar))
+    #expect(!RuntimeControlOperation.closeSession.allows(.cli))
 }

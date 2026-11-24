@@ -343,6 +343,7 @@ public struct APKInspector: Sendable {
     }
 
     /// Parses fields from `aapt2 dump badging`. Kept pure for fast parser tests.
+    /// SECURITY: tool output parsed as text; fuzzed by `aapt2-badging` (#92).
     public static func parseBadging(_ output: String) throws(APKInspectionFailure) -> APKFacts {
         var packageFields: [String: String]?
         var label: String?
@@ -507,7 +508,9 @@ public struct APKInspector: Sendable {
         return nil
     }
 
-    private static func sandboxProfile(tool: URL, apk: URL, importDirectory: URL) -> String {
+    /// The SBPL profile wrapping aapt2 (#92): deny-by-default, reads limited
+    /// to the tool, the staged APK, and the ticket directory.
+    static func sandboxProfile(tool: URL, apk: URL, importDirectory: URL) -> String {
         let toolRules = sandboxPathVariants(tool.path).map { path in
             """
             (allow process-exec (literal \(sbpl(path))))

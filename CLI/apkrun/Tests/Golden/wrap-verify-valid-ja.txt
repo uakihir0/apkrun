@@ -1,0 +1,5 @@
+バンドル ID: io.apkrun.android.io.apkrun.fixture.hellotext
+パッケージ: io.apkrun.fixture.hellotext
+種類: local
+CDHash: 0123456789abcdef0123456789abcdef01234567
+Valid

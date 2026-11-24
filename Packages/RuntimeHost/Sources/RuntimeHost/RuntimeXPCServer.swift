@@ -1,5 +1,6 @@
 import DiagnosticsCore
 @preconcurrency import Foundation
+import ImageCore
 import RuntimeAPI
 import RuntimeCore
 
@@ -42,6 +43,7 @@ public final class RuntimeXPCServer: @unchecked Sendable {
     private let startLock = NSLock()
     private var hasStarted = false
     private var hasInvalidated = false
+    /// Live frozen maintenance listeners granted through the broker.
 
     /// Prepares protected endpoint listeners for every APKRun control client.
     ///
@@ -183,9 +185,10 @@ public final class RuntimeXPCServer: @unchecked Sendable {
     }
 }
 
-private enum RuntimeXPCConnectionKind: Equatable {
+enum RuntimeXPCConnectionKind: Equatable {
     case broker
     case control
+    case maintenance
 }
 
 private struct RuntimeXPCConnectionRecord {
@@ -194,12 +197,27 @@ private struct RuntimeXPCConnectionRecord {
     let controlListener: RuntimeXPCControlListener?
     let outputQueue: DispatchQueue
     var activeRequests = 0
+    var activityAssertion: RuntimeActivityAssertion?
+    var activityHoldTokens = Set<UUID>()
 }
 
 private struct RuntimeXPCControlReservation {
     let brokerConnectionID: ObjectIdentifier
     let controlListener: RuntimeXPCControlListener
     let expiresAt: ContinuousClock.Instant
+}
+
+private final class RuntimeXPCMaintenanceListener: @unchecked Sendable {
+    let listener: NSXPCListener
+    let delegate: MaintenanceListenerDelegate
+
+    init(host: RuntimeHost, requirement: String) {
+        delegate = MaintenanceListenerDelegate(host: host)
+        listener = NSXPCListener.anonymous()
+        listener.setConnectionCodeSigningRequirement(requirement)
+        listener.delegate = delegate
+        listener.resume()
+    }
 }
 
 private final class RuntimeXPCControlListener: @unchecked Sendable {
@@ -278,7 +296,7 @@ private enum RuntimeXPCRequestAdmission {
     case rejected(RuntimeXPCRequestRejection)
 }
 
-private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
+final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
     private let lock = NSLock()
     private let eventHub: RuntimeEventHub
     /// Extra cleanup run after a connection is invalidated (e.g. stream teardown).
@@ -354,13 +372,59 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         return connections[connectionID]?.outputQueue
     }
 
+    func holdActivity(
+        _ assertion: RuntimeActivityAssertion,
+        for connectionID: ObjectIdentifier
+    ) -> UUID? {
+        let token = UUID()
+        lock.lock()
+        guard var record = connections[connectionID] else {
+            lock.unlock()
+            assertion.release()
+            return nil
+        }
+        let shouldRetainAssertion = record.activityAssertion == nil
+        if shouldRetainAssertion {
+            record.activityAssertion = assertion
+        }
+        record.activityHoldTokens.insert(token)
+        connections[connectionID] = record
+        lock.unlock()
+        if !shouldRetainAssertion {
+            assertion.release()
+        }
+        return token
+    }
+
+    func releaseActivityHold(_ token: UUID, for connectionID: ObjectIdentifier) {
+        lock.lock()
+        guard var record = connections[connectionID] else {
+            lock.unlock()
+            return
+        }
+        guard record.activityHoldTokens.remove(token) != nil else {
+            lock.unlock()
+            return
+        }
+        let assertion: RuntimeActivityAssertion?
+        if record.activityHoldTokens.isEmpty {
+            assertion = record.activityAssertion
+            record.activityAssertion = nil
+        } else {
+            assertion = nil
+        }
+        connections[connectionID] = record
+        lock.unlock()
+        assertion?.release()
+    }
+
     func isRegistered(_ connectionID: ObjectIdentifier) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         return !closed && connections[connectionID] != nil
     }
 
-    func reserveControlConnection(
+    fileprivate func reserveControlConnection(
         for clientKind: RuntimeClientKind,
         on brokerConnectionID: ObjectIdentifier,
         reservationID: UUID,
@@ -417,7 +481,7 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         lock.unlock()
     }
 
-    func beginRequest(
+    fileprivate func beginRequest(
         on connectionID: ObjectIdentifier,
         allowDuringShutdown: Bool = false
     ) -> RuntimeXPCRequestAdmission {
@@ -490,6 +554,9 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         lastActivity = ContinuousClock.now
         lock.unlock()
         eventHub.removeAll(connectionIDs: connectionIDs)
+        for record in records {
+            record.activityAssertion?.release()
+        }
         for controlListener in records.compactMap(\.controlListener) + reservedListeners {
             controlListener.listener.invalidate()
         }
@@ -525,13 +592,14 @@ private final class RuntimeXPCConnectionRegistry: @unchecked Sendable {
         return lastActivity.duration(to: ContinuousClock.now) >= gracePeriod
     }
 
-    private func remove(_ identifier: ObjectIdentifier) {
+    func remove(_ identifier: ObjectIdentifier) {
         lock.lock()
         let record = connections.removeValue(forKey: identifier)
         if record != nil {
             lastActivity = ContinuousClock.now
         }
         lock.unlock()
+        record?.activityAssertion?.release()
         record?.controlListener?.listener.invalidate()
         eventHub.remove(connectionID: identifier)
         onConnectionRemoved?(identifier)
@@ -831,6 +899,9 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
     private let connectionRegistry: RuntimeXPCConnectionRegistry
     private let connectionID: ObjectIdentifier
 
+    /// Live frozen maintenance listeners granted through this connection.
+    private var maintenanceListeners: [ObjectIdentifier: RuntimeXPCMaintenanceListener] = [:]
+
     init(
         host: RuntimeHost,
         buildInfo: BuildInfo,
@@ -870,6 +941,7 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
 
         Task {
             defer { pending.finish() }
+            await host.checkBundleForReplacement()
             let status = await host.status()
             let version = Int(buildInfo.buildNumber) ?? 0
             let helloReply = RuntimeHelloReply(
@@ -901,7 +973,20 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             request.count <= Self.maximumRequestSize,
             let endpointRequest = try? JSONDecoder().decode(RuntimeEndpointRequest.self, from: request),
             endpointRequest.apiVersion.major > 0,
-            endpointRequest.apiVersion.minor >= 0,
+            endpointRequest.apiVersion.minor >= 0
+        else {
+            reply(Self.encode(RuntimeEndpointReply.rejected(.malformedRequest)), nil)
+            return
+        }
+
+        // The frozen `.maintenance` endpoint answers in every host state and
+        // ignores the client's header version (runtime-api.md §12.1): only
+        // the code-signing requirement gates it.
+        if endpointRequest.kind == .maintenance {
+            requestMaintenanceEndpoint(endpointRequest, reply: reply)
+            return
+        }
+        guard
             endpointRequest.kind == .control,
             endpointRequest.apiVersion.major == runtimeAPIVersion.major,
             endpointRequest.apiVersion.minor <= runtimeAPIVersion.minor
@@ -933,6 +1018,39 @@ private final class BrokerService: NSObject, RuntimeBrokerXPC, @unchecked Sendab
             requestedVersion: endpointRequest.apiVersion,
             reply: reply
         )
+    }
+
+    /// Grants the frozen maintenance endpoint (runtime-api.md §12.1): the
+    /// same code-signing requirement as control, but no version negotiation
+    /// and available in every host state. Only `.app` and `.cli` clients may
+    /// drive an update; launchers, wrappers, and the menu bar are refused.
+    private func requestMaintenanceEndpoint(
+        _ endpointRequest: RuntimeEndpointRequest,
+        reply: @escaping (Data, NSXPCListenerEndpoint?) -> Void
+    ) {
+        guard endpointRequest.clientKind == .app || endpointRequest.clientKind == .cli else {
+            reply(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+            return
+        }
+        guard
+            let identifier = Self.expectedIdentifier(
+                for: endpointRequest.clientKind,
+                buildIdentity: buildInfo.buildIdentity
+            ), endpointRequest.claimedIdentity == identifier,
+            let requirement = clientRequirements[endpointRequest.clientKind.rawValue]
+        else {
+            reply(Self.encode(RuntimeEndpointReply.rejected(.unknownClient)), nil)
+            return
+        }
+        let maintenanceListener = RuntimeXPCMaintenanceListener(
+            host: host,
+            requirement: requirement
+        )
+        maintenanceListeners[ObjectIdentifier(maintenanceListener)] = maintenanceListener
+        maintenanceListener.delegate.onAccepted = { [weak self, maintenanceListener] in
+            self?.maintenanceListeners.removeValue(forKey: ObjectIdentifier(maintenanceListener))
+        }
+        reply(Self.encode(RuntimeEndpointReply.granted), maintenanceListener.listener.endpoint)
     }
 
     /// Grants a control endpoint to a wrapper whose bundle ID and cdhash
@@ -1181,6 +1299,22 @@ private final class ControlListenerDelegate: NSObject, NSXPCListenerDelegate, @u
             argumentIndex: 1,
             ofReply: false
         )
+        // `installImage` carries the `.aar` FileHandle (runtime-maintenance.md
+        // §4.7); same whitelist as `importPackage`.
+        controlInterface.setClasses(
+            fileHandleClasses,
+            for: #selector(RuntimeControlXPC.installImage(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
+        // `createDiagnostics` carries the report's output handle
+        // (diagnostics.md §8.1).
+        controlInterface.setClasses(
+            fileHandleClasses,
+            for: #selector(RuntimeControlXPC.createDiagnostics(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
         connection.remoteObjectInterface = NSXPCInterface(with: RuntimeEventSink.self)
         let eventHub = host.eventHub
         let remoteSink =
@@ -1207,6 +1341,9 @@ private protocol VersionedControlRequest: Decodable {
 }
 
 extension RuntimeStatusRequest: VersionedControlRequest {}
+extension HealthRequest: VersionedControlRequest {}
+extension HealthFixRequest: VersionedControlRequest {}
+extension RuntimeCreateDiagnosticsControlRequest: VersionedControlRequest {}
 extension StartRuntimeRequest: VersionedControlRequest {}
 extension StopRuntimeRequest: VersionedControlRequest {}
 extension RestartRuntimeRequest: VersionedControlRequest {}
@@ -1218,9 +1355,11 @@ extension RuntimeResetAndroidControlRequest: VersionedControlRequest {}
 extension RuntimeListPackagesControlRequest: VersionedControlRequest {}
 extension RuntimePackageInfoControlRequest: VersionedControlRequest {}
 extension RuntimeListSessionsControlRequest: VersionedControlRequest {}
+extension SelfUpdateStatusRequest: VersionedControlRequest {}
 extension RuntimePackageIconControlRequest: VersionedControlRequest {}
 extension RuntimeLaunchControlRequest: VersionedControlRequest {}
 extension RuntimeTerminateControlRequest: VersionedControlRequest {}
+extension RuntimeCloseSessionControlRequest: VersionedControlRequest {}
 extension RuntimeImportPackageControlRequest: VersionedControlRequest {}
 extension RuntimeInstallImportedControlRequest: VersionedControlRequest {}
 extension RuntimeDiscardImportControlRequest: VersionedControlRequest {}
@@ -1235,6 +1374,7 @@ extension RuntimeSubscribeControlRequest: VersionedControlRequest {}
 extension RuntimeUnsubscribeControlRequest: VersionedControlRequest {}
 extension RuntimeVerifyWrapperControlRequest: VersionedControlRequest {}
 extension RuntimeCreateWrapperControlRequest: VersionedControlRequest {}
+extension RuntimeBuildDistributionWrapperControlRequest: VersionedControlRequest {}
 extension RuntimePlaceStagedWrapperControlRequest: VersionedControlRequest {}
 extension RuntimeWrapperInfoControlRequest: VersionedControlRequest {}
 extension RuntimeWrapperListControlRequest: VersionedControlRequest {}
@@ -1294,6 +1434,7 @@ enum RuntimeControlOperation {
     case packageIcon
     case launch
     case terminate
+    case closeSession
     case importPackage
     case installImported
     case discardImport
@@ -1307,6 +1448,7 @@ enum RuntimeControlOperation {
     case unsubscribe
     case verifyWrapper
     case createWrapper
+    case buildDistributionWrapper
     case placeStagedWrapper
     case wrapperInfo
     case listWrappers
@@ -1340,8 +1482,12 @@ enum RuntimeControlOperation {
     case beginRepairPackage
     case updateSkipped
     case updatePackage
+    case createDiagnostics
     case getConfig
     case setConfig
+    case selfUpdateStatus
+    case noteSelfUpdateStatus
+    case checkSelfUpdate
     case packageSettings
     case updatePackageSettings
     case importBootstrap
@@ -1350,6 +1496,14 @@ enum RuntimeControlOperation {
     case hostNotifications
     case hostNotificationResponse
     case closeStream
+    case installImage
+    case imageStatus
+    case applyImage
+    case rollbackImage
+    case deleteImageRecoveryPoint
+    case imageFeedAction
+    case healthReport
+    case applyHealthFixes
 
     func allows(_ clientKind: RuntimeClientKind) -> Bool {
         switch self {
@@ -1385,7 +1539,7 @@ enum RuntimeControlOperation {
             case .wrapper:
                 false
             }
-        case .createWrapper:
+        case .createWrapper, .buildDistributionWrapper:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -1439,6 +1593,15 @@ enum RuntimeControlOperation {
             // Developer-mode reads; the developer.enabled gate is enforced in
             // RuntimeHost (diagnostics.md §9.3, runtime-api.md §13.1).
             true
+        case .closeSession:
+            // display-and-windowing.md §7.6: the window process closes its
+            // own session with the package's saved close policy.
+            switch clientKind {
+            case .wrapper, .launcher:
+                true
+            case .app, .menuBar, .cli:
+                false
+            }
         case .pushClipboard, .clipboardWritten, .focusChanged, .resolveLinkPrompt,
             .importFiles, .acceptExport:
             // Session-channel messages of desktop-integration.md §3.3, §6
@@ -1469,7 +1632,10 @@ enum RuntimeControlOperation {
         case .checkForUpdates, .listUpdates, .updateHistory, .setUpdatePolicy,
             .setUpdateAuthority, .rollbackPackage, .beginRepairPackage,
             .updateSkipped, .updatePackage, .getConfig, .setConfig,
-            .packageSettings, .updatePackageSettings:
+            .packageSettings, .updatePackageSettings, .installImage,
+            .imageStatus, .applyImage, .rollbackImage,
+            .deleteImageRecoveryPoint, .imageFeedAction, .healthReport,
+            .applyHealthFixes, .createDiagnostics:
             switch clientKind {
             case .app, .menuBar, .cli:
                 true
@@ -1492,6 +1658,31 @@ enum RuntimeControlOperation {
             case .wrapper:
                 true
             case .app, .menuBar, .cli, .launcher:
+                false
+            }
+        case .selfUpdateStatus:
+            // The probe snapshot is read by every control client (§12.2).
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
+                false
+            }
+        case .noteSelfUpdateStatus:
+            // Only APKRun.app speaks for Sparkle (§12.2).
+            switch clientKind {
+            case .app:
+                true
+            case .menuBar, .cli, .launcher, .wrapper:
+                false
+            }
+        case .checkSelfUpdate:
+            // User-initiated probe checks come from the app, the menu bar,
+            // and the CLI (§12.2).
+            switch clientKind {
+            case .app, .menuBar, .cli:
+                true
+            case .launcher, .wrapper:
                 false
             }
         case .hostNotifications, .hostNotificationResponse:
@@ -1679,10 +1870,43 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 response.send(Self.errorReply(for: failure))
                 return
             }
+            guard let decoded = try? JSONDecoder().decode(StartRuntimeRequest.self, from: request) else {
+                response.send(Self.errorReply(for: Self.malformedControlError))
+                return
+            }
+            let shouldHold = decoded.hold ?? false
+            if shouldHold, clientKind != .cli {
+                response.send(
+                    Self.errorReply(
+                        for: RuntimeControlError(
+                            code: "runtime.notAuthorized",
+                            message: safeMessage(for: "runtime.notAuthorized")
+                        )
+                    )
+                )
+                return
+            }
+            let holdToken: UUID?
+            if shouldHold {
+                guard let acquired = await host.assertRuntimeActivity(.cli) else {
+                    response.send(Self.errorReply(for: Self.internalControlError))
+                    return
+                }
+                guard let token = connectionRegistry.holdActivity(acquired, for: connectionID) else {
+                    response.send(Self.errorReply(for: Self.internalControlError))
+                    return
+                }
+                holdToken = token
+            } else {
+                holdToken = nil
+            }
             do {
                 try await host.startRuntime(reason: clientKind == .cli ? .cli : .user)
                 response.send(Self.encode(RuntimeControlReply(status: await host.status())))
             } catch {
+                if let holdToken {
+                    connectionRegistry.releaseActivityHold(holdToken, for: connectionID)
+                }
                 response.send(Self.errorReply(for: Self.controlError(for: error)))
             }
         }
@@ -2797,6 +3021,339 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         }
     }
 
+    func installImage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireImageInstallReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .installImage,
+                as: WireImageInstallRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireImageInstallReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard files.count == 1 else {
+                response.send(
+                    Self.encode(WireImageInstallReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let version = try await host.installImage(from: files[0])
+                response.send(Self.encode(WireImageInstallReply(version: version.description)))
+            } catch {
+                response.send(Self.encode(WireImageInstallReply(error: Self.imageWireError(error))))
+            }
+        }
+    }
+
+    func imageStatus(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireImageStatusReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .imageStatus,
+                as: WireImageStatusRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireImageStatusReply(error: Self.wireError(for: failure))))
+                return
+            }
+            response.send(Self.encode(WireImageStatusReply(status: await host.imageStatus())))
+        }
+    }
+
+    func applyImage(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireImageApplyReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .applyImage,
+                as: WireImageApplyRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireImageApplyReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    WireImageApplyRequest.self, from: request)
+            else {
+                response.send(Self.encode(WireImageApplyReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.applyImage(decoded.version)
+                response.send(Self.encode(WireImageApplyReply(result: "Applied.")))
+            } catch {
+                response.send(Self.encode(WireImageApplyReply(error: Self.imageWireError(error))))
+            }
+        }
+    }
+
+    func rollbackImage(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireImageApplyReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .rollbackImage,
+                as: WireImageRollbackRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireImageApplyReply(error: Self.wireError(for: failure))))
+                return
+            }
+            do {
+                let result = try await host.rollbackImage()
+                response.send(Self.encode(WireImageApplyReply(result: result)))
+            } catch {
+                response.send(Self.encode(WireImageApplyReply(error: Self.imageWireError(error))))
+            }
+        }
+    }
+
+    /// Runs the health checks (`apkrun doctor`). Reply: `WireHealthReport`.
+    func healthReport(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireHealthReport(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .healthReport,
+                as: HealthRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireHealthReport(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(HealthRequest.self, from: request)
+            else {
+                response.send(Self.encode(WireHealthReport(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let report = try await host.healthReport(
+                    deep: decoded.deep, checks: decoded.checks)
+                response.send(Self.encode(report))
+            } catch {
+                response.send(
+                    Self.encode(
+                        WireHealthReport(
+                            error: error as? RuntimeWireError ?? Self.malformedWireError)))
+            }
+        }
+    }
+
+    /// Applies safe health repairs (`apkrun doctor --fix`). Reply:
+    /// `WireHealthReport`.
+    func applyHealthFixes(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireHealthReport(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .applyHealthFixes,
+                as: HealthFixRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireHealthReport(error: Self.wireError(for: failure))))
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(HealthFixRequest.self, from: request)
+            else {
+                response.send(Self.encode(WireHealthReport(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let report = try await host.applyHealthFixes(checks: decoded.checks)
+                response.send(Self.encode(report))
+            } catch {
+                response.send(
+                    Self.encode(
+                        WireHealthReport(
+                            error: error as? RuntimeWireError ?? Self.malformedWireError)))
+            }
+        }
+    }
+
+    func createDiagnostics(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeCreateDiagnosticsControlReply(
+                        error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .createDiagnostics,
+                as: RuntimeCreateDiagnosticsControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeCreateDiagnosticsControlReply(
+                            error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeCreateDiagnosticsControlRequest.self,
+                    from: request
+                ),
+                let operationID = RuntimeAPI.OperationID(rawValue: decoded.header.operationID),
+                let output = files.first
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeCreateDiagnosticsControlReply(
+                            error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let result = try await host.createDiagnostics(
+                    decoded.request,
+                    output: output,
+                    operationID: operationID,
+                    clientKind: decoded.header.clientKind
+                )
+                response.send(
+                    Self.encode(RuntimeCreateDiagnosticsControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(
+                    Self.encode(RuntimeCreateDiagnosticsControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func imageFeedAction(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireImageApplyReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .imageFeedAction,
+                as: WireImageFeedActionRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireImageApplyReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    WireImageFeedActionRequest.self, from: request)
+            else {
+                response.send(Self.encode(WireImageApplyReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                let result: String
+                if decoded.action == "install-latest" {
+                    result = try await host.imageInstallLatest()
+                } else {
+                    result = await host.imageCheckNow()
+                }
+                response.send(Self.encode(WireImageApplyReply(result: result)))
+            } catch {
+                response.send(Self.encode(WireImageApplyReply(error: Self.imageWireError(error))))
+            }
+        }
+    }
+
+    func deleteImageRecoveryPoint(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(WireImageApplyReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .deleteImageRecoveryPoint,
+                as: WireImageRecoveryPointDeleteRequest.self
+            ) {
+                response.send(
+                    Self.encode(WireImageApplyReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    WireImageRecoveryPointDeleteRequest.self, from: request)
+            else {
+                response.send(Self.encode(WireImageApplyReply(error: Self.malformedWireError)))
+                return
+            }
+            do {
+                try await host.deleteImageRecoveryPoint(named: decoded.name)
+                response.send(Self.encode(WireImageApplyReply(result: "Deleted.")))
+            } catch {
+                response.send(Self.encode(WireImageApplyReply(error: Self.imageWireError(error))))
+            }
+        }
+    }
+
     private func verifyEventSink(_ sink: RuntimeEventSinkReference?) async -> Bool {
         guard let sink else { return false }
         return await withCheckedContinuation { continuation in
@@ -2931,6 +3488,54 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         }
     }
 
+    func closeSession(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(Self.encode(RuntimeCloseSessionControlReply(error: Self.rejection(for: admission).wireError)))
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .closeSession,
+                as: RuntimeCloseSessionControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(RuntimeCloseSessionControlReply(error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard let decoded = try? JSONDecoder().decode(RuntimeCloseSessionControlRequest.self, from: request) else {
+                response.send(Self.encode(RuntimeCloseSessionControlReply(error: Self.malformedWireError)))
+                return
+            }
+            // NFR-SEC-07: a wrapper closes only its own package's session
+            // (runtime-api.md §10.1); a launcher's package is not
+            // authenticated here, so the wrapper check does not apply.
+            if clientKind == .wrapper, decoded.packageID != wrapperPackageID {
+                response.send(
+                    Self.encode(
+                        RuntimeCloseSessionControlReply(
+                            error: Self.wireError(
+                                for: RuntimeControlError(
+                                    code: "runtime.notAuthorized",
+                                    message: "This part of APKRun isn't allowed to do that.")))))
+                return
+            }
+            do {
+                let result = try await host.closeSession(
+                    RuntimeCloseSessionRequest(packageID: decoded.packageID, policy: decoded.policy))
+                response.send(Self.encode(RuntimeCloseSessionControlReply(hadSession: result.hadSession)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(Self.encode(RuntimeCloseSessionControlReply(error: wireError)))
+            }
+        }
+    }
+
     func verifyWrapper(_ request: Data, reply: @escaping (Data) -> Void) {
         let response = makeReplyHandler(reply)
         let admission = connectionRegistry.beginRequest(on: connectionID)
@@ -3016,6 +3621,65 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             } catch {
                 let wireError = error as? RuntimeWireError ?? Self.internalWireError
                 response.send(Self.encode(RuntimeCreateWrapperControlReply(error: wireError)))
+            }
+        }
+    }
+
+    func buildDistributionWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    RuntimeBuildDistributionWrapperControlReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .buildDistributionWrapper,
+                as: RuntimeBuildDistributionWrapperControlRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        RuntimeBuildDistributionWrapperControlReply(
+                            error: Self.wireError(for: failure)))
+                )
+                return
+            }
+            guard
+                let decoded = try? JSONDecoder().decode(
+                    RuntimeBuildDistributionWrapperControlRequest.self,
+                    from: request
+                ),
+                let operationID = RuntimeAPI.OperationID(rawValue: decoded.header.operationID)
+            else {
+                response.send(
+                    Self.encode(
+                        RuntimeBuildDistributionWrapperControlReply(
+                            error: Self.malformedWireError))
+                )
+                return
+            }
+            do {
+                let result = try await host.buildDistributionWrapper(
+                    decoded.request,
+                    icon: icon,
+                    operationID: operationID,
+                    clientKind: decoded.header.clientKind
+                )
+                response.send(
+                    Self.encode(
+                        RuntimeBuildDistributionWrapperControlReply(result: result)))
+            } catch {
+                let wireError = error as? RuntimeWireError ?? Self.internalWireError
+                response.send(
+                    Self.encode(
+                        RuntimeBuildDistributionWrapperControlReply(error: wireError)))
             }
         }
     }
@@ -4665,8 +5329,16 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         "malformedRequest",
         message: safeMessage(for: "runtime.malformedRequest")
     )
+    private static let malformedControlError = RuntimeControlError(
+        code: "runtime.malformedRequest",
+        message: safeMessage(for: "runtime.malformedRequest")
+    )
     private static let internalWireError = RuntimeWireError.runtime(
         "internal",
+        message: safeMessage(for: "runtime.internal")
+    )
+    private static let internalControlError = RuntimeControlError(
+        code: "runtime.internal",
         message: safeMessage(for: "runtime.internal")
     )
 
@@ -4731,6 +5403,8 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
                 code = "runtime.hostShuttingDown"
             case .invalidTransition:
                 code = "runtime.invalidTransition"
+            case .hostUpdating:
+                code = "runtime.hostUpdating"
             case .alreadyStarted:
                 code = "runtime.internal"
             case .startupFailed(_, let startupCode):
@@ -4753,6 +5427,24 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
             code = "runtime.internal"
         }
         return RuntimeControlError(code: code, message: safeMessage(for: code))
+    }
+
+    private static func imageWireError(_ error: any Error) -> RuntimeWireError {
+        if let wire = error as? RuntimeWireError {
+            return wire
+        }
+        if let failure = error as? ImageFailure {
+            let code = "image.\(failure.code)"
+            let entry = ErrorCatalog.entry(for: code)
+            return RuntimeWireError(
+                domain: "image",
+                code: code,
+                message: entry?.message?["en"] ?? failure.code,
+                remediation: entry?.remediation?["en"],
+                parameters: failure.parameters.mapValues { "\($0)" }
+            )
+        }
+        return .runtime("internal", message: safeMessage(for: "runtime.internal"))
     }
 
     private static func configurationWireError(for error: any Error) -> RuntimeWireError {
@@ -4882,6 +5574,110 @@ private final class ControlService: NSObject, RuntimeControlXPC, @unchecked Send
         }
     }
 
+    func selfUpdateStatus(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply, snapshotBarrier: true)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    SelfUpdateStatusReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .selfUpdateStatus,
+                as: SelfUpdateStatusRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        SelfUpdateStatusReply(error: Self.wireError(for: failure))))
+                return
+            }
+            response.beginSnapshotBarrier()
+            let status = await host.selfUpdateStatus()
+            response.send(Self.encode(SelfUpdateStatusReply(result: status)))
+        }
+    }
+
+    func noteSelfUpdateStatus(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    SelfUpdateNoteReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .noteSelfUpdateStatus,
+                as: SelfUpdateNote.self
+            ) {
+                response.send(
+                    Self.encode(
+                        SelfUpdateNoteReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let note = try? JSONDecoder().decode(SelfUpdateNote.self, from: request)
+            else {
+                response.send(
+                    Self.encode(
+                        SelfUpdateNoteReply(error: Self.malformedWireError)))
+                return
+            }
+            await host.noteSelfUpdate(note)
+            response.send(Self.encode(SelfUpdateNoteReply(result: RuntimeEmpty())))
+        }
+    }
+
+    func checkSelfUpdate(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = makeReplyHandler(reply)
+        let admission = connectionRegistry.beginRequest(on: connectionID)
+        guard case .accepted(let pending) = admission else {
+            response.send(
+                Self.encode(
+                    SelfUpdateStatusReply(
+                        error: Self.rejection(for: admission).wireError))
+            )
+            return
+        }
+        Task {
+            defer { pending.finish() }
+            if let failure = Self.validate(
+                request,
+                clientKind: clientKind,
+                operation: .checkSelfUpdate,
+                as: CheckSelfUpdateRequest.self
+            ) {
+                response.send(
+                    Self.encode(
+                        SelfUpdateStatusReply(error: Self.wireError(for: failure))))
+                return
+            }
+            guard
+                let check = try? JSONDecoder().decode(CheckSelfUpdateRequest.self, from: request)
+            else {
+                response.send(
+                    Self.encode(
+                        SelfUpdateStatusReply(error: Self.malformedWireError)))
+                return
+            }
+            let status = await host.checkSelfUpdate(userInitiated: check.userInitiated)
+            response.send(Self.encode(SelfUpdateStatusReply(result: status)))
+        }
+    }
+
 }
 
 private final class XPCDataReply: @unchecked Sendable {
@@ -4992,5 +5788,71 @@ private func safeMessage(for code: String) -> String {
         "APKRun's bundled Guest Agent is missing or invalid."
     default:
         "Something went wrong in APKRun's background service."
+    }
+}
+extension CheckSelfUpdateRequest: VersionedControlRequest {}
+extension WireImageInstallRequest: VersionedControlRequest {}
+extension WireImageStatusRequest: VersionedControlRequest {}
+extension WireImageApplyRequest: VersionedControlRequest {}
+extension WireImageRollbackRequest: VersionedControlRequest {}
+extension WireImageFeedActionRequest: VersionedControlRequest {}
+extension WireImageRecoveryPointDeleteRequest: VersionedControlRequest {}
+extension SelfUpdateNote: VersionedControlRequest {}
+extension MaintenanceControlRequest: VersionedControlRequest {}
+
+// MARK: - Frozen maintenance endpoint (runtime-api.md §12.1)
+
+/// Accepts one maintenance connection and exports a `MaintenanceControlService`
+/// whose `perform` envelope dispatches `MaintenanceControlOperation`s. New
+/// operations extend the request DTO, never this listener — the endpoint is
+/// additive-only and answers in every host state.
+private final class MaintenanceListenerDelegate: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
+    private let host: RuntimeHost
+
+    init(host: RuntimeHost) {
+        self.host = host
+    }
+
+    var onAccepted: @Sendable () -> Void = {}
+
+    func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
+        connection.exportedInterface = NSXPCInterface(with: RuntimeMaintenanceXPC.self)
+        connection.exportedObject = MaintenanceControlService(host: host)
+        connection.resume()
+        onAccepted()
+        listener.invalidate()
+        return true
+    }
+}
+
+/// Host-side implementation of the frozen maintenance XPC surface.
+private final class MaintenanceControlService: NSObject, RuntimeMaintenanceXPC, @unchecked Sendable {
+    private let host: RuntimeHost
+
+    init(host: RuntimeHost) {
+        self.host = host
+    }
+
+    func perform(_ request: Data, reply: @escaping (Data) -> Void) {
+        let response = XPCDataReply(reply)
+        Task {
+            let controlRequest: MaintenanceControlRequest
+            do {
+                controlRequest = try JSONDecoder().decode(MaintenanceControlRequest.self, from: request)
+            } catch {
+                response.send(
+                    Self.encode(
+                        MaintenanceControlReply(
+                            error: RuntimeWireError(domain: "maintenance", code: "malformedRequest", message: "")
+                        )))
+                return
+            }
+            let replyValue = await host.maintenanceOperation(controlRequest)
+            response.send(Self.encode(replyValue))
+        }
+    }
+
+    private static func encode<T: Encodable>(_ value: T) -> Data {
+        (try? JSONEncoder().encode(value)) ?? Data()
     }
 }

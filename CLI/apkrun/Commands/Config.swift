@@ -67,10 +67,27 @@ struct ConfigSetCommand: AsyncParsableCommand {
             let client = try RuntimeControlClient(clientKind: .cli)
             let values = try await client.setConfig(key: key, value: value)
             Output.write("\(key)=\(values[key] ?? value)")
+            if let note = Self.appliesNote(for: key) {
+                Output.write(note)
+            }
         } catch let failure as RuntimeWireError {
             throw failure
         } catch {
             throw await RuntimeStatusOutput.commandFailure(error)
+        }
+    }
+
+    /// The "applies at the next start" notice of cli.md §4.6, keyed by the
+    /// settings keys that are only read while Android boots.
+    static func appliesNote(for key: String) -> String? {
+        switch key {
+        case "runtime.memoryGiB", "runtime.cpuCount", "audio.output",
+            "graphics.safeMode", "developer.enabled":
+            return "Applies the next time Android starts."
+        case "runtime.userdataGiB":
+            return "Applies after Reset Android."
+        default:
+            return nil
         }
     }
 }

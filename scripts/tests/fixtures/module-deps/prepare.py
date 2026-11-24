@@ -69,13 +69,8 @@ elif mode == "xcode-missing-product":
     project = project_path.read_text()
     project_path.write_text(
         project.replace(
-            "packages:\n  APKRun:\n    path: .\n",
-            "packages:\n"
-            "  APKRun:\n"
-            "    path: .\n"
-            "  Sparkle:\n"
-            "    url: https://github.com/sparkle-project/Sparkle\n"
-            "    from: 2.6.4\n",
+            "      - package: Sparkle\n        product: Sparkle\n",
+            "",
             1,
         )
     )

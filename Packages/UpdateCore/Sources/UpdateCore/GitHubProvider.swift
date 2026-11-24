@@ -426,6 +426,13 @@ public struct GitHubProvider: UpdateProvider {
         }
     }
 
+    /// Fuzz entry (#92): decodes the release listing, discarding the
+    /// SECURITY: untrusted release listing; fuzzed by `github-releases`.
+    /// result; callers see only the typed `UpdateFailure`.
+    package static func decodeReleasesForFuzzing(_ body: Data) throws(UpdateFailure) {
+        _ = try decodeReleases(body)
+    }
+
     /// Decodes the listing; malformed JSON is `providerMetadataInvalid`.
     private static func decodeReleases(_ body: Data) throws(UpdateFailure) -> [Release] {
         do {

@@ -49,3 +49,4 @@ An ADR records one significant decision: its context, the decision, the alternat
 | [0017](0017-zipfoundation-zip-reading.md) | ZIPFoundation for reading ZIP archives | Accepted |
 | [0018](0018-guest-mesa-ndk-build.md) | Guest Mesa (EGL, GLES, gallium virgl) built with the NDK as a standalone APKRun cross-build | Accepted |
 | [0019](0019-project-license-apache2.md) | Apache License 2.0 for APKRun | Accepted |
+| [0020](0020-release-image-product-build.md) | Release images are built from AOSP source and signed with APKRun keys | Accepted |

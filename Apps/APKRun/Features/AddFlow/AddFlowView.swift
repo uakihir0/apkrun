@@ -88,6 +88,10 @@ struct AddFlowView: View {
             Text(headline)
         }
 
+        if let compatibility = preview.compatibility {
+            compatibilityNotice(compatibility)
+        }
+
         ForEach(preview.warnings.indices, id: \.self) { index in
             Label(preview.warnings[index].message, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.yellow)
@@ -109,7 +113,14 @@ struct AddFlowView: View {
             Spacer()
             Button("Cancel") { model.dismiss() }
             if let action = sheet.action {
-                Button(model.installError == nil ? action : "Try Again") {
+                // §10.3: unsupported apps may be installed, but the
+                // button says so plainly.
+                let actionTitle =
+                    model.installError != nil
+                    ? "Try Again"
+                    : preview.compatibility?.level == "unsupported"
+                        ? "Install Anyway" : action
+                Button(actionTitle) {
                     model.install()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -118,6 +129,40 @@ struct AddFlowView: View {
                 Button("Done") { model.dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
+        }
+    }
+
+    /// The §10.3 compatibility verdict and its known issues. It is
+    /// advisory: the review never blocks an install.
+    private func compatibilityNotice(_ info: RuntimeCompatibilityInfo) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label {
+                Text("Compatibility: \(info.label)")
+            } icon: {
+                Image(systemName: compatibilitySymbol(info.level))
+                    .foregroundStyle(compatibilityColor(info.level))
+            }
+            ForEach(info.issues, id: \.id) { issue in
+                Text(issue.title["en"] ?? issue.id)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func compatibilitySymbol(_ level: String) -> String {
+        switch level {
+        case "works": return "checkmark.circle.fill"
+        case "unsupported": return "xmark.octagon.fill"
+        default: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private func compatibilityColor(_ level: String) -> Color {
+        switch level {
+        case "works": return .green
+        case "unsupported": return .red
+        default: return .yellow
         }
     }
 

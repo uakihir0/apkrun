@@ -192,6 +192,10 @@ public enum OperationOutput: Codable, Equatable, Sendable {
     case wrapper(WrapperInfo)
     /// The batch result of a `wrapperRefreshAll` operation.
     case wrapperBatch(WrapperBatchResult)
+    /// The diagnostics report written by a `diagnostics` operation.
+    case diagnostics(DiagnosticsReportInfo)
+    /// The signed products of a `distributionWrapper` operation.
+    case distributionWrapper(DistributionWrapperResult)
     /// The daemon returned an output type added by a newer API version.
     case unknown
 
@@ -229,6 +233,22 @@ public enum OperationOutput: Codable, Equatable, Sendable {
                     WrapperBatchResult.self,
                     forKey: OperationDynamicCodingKey(stringValue: "_0")
                 ))
+        case "diagnostics":
+            let payload = try container.nestedContainer(
+                keyedBy: OperationDynamicCodingKey.self, forKey: key)
+            self = .diagnostics(
+                try payload.decode(
+                    DiagnosticsReportInfo.self,
+                    forKey: OperationDynamicCodingKey(stringValue: "_0")
+                ))
+        case "distributionWrapper":
+            let payload = try container.nestedContainer(
+                keyedBy: OperationDynamicCodingKey.self, forKey: key)
+            self = .distributionWrapper(
+                try payload.decode(
+                    DistributionWrapperResult.self,
+                    forKey: OperationDynamicCodingKey(stringValue: "_0")
+                ))
         default:
             self = .unknown
         }
@@ -259,6 +279,18 @@ public enum OperationOutput: Codable, Equatable, Sendable {
             var payload = container.nestedContainer(
                 keyedBy: OperationDynamicCodingKey.self,
                 forKey: OperationDynamicCodingKey(stringValue: "wrapperBatch")
+            )
+            try payload.encode(result, forKey: OperationDynamicCodingKey(stringValue: "_0"))
+        case .diagnostics(let info):
+            var payload = container.nestedContainer(
+                keyedBy: OperationDynamicCodingKey.self,
+                forKey: OperationDynamicCodingKey(stringValue: "diagnostics")
+            )
+            try payload.encode(info, forKey: OperationDynamicCodingKey(stringValue: "_0"))
+        case .distributionWrapper(let result):
+            var payload = container.nestedContainer(
+                keyedBy: OperationDynamicCodingKey.self,
+                forKey: OperationDynamicCodingKey(stringValue: "distributionWrapper")
             )
             try payload.encode(result, forKey: OperationDynamicCodingKey(stringValue: "_0"))
         case .unknown:

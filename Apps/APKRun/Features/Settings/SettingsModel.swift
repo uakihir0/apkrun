@@ -13,6 +13,8 @@ final class SettingsModel {
     private(set) var loadError: String?
     /// The Advanced pane's Developer mode confirmation (§9.9).
     var confirmDeveloperMode = false
+    /// The Runtime pane's restart confirmation (§9.2).
+    var askRestartAndroid = false
 
     private let makeService: @Sendable () throws -> any RuntimeService
 
@@ -68,6 +70,18 @@ final class SettingsModel {
     func confirmDeveloperModeOn() {
         confirmDeveloperMode = false
         set("developer.enabled", "true")
+    }
+
+    /// Restarts Android so restart-applied keys like `audio.output` take
+    /// effect (§9.2's **Restart Android Now**).
+    func restartAndroid() {
+        Task {
+            do {
+                _ = try await makeService().restartRuntime()
+            } catch {
+                loadError = PackageDetailModel.describe(error)
+            }
+        }
     }
 
     /// Testing seam.

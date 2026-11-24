@@ -8,6 +8,7 @@ import io.apkrun.guest.protocol.v1.CollectDiagnostics
 import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
 import io.apkrun.guest.protocol.v1.DismissNotification
 import io.apkrun.guest.protocol.v1.ExportStart
+import io.apkrun.guest.protocol.v1.Health
 import io.apkrun.guest.protocol.v1.ImportFiles
 import io.apkrun.guest.protocol.v1.ImportResult
 import io.apkrun.guest.protocol.v1.LaunchApplication
@@ -21,6 +22,7 @@ import io.apkrun.guest.protocol.v1.ResolveUrl
 import io.apkrun.guest.protocol.v1.SetClockFormat
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.SetLocale
+import io.apkrun.guest.protocol.v1.SetMicrophoneAccess
 import io.apkrun.guest.protocol.v1.SetNotificationForwarding
 import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
 import io.apkrun.guest.protocol.v1.SetTimeZone
@@ -37,6 +39,9 @@ import io.apkrun.guest.protocol.v1.SyncTime
 interface AgentOperations {
     /** The state that the host reads after every handshake (guest-protocol.md §7.2). */
     fun snapshot(): Snapshot
+
+    /** The agent health counters of `Health` (guest-protocol.md §7.4). */
+    fun health(): Health
 
     /** Applies the density and the IME policy of a display (display.v1). */
     fun setDisplayPolicy(request: SetDisplayPolicy)
@@ -82,6 +87,9 @@ interface AgentOperations {
 
     /** Replaces the notification forwarding allowlist (notifications.v1, §5.1). */
     fun setNotificationForwarding(request: SetNotificationForwarding)
+
+    /** Applies the microphone allowlist (microphone.v1, desktop-integration.md §8.2). */
+    fun setMicrophoneAccess(request: SetMicrophoneAccess)
 
     /** Applies the link redirect state (url.v1, desktop-integration.md §7.1). */
     fun setUrlRedirect(request: SetUrlRedirect)

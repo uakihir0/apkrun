@@ -1,10 +1,12 @@
 package io.apkrun.guest.daemon
 
+import android.os.Process
 import android.os.SystemClock
 import android.provider.Settings
 import io.apkrun.guest.files.FilesBridge
 import io.apkrun.guest.protocol.GuestFailure
 import io.apkrun.guest.protocol.v1.ActivateNotification
+import io.apkrun.guest.protocol.v1.AgentMode
 import io.apkrun.guest.protocol.v1.ClearDisplay
 import io.apkrun.guest.protocol.v1.ClipData
 import io.apkrun.guest.protocol.v1.CollectDiagnostics
@@ -12,11 +14,13 @@ import io.apkrun.guest.protocol.v1.CollectDiagnosticsResult
 import io.apkrun.guest.protocol.v1.DismissNotification
 import io.apkrun.guest.protocol.v1.ExportStart
 import io.apkrun.guest.protocol.v1.GuestErrorCode
+import io.apkrun.guest.protocol.v1.Health
 import io.apkrun.guest.protocol.v1.ImportFiles
 import io.apkrun.guest.protocol.v1.ImportResult
 import io.apkrun.guest.protocol.v1.LaunchApplication
 import io.apkrun.guest.protocol.v1.LaunchResult
 import io.apkrun.guest.protocol.v1.ListPackages
+import io.apkrun.guest.protocol.v1.MemoryInfo
 import io.apkrun.guest.protocol.v1.PackageInfo
 import io.apkrun.guest.protocol.v1.PackageList
 import io.apkrun.guest.protocol.v1.QueryPackage
@@ -25,6 +29,7 @@ import io.apkrun.guest.protocol.v1.ResolveUrl
 import io.apkrun.guest.protocol.v1.SetClockFormat
 import io.apkrun.guest.protocol.v1.SetDisplayPolicy
 import io.apkrun.guest.protocol.v1.SetLocale
+import io.apkrun.guest.protocol.v1.SetMicrophoneAccess
 import io.apkrun.guest.protocol.v1.SetNotificationForwarding
 import io.apkrun.guest.protocol.v1.SetSharedFolderAccess
 import io.apkrun.guest.protocol.v1.SetTimeZone
@@ -50,7 +55,9 @@ internal class DeviceOperations(
     private val clipboard: ClipboardBridge,
     private val notifications: NotificationBridge,
     private val urlRedirect: UrlRedirect,
+    private val microphone: MicrophoneGate,
     private val files: FilesBridge,
+    private val input: InputService,
     private val localeTime: LocaleTimeService = LocaleTimeService(),
 ) : AgentOperations {
     override fun snapshot(): Snapshot =
@@ -63,6 +70,42 @@ internal class DeviceOperations(
             .setNotificationListenerEnabled(notifications.listenerEnabled())
             .setClipboardSeq(clipboard.currentSequence())
             .build()
+
+    override fun health(): Health {
+        val activityManager =
+            SystemContext.get().getSystemService(android.app.ActivityManager::class.java)
+        val memoryInfo = android.app.ActivityManager.MemoryInfo()
+        activityManager?.getMemoryInfo(memoryInfo)
+        return Health.newBuilder()
+            .setAgentUptimeMs(SystemClock.elapsedRealtime())
+            .setMode(
+                if (Process.myUid() == Process.SHELL_UID) {
+                    AgentMode.AGENT_MODE_DEVELOPMENT_SHELL
+                } else {
+                    AgentMode.AGENT_MODE_PRIVILEGED_APP
+                }
+            )
+            .setDisplaysCount(displays.readDisplays().size)
+            .setImeSelected(imeSelected())
+            .setNotificationListenerEnabled(notifications.listenerEnabled())
+            .setAdbEnabled(adbEnabled())
+            .setMemory(
+                MemoryInfo.newBuilder()
+                    .setTotalKb(memoryInfo.totalMem / 1024)
+                    .setAvailableKb(memoryInfo.availMem / 1024)
+                    .setLowMemory(memoryInfo.lowMemory)
+            )
+            .setInput(input.counters())
+            .build()
+    }
+
+    /** Whether ADB is enabled on the device (Health.adb_enabled). */
+    private fun adbEnabled(): Boolean =
+        Settings.Global.getInt(
+            SystemContext.get().contentResolver,
+            Settings.Global.ADB_ENABLED,
+            0,
+        ) == 1
 
     override fun setDisplayPolicy(request: SetDisplayPolicy) = displays.applyPolicy(request)
 
@@ -112,6 +155,8 @@ internal class DeviceOperations(
         notifications.setForwarding(request)
 
     override fun setUrlRedirect(request: SetUrlRedirect) = urlRedirect.setRedirect(request)
+
+    override fun setMicrophoneAccess(request: SetMicrophoneAccess) = microphone.setAccess(request)
 
     override fun resolveUrl(request: ResolveUrl) = urlRedirect.resolve(request)
 

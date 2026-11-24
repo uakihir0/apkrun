@@ -24,8 +24,17 @@ public struct APIVersion: Codable, Comparable, Equatable, Sendable {
     /// `resolveLinkPrompt` (runtime-api.md §11.2).
     /// 1.29 adds the shared-folder and file operations of §11; 1.30 adds
     /// `SettingApplies` on `updateGlobalConfiguration` (desktop-integration.md
-    /// §9).
-    public static let current = APIVersion(major: 1, minor: 30)
+    /// §9). 1.31 adds `selfUpdateStatus` and `noteSelfUpdateStatus`
+    /// (runtime-api.md §12.2).
+    /// 1.36 adds the buildDistributionWrapper long operation and
+    /// `DistributionWrapperResult` (wrapper.md §11). 1.37 adds
+    /// RuntimeCompatibilityInfo on package details and import previews
+    /// (#91).
+    public static let current = APIVersion(major: 1, minor: 39)
+    /// 1.38 adds `StartRuntimeRequest.hold`, which keeps a CLI start
+    /// activity until its control connection closes (runtime-daemon.md §5).
+    /// 1.39 adds the `closeSession` operation and `WireClosePolicy`
+    /// (display-and-windowing.md §7.6).
 
     /// The incompatible protocol generation.
     public let major: Int
@@ -111,6 +120,9 @@ public struct RuntimeHelloReply: Codable, Equatable, Sendable {
 public enum RuntimeEndpointKind: String, Codable, Equatable, Sendable {
     /// APKRun.app, menu bar, CLI, and launcher control surface.
     case control
+    /// The frozen maintenance endpoint (runtime-api.md §12.1): available in
+    /// every host state so any two APKRun builds can coordinate an update.
+    case maintenance
 }
 
 /// Requests one authenticated endpoint from the broker.
@@ -301,10 +313,15 @@ public struct RuntimeStatusRequest: Codable, Equatable, Sendable {
 public struct StartRuntimeRequest: Codable, Equatable, Sendable {
     /// The request metadata.
     public let header: APIRequestHeader
+    /// Keeps the runtime active until the requesting client disconnects.
+    ///
+    /// Nil is equivalent to false and preserves compatibility with clients that omit this field.
+    public let hold: Bool?
 
     /// Creates a start request.
-    public init(header: APIRequestHeader) {
+    public init(header: APIRequestHeader, hold: Bool? = nil) {
         self.header = header
+        self.hold = hold
     }
 }
 
@@ -748,10 +765,17 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func launch(_ request: Data, reply: @escaping (Data) -> Void)
     /// Terminates an installed package session.
     func terminate(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Closes a package session per `window.closeBehavior`
+    /// (display-and-windowing.md §7.6); the window process only.
+    func closeSession(_ request: Data, reply: @escaping (Data) -> Void)
     /// Checks a wrapper bundle against the registry and the store.
     func verifyWrapper(_ request: Data, reply: @escaping (Data) -> Void)
     /// Starts a wrapper generation; replies with the operation handle.
     func createWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void)
+
+    /// Starts a distribution-wrapper build (wrapper.md §11); replies with
+    /// the `distributionWrapper` operation handle.
+    func buildDistributionWrapper(_ request: Data, icon: FileHandle?, reply: @escaping (Data) -> Void)
 
     /// Completes a staged wrapper placement (wrapper.md §6.3).
     func placeStagedWrapper(_ request: Data, reply: @escaping (Data) -> Void)
@@ -844,6 +868,15 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     func getConfig(_ request: Data, reply: @escaping (Data) -> Void)
     /// Writes one `updates.*` setting (configuration.md §2.7).
     func setConfig(_ request: Data, reply: @escaping (Data) -> Void)
+    /// The self-update probe snapshot (runtime-api.md §12.2). Reply:
+    /// `SelfUpdateStatusReply`.
+    func selfUpdateStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// APKRun.app reports Sparkle's result (runtime-api.md §12.2). Reply:
+    /// `RuntimeEmptyReply`.
+    func noteSelfUpdateStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Runs the self-update probe (runtime-api.md §12.2). Reply:
+    /// `SelfUpdateStatusReply`.
+    func checkSelfUpdate(_ request: Data, reply: @escaping (Data) -> Void)
     /// Adds or removes a version on the package's skip list (§8.4).
     func updateSkipped(_ request: Data, reply: @escaping (Data) -> Void)
     /// Checks and installs a package update now, optionally from files
@@ -867,6 +900,33 @@ public struct RuntimeControlReply: Codable, Equatable, Sendable {
     /// Closes one of this connection's streams; idempotent
     /// (runtime-api.md §16.4). Reply: `RuntimeStreamControlReply`.
     func closeStream(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Installs an Android image from an `.aar` file (runtime-maintenance.md
+    /// §4.7). Reply: `WireImageInstallReply`.
+    func installImage(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
+    /// The image update status (`apkrun image list`). Reply: `WireImageStatusReply`.
+    func imageStatus(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Applies a `ready` image (`apkrun image apply` / the UI apply gate).
+    /// Reply: `WireImageApplyReply`.
+    func applyImage(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Goes back to the previous image (`apkrun image rollback`).
+    /// Reply: `WireImageApplyReply`.
+    func rollbackImage(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Deletes a recovery point (`apkrun image recovery-points delete`).
+    /// Reply: `WireImageApplyReply`.
+    func deleteImageRecoveryPoint(_ request: Data, reply: @escaping (Data) -> Void)
+    /// User-initiated feed actions (`apkrun image check`,
+    /// `apkrun image install --latest`). Reply: `WireImageApplyReply`.
+    func imageFeedAction(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Health report (`apkrun doctor`). Reply: `WireHealthReport`
+    /// (runtime-api.md §13).
+    func healthReport(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Safe health repairs (`apkrun doctor --fix`). Reply:
+    /// `WireHealthReport`.
+    func applyHealthFixes(_ request: Data, reply: @escaping (Data) -> Void)
+    /// Starts a diagnostics report (diagnostics.md §8.1): the output ZIP is
+    /// the single `FileHandle` beside the request, opened by the client.
+    /// Reply: `RuntimeCreateDiagnosticsControlReply`.
+    func createDiagnostics(_ request: Data, files: [FileHandle], reply: @escaping (Data) -> Void)
 }
 
 /// Client-exported callback for event batches from the authenticated control endpoint.
@@ -934,3 +994,14 @@ public protocol RuntimeSessionService: Sendable {
 
 /// The package and application session operations shared by embedded and daemon clients.
 public protocol RuntimeService: RuntimePackageService, RuntimeSessionService {}
+
+/// Frozen maintenance endpoint implemented by apkrund (runtime-api.md §12.1).
+///
+/// One envelope method carries every maintenance operation so the endpoint
+/// stays additive-only: new operations extend `MaintenanceControlOperation`
+/// inside `MaintenanceControlRequest` without a new XPC selector. The server
+/// ignores the request header's API version and answers in every host state.
+@objc public protocol RuntimeMaintenanceXPC {
+    /// Performs a maintenance control operation.
+    func perform(_ request: Data, reply: @escaping (Data) -> Void)
+}

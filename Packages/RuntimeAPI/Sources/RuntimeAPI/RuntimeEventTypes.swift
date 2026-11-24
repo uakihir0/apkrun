@@ -275,10 +275,14 @@ public enum EventPayload: Codable, Equatable, Sendable {
     case integrations(IntegrationChange)
     /// An app session appeared, changed phase, or ended.
     case sessions(SessionChange)
+    /// A runtime maintenance event (host state, self-update status).
+    case maintenance(MaintenanceEvent)
     /// Events for the topic were dropped; fetch a fresh snapshot.
     case resyncRequired(EventTopic)
     /// A sequenced event on an open stream (runtime-api.md §16.4).
     case stream(StreamEnvelope)
+    /// A live health check's new result (runtime-api.md §13, topic `health`).
+    case health(HealthEvent)
     /// The daemon reported an event kind added by a newer API version.
     case unknown
 
@@ -289,6 +293,8 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case operations
         case wrappers
         case integrations
+        case maintenance
+        case health
         case resyncRequired
         case stream
     }
@@ -327,9 +333,15 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case "sessions":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .sessions(try payload.decode(SessionChange.self, forKey: .first))
+        case "maintenance":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .maintenance(try payload.decode(MaintenanceEvent.self, forKey: .first))
         case "stream":
             let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
             self = .stream(try payload.decode(StreamEnvelope.self, forKey: .first))
+        case "health":
+            let payload = try container.nestedContainer(keyedBy: AssociatedKey.self, forKey: key)
+            self = .health(try payload.decode(HealthEvent.self, forKey: .first))
         default:
             self = .unknown
         }
@@ -357,12 +369,18 @@ public enum EventPayload: Codable, Equatable, Sendable {
         case .sessions(let change):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .sessions)
             try payload.encode(change, forKey: .first)
+        case .maintenance(let event):
+            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .maintenance)
+            try payload.encode(event, forKey: .first)
         case .resyncRequired(let topic):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .resyncRequired)
             try payload.encode(topic, forKey: .first)
         case .stream(let envelope):
             var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .stream)
             try payload.encode(envelope, forKey: .first)
+        case .health(let event):
+            var payload = container.nestedContainer(keyedBy: AssociatedKey.self, forKey: .health)
+            try payload.encode(event, forKey: .first)
         case .unknown:
             throw EncodingError.invalidValue(
                 self,

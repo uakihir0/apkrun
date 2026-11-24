@@ -46,7 +46,7 @@ private final class FrameStatisticsController {
             backing: .buffered,
             defer: false
         )
-        panel.title = "Frame Statistics"
+        panel.title = LauncherStrings.text("Frame Statistics")
         panel.isFloatingPanel = true
         panel.level = .floating
         guard let contentView = panel.contentView else { return }
@@ -81,7 +81,7 @@ private final class FrameStatisticsController {
             let client = try RuntimeControlClient(clientKind: .launcher)
             let sessions = try await client.frameStatistics()
             guard !sessions.isEmpty else {
-                field.stringValue = "no app session"
+                field.stringValue = LauncherStrings.text("no app session")
                 return
             }
             field.stringValue = sessions.map { session in
@@ -92,7 +92,7 @@ private final class FrameStatisticsController {
                     session.droppedFrames, session.hostReadbacks)
             }.joined(separator: "   ")
         } catch {
-            field.stringValue = "frameStatistics: \(error.localizedDescription)"
+            field.stringValue = LauncherStrings.text("frameStatistics: \(error.localizedDescription)")
         }
     }
 }
@@ -126,6 +126,18 @@ private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
             )
             .target = self
         }
+        // Help > Report a Problem… opens the app's diagnostics report sheet
+        // (diagnostics.md §8.5); the URL only opens the sheet.
+        let helpItem = NSMenuItem()
+        mainMenu.addItem(helpItem)
+        let helpMenu = NSMenu(title: "Help")
+        helpItem.submenu = helpMenu
+        helpMenu.addItem(
+            withTitle: "Report a Problem…",
+            action: #selector(openProblemReport(_:)),
+            keyEquivalent: ""
+        )
+        .target = self
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 480, height: 320),
@@ -133,7 +145,7 @@ private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "APKRun Launcher"
+        window.title = LauncherStrings.text("APKRun Launcher")
         window.center()
         window.contentView = NSView()
         window.makeKeyAndOrderFront(nil)
@@ -157,6 +169,18 @@ private final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
             // returns `packageNotInstalled`; the launcher offers the bundled
             // install and then repeats `openSession` (retried by #45).
             _ = await bootstrapInstall.offerInstall()
+        }
+    }
+
+    @objc private func openProblemReport(_ sender: NSMenuItem) {
+        var components = URLComponents(string: "apkrun://report")
+        if let packageID = bootstrapInstall?.bundledPackageID {
+            components?.queryItems = [
+                URLQueryItem(name: "package", value: packageID)
+            ]
+        }
+        if let url = components?.url {
+            NSWorkspace.shared.open(url)
         }
     }
 

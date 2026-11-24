@@ -65,6 +65,20 @@ public enum WrapperCodeSign {
             nil) == errSecSuccess
     }
 
+    /// The team identifier recorded in the bundle's code signature, or `nil`
+    /// when it is unsigned (wrapper.md §11 `DistributionWrapperResult.teamID`).
+    public static func teamID(of bundleURL: URL) -> String? {
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(bundleURL as CFURL, [], &staticCode) == errSecSuccess,
+            let code = staticCode
+        else { return nil }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(code, [], &info) == errSecSuccess,
+            let dictionary = info as? [String: Any]
+        else { return nil }
+        return dictionary[kSecCodeInfoTeamIdentifier as String] as? String
+    }
+
     /// Whether a Mach-O file is an arm64 executable or a universal binary that
     /// includes arm64 (wrapper.md §5.1).
     public static func isARM64(_ url: URL) -> Bool {

@@ -2986,7 +2986,6 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
         home_path=short_private_home,
         adb_interval=60.0,
     )
-    observer.deadline = time.monotonic() + 25
     server_ready = tmp_path / "adb-server-ready"
     server_stopped = tmp_path / "adb-server-stopped"
     server_socket_file = tmp_path / "adb-server-socket"
@@ -3052,6 +3051,10 @@ def test_boot_observer_runs_one_logcat_probe_in_the_final_deadline_window(
     monkeypatch.setenv("FAKE_ADB_CALLS", str(calls))
     launcher_log.write_bytes(START_EVENT_LOG_LINE)
 
+    # Start the final-window clock as late as possible: fixture setup above can
+    # take seconds on a loaded CI runner, and an early deadline leaves the
+    # logcat probe too little room for its connect to finish.
+    observer.deadline = time.monotonic() + 25
     observer.start()
     observer.sample(now=0)
     deadline = time.monotonic() + 30

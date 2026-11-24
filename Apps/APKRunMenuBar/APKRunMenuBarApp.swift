@@ -74,6 +74,16 @@ private struct MenuBarMenuView: View {
                     .foregroundStyle(.secondary)
             }
 
+            // desktop-integration.md §8.2: show each recording app.
+            ForEach(model.recordingPackages, id: \.self) { packageID in
+                let name = model.packageDisplayNames[packageID] ?? packageID
+                Label(
+                    String(localized: "\(name) is using the microphone"),
+                    systemImage: "mic.fill"
+                )
+                .accessibilityLabel(Text(String(localized: "\(name) is using the microphone")))
+            }
+
             Divider()
 
             Section("Apps") {

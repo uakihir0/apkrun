@@ -503,8 +503,19 @@ final class AppRouterTests: XCTestCase {
             .settings(pane: "updates"))
     }
 
+    func testReportRoutesOpenSheet() {
+        XCTAssertEqual(
+            AppRouter.route(URL(string: "apkrun://report")!),
+            .report(package: nil))
+        XCTAssertEqual(
+            AppRouter.route(
+                URL(string: "apkrun://report?package=com.example.a")!),
+            .report(package: RuntimePackageID(rawValue: "com.example.a")))
+        XCTAssertNil(
+            AppRouter.route(URL(string: "apkrun://report?package=not a package")!))
+    }
+
     func testUnknownRoutesLandHome() {
-        XCTAssertEqual(AppRouter.route(URL(string: "apkrun://report")!), .home)
         XCTAssertEqual(AppRouter.route(URL(string: "apkrun://bogus/x")!), .home)
         XCTAssertEqual(
             AppRouter.route(URL(string: "apkrun://settings/nonsense")!),

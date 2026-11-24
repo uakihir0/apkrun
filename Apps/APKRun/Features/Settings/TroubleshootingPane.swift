@@ -3,15 +3,60 @@ import SwiftUI
 
 /// The Troubleshooting pane of the Settings scene (host-ui.md §9.8).
 ///
-/// Only **Refresh Dock Icons** is in scope here (wrapper.md §8.5): it
-/// restarts the Dock after a confirmation and is never run automatically.
-/// The `apkrun doctor` report, diagnostics bundles, graphics safe mode, and
-/// **Reset Android…** land with #60 and #58.
+/// Shows the `apkrun doctor` health report with **Run Again**, **Deep
+/// Check**, and **Fix** actions. Diagnostics bundles and **Reset Android…**
+/// land with #61.
 struct TroubleshootingPane: View {
     @State private var confirmDockRestart = false
+    @State private var model = TroubleshootingModel()
 
     var body: some View {
         Form {
+            Section {
+                if model.rows.isEmpty, !model.isRunning, model.errorMessage == nil {
+                    Text("No health report yet.")
+                        .foregroundStyle(.secondary)
+                }
+                if !model.statusLine.isEmpty {
+                    Text(model.statusLine)
+                }
+                ForEach(model.rows, id: \.id) { row in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(symbol(row.state)) \(row.id) — \(row.title.fallback)")
+                        if let detail = row.detail, !detail.isEmpty {
+                            Text(detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if let error = model.errorMessage {
+                    Text(error).foregroundStyle(.red)
+                }
+            } header: {
+                HStack {
+                    Text("Health")
+                    Spacer()
+                    Button("Run Again") { Task { await model.check() } }
+                        .disabled(model.isRunning)
+                    Button("Deep Check") { Task { await model.check(deep: true) } }
+                        .disabled(model.isRunning)
+                    Button("Fix") { Task { await model.fix() } }
+                        .disabled(model.isRunning)
+                    // Opens the report sheet through the apkrun:// route
+                    // (diagnostics.md §8.5).
+                    Button("Create Diagnostics Report…") {
+                        if let url = URL(string: "apkrun://report") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                }
+            } footer: {
+                if model.isRunning {
+                    Text("Checking…")
+                }
+            }
+
             Section {
                 Button("Refresh Dock Icons…") {
                     confirmDockRestart = true
@@ -24,6 +69,7 @@ struct TroubleshootingPane: View {
             }
         }
         .padding()
+        .task { await model.check() }
         .confirmationDialog(
             "Restart the Dock?",
             isPresented: $confirmDockRestart,
@@ -41,5 +87,16 @@ struct TroubleshootingPane: View {
         task.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
         task.arguments = ["Dock"]
         try? task.run()
+    }
+
+    /// The doctor status symbol (diagnostics.md §7.3).
+    private func symbol(_ state: String) -> String {
+        switch state {
+        case "pass": "✓"
+        case "info": "ℹ"
+        case "warning": "⚠"
+        case "failure": "✕"
+        default: "–"
+        }
     }
 }

@@ -137,6 +137,8 @@ class Dispatcher(
                             .setGuestUptimeMs(uptimeMillis())
                     )
                     .build()
+            Request.OpCase.GET_HEALTH ->
+                Response.newBuilder().setGetHealth(operations.health()).build()
             Request.OpCase.GET_SNAPSHOT ->
                 Response.newBuilder().setGetSnapshot(operations.snapshot()).build()
             Request.OpCase.SET_DISPLAY_POLICY -> {
@@ -220,6 +222,10 @@ class Dispatcher(
                 operations.setUrlRedirect(request.setUrlRedirect)
                 Response.newBuilder().setSetUrlRedirect(Empty.getDefaultInstance()).build()
             }
+            Request.OpCase.SET_MICROPHONE_ACCESS -> {
+                operations.setMicrophoneAccess(request.setMicrophoneAccess)
+                Response.newBuilder().setSetMicrophoneAccess(Empty.getDefaultInstance()).build()
+            }
             Request.OpCase.RESOLVE_URL -> {
                 operations.resolveUrl(request.resolveUrl)
                 Response.newBuilder().setResolveUrl(Empty.getDefaultInstance()).build()
@@ -271,7 +277,8 @@ class Dispatcher(
         fun requiredCapability(request: Request): GuestCapability? =
             when (request.opCase) {
                 Request.OpCase.PING,
-                Request.OpCase.GET_SNAPSHOT -> GuestCapability.CORE
+                Request.OpCase.GET_SNAPSHOT,
+                Request.OpCase.GET_HEALTH -> GuestCapability.CORE
                 Request.OpCase.SET_DISPLAY_POLICY,
                 Request.OpCase.CLEAR_DISPLAY -> GuestCapability.DISPLAY
                 Request.OpCase.LAUNCH_APPLICATION,
@@ -297,6 +304,7 @@ class Dispatcher(
                 Request.OpCase.SET_NOTIFICATION_FORWARDING -> GuestCapability.NOTIFICATIONS
                 Request.OpCase.SET_URL_REDIRECT,
                 Request.OpCase.RESOLVE_URL -> GuestCapability.URL
+                Request.OpCase.SET_MICROPHONE_ACCESS -> GuestCapability.MICROPHONE
                 Request.OpCase.IMPORT_FILES,
                 Request.OpCase.RESOLVE_EXPORT -> GuestCapability.FILES
                 Request.OpCase.SET_SHARED_FOLDER_ACCESS -> GuestCapability.FILES_SHARED

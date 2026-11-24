@@ -1,6 +1,7 @@
 import APKStoreCore
 import Foundation
 import RuntimeAPI
+import RuntimeCore
 import Testing
 import UpdateCore
 
@@ -59,7 +60,7 @@ private actor FakeSessionHandling: RuntimeSessionService, PackageMutationSession
         lastEndAt[packageID.rawValue]
     }
 
-    func endSessionForUpdate(packageID: RuntimePackageID) {
+    func endSessionForUpdate(packageID: RuntimePackageID, reason: SessionEndReason) {
         endedForUpdate.append(packageID.rawValue)
         liveSessions.remove(packageID.rawValue)
         lastEndAt[packageID.rawValue] = .now

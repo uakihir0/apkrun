@@ -175,10 +175,10 @@ public actor RuntimeControlClient {
     }
 
     /// Starts Android and waits until the daemon reports it ready.
-    public func startRuntime() async throws(RuntimeControlClientError) -> RuntimeHostStatus {
+    public func startRuntime(hold: Bool = false) async throws(RuntimeControlClientError) -> RuntimeHostStatus {
         let opened = try await ensureControl()
         do {
-            let request = StartRuntimeRequest(header: makeHeader())
+            let request = StartRuntimeRequest(header: makeHeader(), hold: hold ? true : nil)
             let data = try Self.encode(request)
             return try Self.decodeControlReply(from: await opened.channel.startRuntime(data))
         } catch {
@@ -403,6 +403,27 @@ public actor RuntimeControlClient {
             let data = try Self.encode(controlRequest)
             let response = try await opened.channel.terminate(data)
             return try Self.decodeTerminateReply(from: response)
+        } catch {
+            invalidateAfterTransportFailure(opened.channel, error: error)
+            throw error
+        }
+    }
+
+    /// Closes the package's session with `policy` (display-and-windowing.md
+    /// §7.6); `nil` lets the daemon apply the saved `window.closeBehavior`.
+    public func closeSession(_ request: RuntimeCloseSessionRequest) async throws(RuntimeControlClientError)
+        -> RuntimeCloseSessionResult
+    {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeCloseSessionControlRequest(
+                header: makeHeader(),
+                packageID: request.packageID,
+                policy: request.policy
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.closeSession(data)
+            return try Self.decodeCloseSessionReply(from: response, packageID: request.packageID)
         } catch {
             invalidateAfterTransportFailure(opened.channel, error: error)
             throw error
@@ -1168,6 +1189,79 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// Starts a distribution-wrapper build on the daemon and returns the
+    /// operation handle (wrapper.md §11; runtime-api.md §10.8). API 1.36+.
+    ///
+    /// `icon` carries the optional custom icon file sent next to the
+    /// request. A transport failure is reconciled through `operationStatus`
+    /// like every other long operation.
+    public func buildDistributionWrapper(
+        _ request: DistributionWrapperRequest,
+        icon: FileHandle?,
+        operationID: OperationID
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let requestFingerprint: String
+        do {
+            requestFingerprint = try RuntimeOperationRequestFingerprint.make(for: request)
+        } catch {
+            throw .encodingFailure
+        }
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeBuildDistributionWrapperControlRequest(
+                header: APIRequestHeader(
+                    operationID: operationID.rawValue,
+                    clientKind: configuration.clientKind
+                ),
+                request: request
+            )
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.buildDistributionWrapper(data, icon: icon)
+            let reply = try Self.decode(
+                RuntimeBuildDistributionWrapperControlReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let handle = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            guard handle.operationID == operationID, handle.kind == .distributionWrapper else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return handle
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            switch clientError {
+            case .transportFailure, .requestTimedOut, .requestCancelled, .malformedReply, .invalidRemoteProxy:
+                do {
+                    let snapshot = try await operationStatus(operationID)
+                    guard snapshot.operationID == operationID,
+                        snapshot.kind == .distributionWrapper,
+                        snapshot.packageID == request.packageID,
+                        snapshot.requestFingerprint == requestFingerprint
+                    else {
+                        throw RuntimeControlClientError.operationResultUnknown(
+                            operation: "buildDistributionWrapper"
+                        )
+                    }
+                    return OperationHandle(
+                        operationID: snapshot.operationID,
+                        parent: snapshot.parent,
+                        kind: snapshot.kind
+                    )
+                } catch {
+                    throw RuntimeControlClientError.operationResultUnknown(
+                        operation: "buildDistributionWrapper"
+                    )
+                }
+            default:
+                throw clientError
+            }
+        }
+    }
+
     /// Completes a staged wrapper placement after the client moved the
     /// bundle into the protected folder (wrapper.md §6.3). API 1.18+.
     public func placeStagedWrapper(
@@ -1868,6 +1962,83 @@ public actor RuntimeControlClient {
         }
     }
 
+    /// The self-update probe snapshot (runtime-api.md §12.2).
+    public func selfUpdateStatus() async throws(RuntimeControlClientError) -> SelfUpdateStatus {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = SelfUpdateStatusRequest(header: makeHeader())
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.selfUpdateStatus(data)
+            let reply = try Self.decode(SelfUpdateStatusReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let status = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return status
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Reports Sparkle's result to the daemon (runtime-api.md §12.2).
+    /// Only APKRun.app may call this.
+    public func noteSelfUpdateStatus(
+        found: AvailableRelease?,
+        pendingOnQuit: Bool,
+        checkedAt: Date
+    ) async throws(RuntimeControlClientError) {
+        let opened = try await ensureControl()
+        do {
+            let note = SelfUpdateNote(
+                header: makeHeader(),
+                found: found,
+                pendingOnQuit: pendingOnQuit,
+                checkedAt: checkedAt)
+            let data = try Self.encode(note)
+            let response = try await opened.channel.noteSelfUpdateStatus(data)
+            let reply = try Self.decode(SelfUpdateNoteReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Runs the self-update probe as a user-initiated check (runtime-api.md §12.2).
+    public func checkSelfUpdate(
+        userInitiated: Bool = true
+    ) async throws(RuntimeControlClientError) -> SelfUpdateStatus {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = CheckSelfUpdateRequest(
+                header: makeHeader(), userInitiated: userInitiated)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.checkSelfUpdate(data)
+            let reply = try Self.decode(SelfUpdateStatusReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let status = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return status
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
     /// Rolls the package back to its previous version (update-system §7).
     public func rollbackPackage(
         packageID: RuntimePackageID,
@@ -1974,6 +2145,182 @@ public actor RuntimeControlClient {
                 throw RuntimeControlClientError.malformedReply
             }
             return (operation, reply.outcome)
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Installs an Android image from an `.aar` (runtime-maintenance.md §4.7).
+    /// Returns the installed image version.
+    public func installImage(
+        file: FileHandle, assumeYes: Bool = false
+    ) async throws(RuntimeControlClientError) -> String {
+        let opened = try await ensureControl()
+        do {
+            let data = try Self.encode(
+                WireImageInstallRequest(header: makeHeader(), assumeYes: assumeYes))
+            let response = try await opened.channel.installImage(data, files: [file])
+            let reply = try Self.decode(WireImageInstallReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let version = reply.version else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return version
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// The image update status (`apkrun image list`).
+    public func imageStatus() async throws(RuntimeControlClientError) -> WireImageStatus {
+        let opened = try await ensureControl()
+        do {
+            let data = try Self.encode(WireImageStatusRequest(header: makeHeader()))
+            let response = try await opened.channel.imageStatus(data)
+            let reply = try Self.decode(WireImageStatusReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            guard let status = reply.status else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return status
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Applies the named `ready` image (`apkrun image apply`).
+    public func applyImage(version: String) async throws(RuntimeControlClientError) {
+        _ = try await imageAction(
+            WireImageApplyRequest(header: makeHeader(), version: version),
+            on: { try await $0.applyImage($1) })
+    }
+
+    /// Goes back to the previous image (`apkrun image rollback`). Returns the
+    /// server-side result line.
+    public func rollbackImage() async throws(RuntimeControlClientError) -> String {
+        try await imageAction(
+            WireImageRollbackRequest(header: makeHeader()),
+            on: { try await $0.rollbackImage($1) })
+    }
+
+    /// The daemon's health report (`apkrun doctor`; runtime-api.md §13).
+    public func healthReport(
+        deep: Bool = false, checks: [String]? = nil
+    ) async throws(RuntimeControlClientError) -> WireHealthReport {
+        try await healthCall(
+            HealthRequest(header: makeHeader(), deep: deep, checks: checks),
+            on: { try await $0.healthReport($1) })
+    }
+
+    /// Applies the safe repairs of failed checks (`apkrun doctor --fix`).
+    /// An empty `checks` fixes every fixable failure.
+    public func applyHealthFixes(
+        checks: [String] = []
+    ) async throws(RuntimeControlClientError) -> WireHealthReport {
+        try await healthCall(
+            HealthFixRequest(header: makeHeader(), checks: checks),
+            on: { try await $0.applyHealthFixes($1) })
+    }
+
+    /// Starts a diagnostics report (diagnostics.md §8.1). `output` is the
+    /// ZIP the client opened; the daemon writes into it and never opens a
+    /// user-chosen path. Returns the operation's handle; progress and the
+    /// result arrive on the operations topic.
+    public func createDiagnostics(
+        _ request: DiagnosticsRequest,
+        output: FileHandle
+    ) async throws(RuntimeControlClientError) -> OperationHandle {
+        let opened = try await ensureControl()
+        do {
+            let controlRequest = RuntimeCreateDiagnosticsControlRequest(
+                header: makeHeader(), request: request)
+            let data = try Self.encode(controlRequest)
+            let response = try await opened.channel.createDiagnostics(
+                data, files: [output])
+            let reply = try Self.decode(
+                RuntimeCreateDiagnosticsControlReply.self, from: response)
+            guard (reply.result != nil) != (reply.error != nil) else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message,
+                    parameters: failure.parameters)
+            }
+            guard let result = reply.result else {
+                throw RuntimeControlClientError.malformedReply
+            }
+            return result
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    private func healthCall<Request: Encodable>(
+        _ request: Request,
+        on call: @escaping (any RuntimeControlChannel, Data) async throws -> Data
+    ) async throws(RuntimeControlClientError) -> WireHealthReport {
+        let opened = try await ensureControl()
+        do {
+            let data = try Self.encode(request)
+            let response = try await call(opened.channel, data)
+            let report = try Self.decode(WireHealthReport.self, from: response)
+            if let failure = report.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message,
+                    parameters: failure.parameters)
+            }
+            return report
+        } catch {
+            let clientError = Self.clientError(from: error)
+            invalidateAfterTransportFailure(opened.channel, error: clientError)
+            throw clientError
+        }
+    }
+
+    /// Runs a user-initiated feed action (`apkrun image check`,
+    /// `apkrun image install --latest`). Returns the result line.
+    public func imageFeedAction(_ action: String) async throws(RuntimeControlClientError) -> String {
+        try await imageAction(
+            WireImageFeedActionRequest(header: makeHeader(), action: action),
+            on: { try await $0.imageFeedAction($1) })
+    }
+
+    /// Deletes one recovery point (`apkrun image recovery-points delete`).
+    public func deleteImageRecoveryPoint(name: String) async throws(RuntimeControlClientError) {
+        _ = try await imageAction(
+            WireImageRecoveryPointDeleteRequest(header: makeHeader(), name: name),
+            on: { try await $0.deleteImageRecoveryPoint($1) })
+    }
+
+    private func imageAction<Request: Encodable>(
+        _ request: Request,
+        on call: @escaping (any RuntimeControlChannel, Data) async throws -> Data
+    ) async throws(RuntimeControlClientError) -> String {
+        let opened = try await ensureControl()
+        do {
+            let data = try Self.encode(request)
+            let response = try await call(opened.channel, data)
+            let reply = try Self.decode(WireImageApplyReply.self, from: response)
+            if let failure = reply.error {
+                throw RuntimeControlClientError.remoteFailure(
+                    code: failure.code, message: failure.message, parameters: failure.parameters)
+            }
+            return reply.result ?? "Done."
         } catch {
             let clientError = Self.clientError(from: error)
             invalidateAfterTransportFailure(opened.channel, error: clientError)
@@ -2825,6 +3172,22 @@ public actor RuntimeControlClient {
         return result
     }
 
+    private static func decodeCloseSessionReply(
+        from data: Data, packageID: RuntimePackageID
+    ) throws(RuntimeControlClientError) -> RuntimeCloseSessionResult {
+        let reply = try Self.decode(RuntimeCloseSessionControlReply.self, from: data)
+        guard (reply.hadSession != nil) != (reply.error != nil) else {
+            throw .malformedReply
+        }
+        if let failure = reply.error {
+            throw .remoteFailure(code: failure.code, message: failure.message, parameters: failure.parameters)
+        }
+        guard let hadSession = reply.hadSession else {
+            throw .malformedReply
+        }
+        return RuntimeCloseSessionResult(packageID: packageID, hadSession: hadSession)
+    }
+
     private static func decodePackageListReply(from data: Data) throws(RuntimeControlClientError)
         -> RuntimePackageListResult
     {
@@ -3082,10 +3445,14 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func unsubscribe(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func launch(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func terminate(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func closeSession(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func verifyWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data
 
     /// Starts a wrapper generation; the reply carries the operation handle.
     func createWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data
+    /// Starts a distribution build; the reply carries the operation handle
+    /// (wrapper.md §11).
+    func buildDistributionWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data
     /// Finishes a staged wrapper placement (wrapper.md §6.3).
     func placeStagedWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Returns the registry row of one package's wrapper (runtime-api.md §10.2).
@@ -3175,8 +3542,26 @@ protocol RuntimeControlChannel: AnyObject, Sendable {
     func updateSkipped(_ request: Data) async throws(RuntimeControlClientError) -> Data
     /// Checks and installs a package update now, optionally from files (runtime-api.md §9.1).
     func updatePackage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
+    /// Installs an Android image `.aar` (runtime-maintenance.md §4.7).
+    func installImage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data
+    func imageStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func applyImage(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func rollbackImage(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func imageFeedAction(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func deleteImageRecoveryPoint(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Health report (`apkrun doctor`; runtime-api.md §13).
+    func healthReport(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Safe health repairs (`apkrun doctor --fix`).
+    func applyHealthFixes(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    /// Starts a diagnostics report; the output handle rides beside the
+    /// request (diagnostics.md §8.1).
+    func createDiagnostics(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError)
+        -> Data
     func getConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func setConfig(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func selfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func noteSelfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data
+    func checkSelfUpdate(_ request: Data) async throws(RuntimeControlClientError) -> Data
     func setConnectionEventHandler(_ handler: @escaping @Sendable () -> Void)
     func invalidate()
 }
@@ -3196,9 +3581,13 @@ protocol RuntimeXPCConnectionFactory: Sendable {
         signingRequirement: String,
         eventSink: RuntimeEventSinkReceiver
     ) throws(RuntimeControlClientError) -> any RuntimeControlChannel
+    func makeMaintenance(
+        endpoint: RuntimeXPCListenerEndpoint,
+        signingRequirement: String
+    ) throws(RuntimeControlClientError) -> any RuntimeMaintenanceChannel
 }
 
-private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
+struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
     func makeBroker(
         serviceName: String,
         signingRequirement: String
@@ -3227,6 +3616,21 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
             exportedObject: eventSink
         )
         return XPCControlChannel(connection: connection)
+    }
+
+    func makeMaintenance(
+        endpoint: RuntimeXPCListenerEndpoint,
+        signingRequirement: String
+    ) throws(RuntimeControlClientError) -> any RuntimeMaintenanceChannel {
+        guard let listenerEndpoint = endpoint.value as? NSXPCListenerEndpoint else {
+            throw .malformedReply
+        }
+        let connection = configuredConnection(
+            NSXPCConnection(listenerEndpoint: listenerEndpoint),
+            interface: NSXPCInterface(with: RuntimeMaintenanceXPC.self),
+            signingRequirement: signingRequirement
+        )
+        return XPCMaintenanceChannel(connection: connection)
     }
 
     private func configuredConnection(
@@ -3290,6 +3694,12 @@ private struct SystemRuntimeXPCConnectionFactory: RuntimeXPCConnectionFactory {
         interface.setClasses(
             fileClasses,
             for: #selector(RuntimeControlXPC.acceptExport(_:files:reply:)),
+            argumentIndex: 1,
+            ofReply: false
+        )
+        interface.setClasses(
+            fileClasses,
+            for: #selector(RuntimeControlXPC.createDiagnostics(_:files:reply:)),
             argumentIndex: 1,
             ofReply: false
         )
@@ -3825,6 +4235,20 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
         }
     }
 
+    func closeSession(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.closeSession(request) { response in finish(.success(response)) }
+        }
+    }
+
     func verifyWrapper(_ request: Data) async throws(RuntimeControlClientError) -> Data {
         try await withXPCReply { finish in
             let proxy =
@@ -3851,6 +4275,24 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
                 return
             }
             proxy.createWrapper(request, icon: icon) { response in finish(.success(response)) }
+        }
+    }
+
+    /// Starts a distribution build; the reply carries the operation handle
+    /// (wrapper.md §11).
+    func buildDistributionWrapper(_ request: Data, icon: FileHandle?) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.buildDistributionWrapper(request, icon: icon) { response in
+                finish(.success(response))
+            }
         }
     }
 
@@ -4357,6 +4799,136 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
         }
     }
 
+    func installImage(_ request: Data, files: [FileHandle]) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.installImage(request, files: files) { response in finish(.success(response)) }
+        }
+    }
+
+    func imageStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.imageStatus(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func applyImage(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.applyImage(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func rollbackImage(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.rollbackImage(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func imageFeedAction(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.imageFeedAction(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func healthReport(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.healthReport(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func applyHealthFixes(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.applyHealthFixes(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func createDiagnostics(
+        _ request: Data, files: [FileHandle]
+    ) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.createDiagnostics(request, files: files) { response in
+                finish(.success(response))
+            }
+        }
+    }
+
+    func deleteImageRecoveryPoint(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.deleteImageRecoveryPoint(request) { response in finish(.success(response)) }
+        }
+    }
+
     func invalidate() {
         connection.invalidate()
     }
@@ -4397,6 +4969,48 @@ private final class XPCControlChannel: RuntimeControlChannel, @unchecked Sendabl
         }
     }
 
+    func selfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.selfUpdateStatus(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func noteSelfUpdateStatus(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.noteSelfUpdateStatus(request) { response in finish(.success(response)) }
+        }
+    }
+
+    func checkSelfUpdate(_ request: Data) async throws(RuntimeControlClientError) -> Data {
+        try await withXPCReply { finish in
+            let proxy =
+                connection.remoteObjectProxyWithErrorHandler { error in
+                    finish(.failure(Self.transportFailure(error)))
+                } as? any RuntimeControlXPC
+            guard let proxy else {
+                finish(.failure(.invalidRemoteProxy))
+                return
+            }
+            proxy.checkSelfUpdate(request) { response in finish(.success(response)) }
+        }
+    }
+
     private static func transportFailure(_ error: any Error) -> RuntimeControlClientError {
         let error = error as NSError
         return .transportFailure(domain: error.domain, code: error.code)
@@ -4415,7 +5029,7 @@ private final class RuntimeXPCConnectionEventRelay: @unchecked Sendable {
     }
 }
 
-private final class XPCReplyGate: @unchecked Sendable {
+final class XPCReplyGate: @unchecked Sendable {
     private let lock = NSLock()
     private var didComplete = false
 
@@ -4433,7 +5047,7 @@ private final class XPCReplyGate: @unchecked Sendable {
     }
 }
 
-private func withXPCReply<Value: Sendable>(
+func withXPCReply<Value: Sendable>(
     _ invoke: (@escaping (Result<Value, RuntimeControlClientError>) -> Void) -> Void
 ) async throws(RuntimeControlClientError) -> Value {
     do {

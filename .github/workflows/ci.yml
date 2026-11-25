@@ -263,10 +263,23 @@ jobs:
       - name: Verify graphics libraries and public headers
         run: scripts/build-third-party.sh virgl-runtime
       - name: Run Swift T0 tests
-        run: >-
-          swift test --skip 'SystemTests' -j 2
-          --experimental-maximum-parallelization-width 2
-          --xunit-output build/ci/swift-tests.xml
+        run: |
+          mkdir -p build/ci
+          set +e
+          swift test --skip 'SystemTests' -j 2 \
+            --experimental-maximum-parallelization-width 2 \
+            --xunit-output build/ci/swift-tests.xml 2>&1 | tee build/ci/swift-tests.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [[ $status -ne 0 ]]; then
+            # Job logs need a signed-in viewer even for public repositories;
+            # echo the failures into the public annotations instead.
+            grep -E "✘|error:" build/ci/swift-tests.log | head -40 | while IFS= read -r line; do
+              line="${line//'%'/'%25'}"
+              printf '::error::%s\n' "$line"
+            done
+            exit "$status"
+          fi
       - name: Upload test results on failure
         if: failure()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
@@ -320,11 +333,44 @@ jobs:
           swift -e 'import Metal; guard MTLCreateSystemDefaultDevice() != nil
           else { fatalError("runnerMissingMetal") }'
       - name: Run Metal and VirGL T1 tests
-        run: swift test --filter GraphicsCoreSystemTests -j 2
+        run: |
+          set +e
+          swift test --filter GraphicsCoreSystemTests -j 2 2>&1 | tee build/ci/graphics-tests.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [[ $status -ne 0 ]]; then
+            grep -E "✘|error:" build/ci/graphics-tests.log | head -40 | while IFS= read -r line; do
+              line="${line//'%'/'%25'}"
+              printf '::error::%s\n' "$line"
+            done
+            exit "$status"
+          fi
       - name: Run Metal and VirGL T1 tests with Address Sanitizer
-        run: swift test --sanitize=address --filter GraphicsCoreSystemTests -j 2
+        run: |
+          set +e
+          swift test --sanitize=address --filter GraphicsCoreSystemTests -j 2 2>&1 | tee build/ci/graphics-tests-asan.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [[ $status -ne 0 ]]; then
+            grep -E "✘|error:" build/ci/graphics-tests-asan.log | head -40 | while IFS= read -r line; do
+              line="${line//'%'/'%25'}"
+              printf '::error::%s\n' "$line"
+            done
+            exit "$status"
+          fi
       - name: Run Metal and VirGL T1 tests with Undefined Behavior Sanitizer
-        run: swift test --sanitize=undefined --filter GraphicsCoreSystemTests -j 2
+        run: |
+          set +e
+          swift test --sanitize=undefined --filter GraphicsCoreSystemTests -j 2 2>&1 | tee build/ci/graphics-tests-ubsan.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [[ $status -ne 0 ]]; then
+            grep -E "✘|error:" build/ci/graphics-tests-ubsan.log | head -40 | while IFS= read -r line; do
+              line="${line//'%'/'%25'}"
+              printf '::error::%s\n' "$line"
+            done
+            exit "$status"
+          fi
 
   test-images:
     name: test-images

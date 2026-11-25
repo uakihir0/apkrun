@@ -347,15 +347,22 @@ install_protoc_gen_swift() {
         return
     fi
 
-    if ! swift package --package-path "$repo_root" resolve; then
-        report FAIL "protoc-gen-swift" "swift package resolve failed"
-        failures=$((failures + 1))
-        return
+    # Fetch only swift-protobuf instead of resolving the whole workspace:
+    # the full resolve downloads every dependency of every package and has
+    # proven fragile on throttled CI networks. swift-protobuf itself has no
+    # external dependencies, so a shallow fetch of the pinned revision is
+    # enough to build the plugin.
+    echo "== bootstrap: fetching swift-protobuf at ${revision:0:12} ($(date -u +%H:%M:%SZ))"
+    checkout="$tools_dir/swift-protobuf-checkout"
+    if [[ ! -d "$checkout/.git" ]]; then
+        rm -rf "$checkout"
+        mkdir -p "$checkout"
+        git -C "$checkout" init -q
+        git -C "$checkout" remote add origin https://github.com/apple/swift-protobuf.git
     fi
-
-    checkout="$repo_root/.build/checkouts/swift-protobuf"
-    if [[ "$(git -C "$checkout" rev-parse HEAD 2>/dev/null || true)" != "$revision" ]]; then
-        report FAIL "protoc-gen-swift" "checkout is not at the revision that Package.resolved pins"
+    if ! git -C "$checkout" fetch --depth 1 origin "$revision" \
+        || ! git -C "$checkout" checkout -q FETCH_HEAD; then
+        report FAIL "protoc-gen-swift" "shallow fetch of the pinned revision failed"
         failures=$((failures + 1))
         return
     fi
@@ -387,9 +394,13 @@ check_protoc_gen_swift() {
 }
 
 if [[ "$check_only" -eq 0 ]]; then
+    echo "== bootstrap: xcodegen ($(date -u +%H:%M:%SZ))"
     install_xcodegen
+    echo "== bootstrap: protoc ($(date -u +%H:%M:%SZ))"
     install_protoc
+    echo "== bootstrap: buf ($(date -u +%H:%M:%SZ))"
     install_buf
+    echo "== bootstrap: protoc-gen-swift ($(date -u +%H:%M:%SZ))"
     install_protoc_gen_swift
 fi
 
@@ -453,8 +464,11 @@ else
     report warning "Free disk" "less than 150 GB is available; image and graphics builds need substantial space"
 fi
 
+echo "== bootstrap: metal toolchain ($(date -u +%H:%M:%SZ))"
 check_metal_toolchain
+echo "== bootstrap: homebrew ($(date -u +%H:%M:%SZ))"
 setup_homebrew_tools
+echo "== bootstrap: python ($(date -u +%H:%M:%SZ))"
 setup_python_tools
 report skip "JDK and Android SDK" "added by #16"
 report skip "Rust and cargo-ndk" "added by #35"

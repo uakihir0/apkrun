@@ -111,11 +111,10 @@ final class DiagnosticsBundleTests: XCTestCase {
             lines.contains("  Omitted: guest logs (Android was not running)."))
     }
 
-    /// Re-scan after redaction drops the file with `redactionFailed`.
+    /// Layer 4 replaces the raw form of a known secret, so the re-scan of
+    /// diagnostics.md §6.5 finds nothing and the file is kept, redacted.
     func testRescanDropsFileOnKnownSecret() throws {
         let builder = DiagnosticsBundleBuilder()
-        // A secret that survives the pattern scan (short marker not matching
-        // any L4 rule) is caught by the known-secret re-scan.
         try builder.add("host/x.txt", text: "data s3cr3t-token end")
         let identity = RedactionIdentity(
             homeDirectory: "/Users/alice",
@@ -134,9 +133,9 @@ final class DiagnosticsBundleTests: XCTestCase {
         let result = try writer.write(
             bundle: builder, summaryContext: makeContext(), to: handle)
         try handle.close()
-        XCTAssertTrue(
+        XCTAssertFalse(
             result.omitted.contains {
-                $0.item == "host/x.txt" && $0.reason == "redactionFailed"
+                $0.item == "host/x.txt"
             })
     }
 

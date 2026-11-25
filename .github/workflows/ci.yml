@@ -216,6 +216,28 @@ jobs:
           CODE_SIGNING_ALLOWED=NO build
       - name: Check Release bundle
         run: scripts/release/check-release-build.sh build/ReleaseDerivedData/Build/Products/Release/APKRun.app
+      - name: Summarize failures
+        if: always()
+        run: |
+          echo "===== failure summary ====="
+          for log in build/ci/*.log; do
+            [ -f "$log" ] || continue
+            echo "--- $log"
+            grep -E "error:|✘|FAILED" "$log" | head -25
+          done
+          if [ -f build/ci/swift-tests.xml ]; then
+            python3 - <<'XEOF'
+          import xml.etree.ElementTree as ET
+          try:
+              root = ET.parse('build/ci/swift-tests.xml').getroot()
+              for tc in root.iter('testcase'):
+                  for f in list(tc):
+                      if f.tag in ('failure', 'error'):
+                          print('XFAIL %s.%s: %s' % (tc.get('classname'), tc.get('name'), (f.get('message') or '').replace(chr(10), ' ')[:300]))
+          except Exception as e:
+              print('xunit parse failed:', e)
+          XEOF
+          fi
       - name: Upload build results on failure
         if: failure()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0

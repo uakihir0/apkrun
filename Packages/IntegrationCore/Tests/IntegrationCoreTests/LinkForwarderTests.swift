@@ -362,7 +362,16 @@ struct LinkForwarderTests {
             Issue.record("expected a prompt")
             return
         }
-        try await Task.sleep(for: .milliseconds(120))
+        // Poll instead of trusting a fixed sleep margin: on a loaded runner
+        // the expiry task can start late.
+        var dropped = false
+        for _ in 0..<100 where !dropped {
+            if rig.channel.resolves.map(\.1) == [.drop] {
+                dropped = true
+            } else {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
         #expect(rig.channel.resolves.map(\.1) == [.drop])
         await #expect(throws: IntegrationFailure.promptTimedOut) {
             try await forwarder.resolvePrompt(

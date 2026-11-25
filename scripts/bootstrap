@@ -7,6 +7,9 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 # shellcheck disable=SC1091
 source "$script_dir/tool-versions.env"
 
+# Never block on a terminal credential prompt in automation; fail fast instead.
+export GIT_TERMINAL_PROMPT=0
+
 # Anonymous GitHub clones from shared CI runners are rate-limited (401).
 # Authenticate every git fetch in this script when a token is available.
 if [[ -n "${GITHUB_TOKEN:-}" ]]; then

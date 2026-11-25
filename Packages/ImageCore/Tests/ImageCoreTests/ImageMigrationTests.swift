@@ -142,7 +142,7 @@ func beginRecordsTheMigrationAndCompleteClearsIt() async throws {
     let name = try await sandbox.service.beginMigration(
         from: source, to: target, images: sandbox.images
     )
-    #expect(name.contains(target.version.description))
+    #expect(name.contains(source.version.description))
 
     let during = try await sandbox.instances.load(image: target)
     #expect(during?.migration == .init(from: source.version, to: target.version))

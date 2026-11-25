@@ -83,11 +83,16 @@ public enum ImageArchiveExtractor {
     }
 
     /// A relative path of a regular file or directory, with no `..` components.
+    /// The archive's own root entry (an empty path of type directory) is the
+    /// destination directory itself and is allowed.
     static func entryAllowed(_ type: ArchiveHeader.EntryType?, path: FilePath) -> Bool {
         guard type == .regularFile || type == .directory else {
             return false
         }
-        guard !path.isEmpty, !path.isAbsolute else {
+        if path.isEmpty {
+            return type == .directory
+        }
+        guard !path.isAbsolute else {
             return false
         }
         return !path.components.contains("..")

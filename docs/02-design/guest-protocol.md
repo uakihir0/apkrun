@@ -199,7 +199,8 @@ A capability is a string `<area>.<feature>.v<n>`. The agent lists what it implem
 | `files.v1` | Guest | `ImportFiles`, `ExportFileOffered`, `ResolveExport` |
 | `files.shared.v1` | Guest | `SetSharedFolderAccess`, the agent → host operations 60–69 (§7.5) |
 | `locale.v1` | Guest | `SetLocale`, `SetTimeZone`, `SetClockFormat`, `SyncTime` |
-| `audio.v1` | Guest | `SetMicrophoneAccess`, `RecordingChanged` |
+| `audio.v1` | Guest | sound output, `RecordingChanged` |
+| `microphone.v1` | Guest | `SetMicrophoneAccess` ([desktop-integration.md](desktop-integration.md) §8.2) |
 | `diagnostics.v1` | Guest | `CollectDiagnostics` |
 | `bulk.v1` | Guest, Store | bulk and artifact stream |
 | `store.install.v1` | Store | `BeginInstall`, `CommitInstall`, `AbandonInstall`, `Uninstall`, install events |

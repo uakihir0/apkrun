@@ -30,7 +30,7 @@ import Testing
 private let designCapabilities: Set<String> = [
     "core.v1", "display.v1", "launch.v1", "input.v1", "input.ack_trace.v1", "ime.v1", "packages.v1", "health.v1",
     "system.v1", "clipboard.text.v1", "clipboard.image.v1", "notifications.v1", "url.v1",
-    "files.v1", "files.shared.v1", "locale.v1", "audio.v1", "diagnostics.v1", "bulk.v1",
+    "files.v1", "files.shared.v1", "locale.v1", "audio.v1", "microphone.v1", "diagnostics.v1", "bulk.v1",
     "store.install.v1", "store.metadata.v1", "store.icon.v1", "store.rollback.v1",
     "store.ownership.v1", "store.constraints.v1",
 ]

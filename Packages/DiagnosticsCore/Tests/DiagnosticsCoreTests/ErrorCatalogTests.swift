@@ -321,6 +321,7 @@ import Testing
                 || entry.code.hasPrefix("integration.")
                 || entry.code.hasPrefix("update.")
                 || entry.code.hasPrefix("store.")
+                || entry.code.hasPrefix("diagnostics.")
                 || entry.code.hasPrefix("update.")
         )
         for text in entry.message?.values ?? [String: String]().values {

@@ -179,8 +179,11 @@ public struct CompatibilityDatabase: Sendable {
             {
                 return false
             }
-            if let range = entry.versionCodes, let versionCode {
-                return range.contains(versionCode)
+            if let range = entry.versionCodes {
+                // A ranged entry only applies when the query names a
+                // version inside the range; a versionless query can only
+                // match the range-less entries.
+                guard let versionCode, range.contains(versionCode) else { return false }
             }
             return true
         }

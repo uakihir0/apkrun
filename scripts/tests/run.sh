@@ -1204,7 +1204,8 @@ def workflow_errors(workflow, trigger_key)
   build_steps = build_job.fetch("steps")
   build_key = build_steps.index { |step| step["id"] == "third-party-key" }
   build_cache = build_steps.index do |step|
-    step["uses"]&.match?(/\Aactions\/cache@[0-9a-f]{40}/)
+    step["uses"]&.match?(/\Aactions\/cache@[0-9a-f]{40}/) &&
+      step.dig("with", "path").to_s.include?("ThirdParty/out")
   end
   build_runtime_check = build_steps.index do |step|
     step["run"] == "scripts/build-third-party.sh virgl-runtime"
@@ -1250,7 +1251,8 @@ def workflow_errors(workflow, trigger_key)
   third_party_bootstrap = third_party_steps.index { |step| step["run"] == "scripts/bootstrap" }
   third_party_key = third_party_steps.index { |step| step["id"] == "third-party-key" }
   third_party_cache = third_party_steps.index do |step|
-    step["uses"]&.match?(/\Aactions\/cache@[0-9a-f]{40}/)
+    step["uses"]&.match?(/\Aactions\/cache@[0-9a-f]{40}/) &&
+      step.dig("with", "path").to_s.include?("ThirdParty/out")
   end
   third_party_build = third_party_steps.index do |step|
     step["run"] == "scripts/build-third-party.sh virgl-runtime"

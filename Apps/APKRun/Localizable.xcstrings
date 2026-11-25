@@ -3281,6 +3281,16 @@
         }
       }
     },
+    "Third-Party Notices": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Third-Party Notices"
+          }
+        }
+      }
+    },
     "This takes a few minutes. You can close this window. ": {
       "localizations": {
         "en": {

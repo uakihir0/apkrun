@@ -37,8 +37,9 @@ enum LauncherStrings {
     private static func splice(_ template: String, _ captures: [String]) -> String {
         var result = template
         for capture in captures {
-            guard let range = result.range(of: #"\\([^)]*?\)"#, options: .regularExpression) else { break }
-            result.replaceSubrange(range, with: capture)
+            guard let open = result.range(of: "\\(") else { break }
+            guard let close = result.range(of: ")", range: open.upperBound..<result.endIndex) else { break }
+            result.replaceSubrange(open.lowerBound..<close.upperBound, with: capture)
         }
         return result
     }

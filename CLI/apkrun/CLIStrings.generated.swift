@@ -37,8 +37,9 @@ enum CLIStrings {
     private static func splice(_ template: String, _ captures: [String]) -> String {
         var result = template
         for capture in captures {
-            guard let range = result.range(of: #"\\([^)]*?\)"#, options: .regularExpression) else { break }
-            result.replaceSubrange(range, with: capture)
+            guard let open = result.range(of: "\\(") else { break }
+            guard let close = result.range(of: ")", range: open.upperBound..<result.endIndex) else { break }
+            result.replaceSubrange(open.lowerBound..<close.upperBound, with: capture)
         }
         return result
     }
@@ -65,6 +66,7 @@ enum CLIStrings {
         "Android inventory: cached from \\(PackageQueryOutput.timestamp(result.observedAt)).": "Android inventory: cached from \\(PackageQueryOutput.timestamp(result.observedAt)).",
         "Android inventory: live (observed \\(PackageQueryOutput.timestamp(result.observedAt))).": "Android inventory: live (observed \\(PackageQueryOutput.timestamp(result.observedAt))).",
         "Android is \\(status.runtimeState).": "Android is \\(status.runtimeState).",
+        "Android is \\(status.runtimeState). Holding until Ctrl-C or SIGTERM.": "Android is \\(status.runtimeState). Holding until Ctrl-C or SIGTERM.",
         "Android is \\(status.runtimeState). No Android data was deleted.": "Android is \\(status.runtimeState). No Android data was deleted.",
         "Android was reset. Managed apps are being reinstalled.": "Android was reset. Managed apps are being reinstalled.",
         "Android will verify the APK signature during installation": "Android will verify the APK signature during installation",
@@ -171,7 +173,6 @@ enum CLIStrings {
         "State: \\(PackageQueryOutput.stateName(summary.state))": "State: \\(PackageQueryOutput.stateName(summary.state))",
         "State: \\(Self.stateText(state))": "State: \\(Self.stateText(state))",
         "Stored APKs: \\(details.files.count), \\(details.artifactBytes) bytes": "Stored APKs: \\(details.files.count), \\(details.artifactBytes) bytes",
-        "The Mac app will contain the APK. Confirm you may redistribute it?": "The Mac app will contain the APK. Confirm you may redistribute it?",
         "The Mac app's icon is the placeholder because ": "The Mac app's icon is the placeholder because ",
         "The display for one package: 0 for compatibility or secondary for a pooled window. Two packages use primary then secondary.": "The display for one package: 0 for compatibility or secondary for a pooled window. Two packages use primary then secondary.",
         "The file is newer than the installed version; use --install to update first. ": "The file is newer than the installed version; use --install to update first. ",
@@ -185,6 +186,7 @@ enum CLIStrings {
         "The result of operation \\(operationID.wireValue) is unknown.": "The result of operation \\(operationID.wireValue) is unknown.",
         "The result of operation \\(snapshot.operationID.wireValue) is unknown.": "The result of operation \\(snapshot.operationID.wireValue) is unknown.",
         "This Mac app contains \\(info.summary.displayName) ": "This Mac app contains \\(info.summary.displayName) ",
+        "This app contains \\(name ?? packageID.rawValue) ": "This app contains \\(name ?? packageID.rawValue) ",
         "This erases all Android apps, their data, and settings. Type \"Reset\" to continue: ": "This erases all Android apps, their data, and settings. Type \"Reset\" to continue: ",
         "Uninstalled \\(packageID.rawValue).": "Uninstalled \\(packageID.rawValue).",
         "Uninstalled \\(packageID.rawValue)\\(keepData ? ": "Uninstalled \\(packageID.rawValue)\\(keepData ? ",
@@ -390,7 +392,6 @@ enum CLIStrings {
         "State: \\(PackageQueryOutput.stateName(summary.state))": "状態: \\(PackageQueryOutput.stateName(summary.state))",
         "State: \\(Self.stateText(state))": "状態: \\(Self.stateText(state))",
         "Stored APKs: \\(details.files.count), \\(details.artifactBytes) bytes": "保存済み APK: \\(details.files.count) 件、\\(details.artifactBytes) バイト",
-        "The Mac app will contain the APK. Confirm you may redistribute it?": "Mac アプリに APK が含まれます。再配布する権利があることを確認しますか？",
         "The Mac app's icon is the placeholder because ": "Mac アプリのアイコンはプレースホルダーです（理由: ",
         "The display for one package: 0 for compatibility or secondary for a pooled window. Two packages use primary then secondary.": "1つのパッケージのディスプレイ: 互換モードは 0、プールウィンドウは secondary。2つのパッケージは primary→secondary。",
         "The file is newer than the installed version; use --install to update first. ": "ファイルはインストール済みより新しいバージョンです。先に --install で更新してください。",

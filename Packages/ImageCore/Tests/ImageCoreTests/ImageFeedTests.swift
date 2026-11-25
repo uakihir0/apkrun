@@ -10,7 +10,7 @@ struct ImageFeedTests {
         sequence: Int = 7,
         channel: String = "stable",
         expiresInSeconds: Double = 3_600,
-        entries: [String] = [ImageFeedTests.entryJSON(version: "2026.11.1")]
+        entries: [String] = [ImageFeedTests.entryJSON(version: "2026.11.1-cf1-arm64")]
     ) -> Data {
         let expires = ISO8601DateFormatter().string(
             from: Date(timeIntervalSinceNow: expiresInSeconds))
@@ -24,7 +24,7 @@ struct ImageFeedTests {
     }
 
     static func entryJSON(
-        version: String = "2026.11.1",
+        version: String = "2026.11.1-cf1-arm64",
         kind: String = "apkrun",
         minRuntime: String = "1.0",
         protoMin: Int = 1, protoMax: Int = 1,
@@ -50,7 +50,7 @@ struct ImageFeedTests {
     }
 
     static func context(
-        current: String = "2026.10.1",
+        current: String = "2026.10.1-cf1-arm64",
         kind: String = "apkrun",
         schema: Int = 1,
         host: String = "1.1",
@@ -78,7 +78,7 @@ struct ImageFeedTests {
         #expect(feed.channel == "stable")
         #expect(feed.sequence == 7)
         #expect(feed.images.count == 1)
-        #expect(feed.images[0].imageVersion == "2026.11.1")
+        #expect(feed.images[0].imageVersion == "2026.11.1-cf1-arm64")
         #expect(feed.images[0].critical == false)
     }
 
@@ -93,7 +93,7 @@ struct ImageFeedTests {
     }
 
     @Test func rejectsTooManyEntries() {
-        let entries = (0..<300).map { _ in Self.entryJSON(version: "2026.11.1") }
+        let entries = (0..<300).map { _ in Self.entryJSON(version: "2026.11.1-cf1-arm64") }
         #expect(throws: ImageFailure.self) {
             try ImageFeed.parse(Self.feedJSON(entries: entries))
         }
@@ -101,7 +101,7 @@ struct ImageFeedTests {
 
     @Test func rejectsMissingArchiveHash() {
         let entry = #"""
-            {"imageVersion":"2026.11.1","kind":"apkrun",
+            {"imageVersion":"2026.11.1-cf1-arm64","kind":"apkrun",
              "publishedAt":"2026-11-01T00:00:00Z",
              "archive":{"url":"https://x.test/a.aar","size":1},
              "expandedSize":2,
@@ -120,14 +120,14 @@ struct ImageFeedTests {
     @Test func picksANewerEntry() throws {
         let feed = try ImageFeed.parse(Self.feedJSON())
         let pick = ImageCandidateSelection.pick(feed: feed, context: Self.context())
-        #expect(pick.candidate?.version.description == "2026.11.1")
+        #expect(pick.candidate?.version.description == "2026.11.1-cf1-arm64")
         #expect(pick.requiresNewerAPKRun == nil)
     }
 
     @Test func c1SkipsSameOrOlder() throws {
         let feed = try ImageFeed.parse(
             Self.feedJSON(entries: [
-                Self.entryJSON(version: "2026.10.1")
+                Self.entryJSON(version: "2026.10.1-cf1-arm64")
             ]))
         let pick = ImageCandidateSelection.pick(feed: feed, context: Self.context())
         #expect(pick.candidate == nil)
@@ -140,7 +140,7 @@ struct ImageFeedTests {
             ]))
         let pick = ImageCandidateSelection.pick(feed: feed, context: Self.context())
         #expect(pick.candidate == nil)
-        #expect(pick.requiresNewerAPKRun?.description == "2026.11.1")
+        #expect(pick.requiresNewerAPKRun?.description == "2026.11.1-cf1-arm64")
     }
 
     @Test func c3SkipsProtocolMismatch() throws {
@@ -168,12 +168,12 @@ struct ImageFeedTests {
                 Self.entryJSON(minSource: "2026.10.9")
             ]))
         let pick = ImageCandidateSelection.pick(
-            feed: feed, context: Self.context(current: "2026.10.1"))
+            feed: feed, context: Self.context(current: "2026.10.1-cf1-arm64"))
         #expect(pick.candidate == nil)
     }
 
     @Test func c5SkipsRejectedUnlessUserChecks() throws {
-        let rejected: Set<ImageVersion> = [ImageVersion("2026.11.1")!]
+        let rejected: Set<ImageVersion> = [ImageVersion("2026.11.1-cf1-arm64")!]
         let feed = try ImageFeed.parse(Self.feedJSON())
         let auto = ImageCandidateSelection.pick(
             feed: feed, context: Self.context(rejected: rejected))
@@ -216,7 +216,7 @@ struct ImageFeedTests {
     }
 
     @Test func bucketIsDeterministicAndUniformEnough() {
-        let version = ImageVersion("2026.11.1")!
+        let version = ImageVersion("2026.11.1-cf1-arm64")!
         var hits = 0
         let total = 10_000
         for _ in 0..<total {

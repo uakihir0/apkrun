@@ -919,7 +919,10 @@ private let goldenDirectory = Bundle.module.resourceURL!.appendingPathComponent(
 }
 
 @Test func doctorHelpMatchesGolden() {
-    #expect(DoctorCommand.helpMessage() == golden("help-doctor.txt"))
+    // helpMessage() keeps its trailing newline; the golden reader trims it.
+    #expect(
+        DoctorCommand.helpMessage().trimmingCharacters(in: .newlines)
+            == golden("help-doctor.txt"))
 }
 
 #if APKRUN_EMBEDDED_RUNTIME

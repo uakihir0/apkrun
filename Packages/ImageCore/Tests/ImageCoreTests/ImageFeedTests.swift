@@ -44,7 +44,7 @@ struct ImageFeedTests {
              "requirements":{"minimumRuntimeVersion":"\(minRuntime)",
                              "guestProtocol":{"min":\(protoMin),"max":\(protoMax)}},
              "userdata":{"schemaVersion":\(schema),"upgradableFrom":[\(upgradable)]},
-             "minimumSourceVersion":"\(minSource)",
+             "upgradeFrom":{"minimumImageVersion":"\(minSource)"},
              "critical":\(critical),"rolloutPercent":\(rollout)}
             """
     }

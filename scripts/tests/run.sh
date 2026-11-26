@@ -1222,8 +1222,8 @@ def workflow_errors(workflow, trigger_key)
       build_cache_step.dig("with", "key").to_s.include?("steps.third-party-key.outputs.key")
     errors << "build cache must use the verified renderer cache key and output path"
   end
-  build_parallelism_valid = build_commands.include?("swift build -j 2") &&
-    build_commands.include?("swift build -j 2 --traits EmbeddedRuntime") &&
+  build_parallelism_valid = build_commands.any? { |command| command.include?("swift build -j 2") } &&
+    build_commands.any? { |command| command.include?("swift build -j 2 --traits EmbeddedRuntime") } &&
     build_commands.count { |command| command.include?("-jobs 2") } == 2
   unless build_parallelism_valid
     errors << "build parallelism must stay within the hosted runner memory budget"

@@ -38,8 +38,17 @@ enum CLIStrings {
         var result = template
         for capture in captures {
             guard let open = result.range(of: "\\(") else { break }
-            guard let close = result.range(of: ")", range: open.upperBound..<result.endIndex) else { break }
-            result.replaceSubrange(open.lowerBound..<close.upperBound, with: capture)
+            var depth = 1
+            var scan = open.upperBound
+            var closeEnd: String.Index?
+            while scan < result.endIndex {
+                if result[scan] == "(" { depth += 1 }
+                if result[scan] == ")" { depth -= 1 }
+                if depth == 0 { closeEnd = result.index(after: scan); break }
+                scan = result.index(after: scan)
+            }
+            guard let closeEnd else { break }
+            result.replaceSubrange(open.lowerBound..<closeEnd, with: capture)
         }
         return result
     }

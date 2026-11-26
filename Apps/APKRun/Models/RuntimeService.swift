@@ -88,6 +88,12 @@ protocol RuntimeService: Sendable {
 }
 
 extension RuntimeControlClient: RuntimeService {
+    /// The client's `startRuntime` carries the `hold` flag of API 1.38; the
+    /// GUI never holds, so the zero-argument requirement forwards here.
+    func startRuntime() async throws -> RuntimeHostStatus {
+        try await startRuntime(hold: false)
+    }
+
     func updatePackage(
         packageID: RuntimePackageID
     ) async throws -> (operation: OperationHandle, outcome: WireUpdateOutcome?) {

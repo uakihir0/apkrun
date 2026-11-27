@@ -402,7 +402,7 @@ func eventHubPreservesEventsAcrossAcknowledgementBackpressure() async throws {
     hub.remove(connectionID: connectionID)
 }
 
-@Test(.timeLimit(.minutes(1)))
+@Test(.timeLimit(.minutes(3)))
 func eventHubKeepsSnapshotReplyAheadOfResyncForBackpressuredEvents() async throws {
     let hub = RuntimeEventHub()
     let sink = RecordingRuntimeEventSink(acknowledgesImmediately: false)
@@ -594,14 +594,16 @@ private final class RecordingRuntimeEventSink: NSObject, RuntimeEventSink, @unch
     }
 }
 
-/// Polls until the sink holds at least `count` envelopes (up to ~5 s). Event
-/// delivery goes through the hub's deferred batch queue, so a fixed sleep is
-/// not enough on a loaded runner.
+/// Polls until the sink holds at least `count` envelopes. Event delivery goes
+/// through the hub's deferred batch queue, so a fixed sleep is not enough on
+/// a loaded runner, and the polls themselves starve when every core is busy:
+/// a nominal 10 ms sleep easily stretches to 100 ms, so size the budget by
+/// the expected count instead of wall time (~15 s at nominal granularity).
 private func waitForEnvelopes(
     _ sink: RecordingRuntimeEventSink,
     count: Int
 ) async throws -> [EventEnvelope] {
-    for _ in 0..<500 {
+    for _ in 0..<1500 {
         let envelopes = try sink.envelopes()
         if envelopes.count >= count { return envelopes }
         try await Task.sleep(for: .milliseconds(10))
@@ -612,7 +614,7 @@ private func waitForEnvelopes(
 /// Polls a condition for ~5 s, e.g. a recorder filled by an asynchronous
 /// snapshot reply.
 private func waitForValue(_ condition: @escaping () -> Bool) async throws {
-    for _ in 0..<500 where !condition() {
+    for _ in 0..<1500 where !condition() {
         try await Task.sleep(for: .milliseconds(10))
     }
 }

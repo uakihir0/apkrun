@@ -65,18 +65,43 @@ toolchain_dirs() {
 }
 sdk_dirs() {
     find /Applications -path '*/Platforms/MacOSX.platform/Developer/SDKs/MacOSX*.sdk' \
-        -maxdepth 9 -type d 2>/dev/null | sort -r
+        -maxdepth 9 -type d 2>/dev/null
 }
 
-sdk=""
-while IFS= read -r candidate_sdk; do
-    sdk="$candidate_sdk"
-    break
-done < <(sdk_dirs)
+# Several Xcodes can coexist, and their SDK paths do not sort by version
+# (Xcode.app sorts after Xcode-27.0-RC.app), so pick the SDK whose
+# SDKSettings.json declares the newest MinimalDisplayName.
+sdk_line="$(sdk_dirs | python3 -c '
+import sys, json
+
+def key(version):
+    parts = []
+    for piece in version.split("."):
+        digits = "".join(c for c in piece if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return parts
+
+best_path, best_key, best_version = "", [], ""
+for line in sys.stdin:
+    path = line.strip()
+    if not path:
+        continue
+    try:
+        with open(path + "/SDKSettings.json") as handle:
+            version = json.load(handle).get("MinimalDisplayName", "")
+    except Exception:
+        continue
+    candidate = key(version)
+    if candidate > best_key:
+        best_path, best_key, best_version = path, candidate, version
+if best_path:
+    print(best_path + "\t" + best_version)
+')"
+sdk="${sdk_line%%$'\t'*}"
+sdk_version="${sdk_line##*$'\t'}"
 [[ -n "$sdk" ]] || { printf 'run-fuzz: no macOS SDK found under /Applications\n' >&2; exit 78; }
 
-sdk_name="$(basename "$sdk")"
-patched="$repo_root/build/fuzz-sdk/$sdk_name"
+patched="$repo_root/build/fuzz-sdk/macOS-$sdk_version"
 if [[ ! -d "$patched" ]]; then
     rm -rf "$repo_root/build/fuzz-sdk"
     mkdir -p "$repo_root/build/fuzz-sdk"

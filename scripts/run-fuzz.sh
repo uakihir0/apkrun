@@ -72,9 +72,9 @@ toolchain_dirs() {
         } | while IFS= read -r t; do
             case "$(basename "$t")" in
                 "$SWIFT_FUZZ_TOOLCHAIN"*)
-                    [[ "$pass" == pinned ]] && printf '%s\n' "$t" ;;
+                    if [[ "$pass" == pinned ]]; then printf '%s\n' "$t"; fi ;;
                 *)
-                    [[ "$pass" == others ]] && printf '%s\n' "$t" ;;
+                    if [[ "$pass" == others ]]; then printf '%s\n' "$t"; fi ;;
             esac
         done
     done

@@ -156,7 +156,28 @@ run_one() {
         --sanitize=fuzzer --sanitize=address --sanitize=undefined
     local bin
     bin="$("$fuzz_swift" build --show-bin-path -c debug | tail -1)/$product"
-    APKRUN_FUZZ_TARGET="$name" "$bin" \
+    # The binary references the sanitizer runtimes through @rpath, and the
+    # link can pick up rpath entries that resolve them to the Xcode clang
+    # runtime instead of the fuzz toolchain's own. Apple clang and swift.org
+    # clang version the ASan ABI check symbols differently, so dyld then
+    # aborts on ___asan_version_mismatch_check before main. Preloading the
+    # toolchain's runtimes binds the matching version regardless of rpath
+    # ordering; when the system runtime already matches, the preload is a
+    # no-op.
+    local clang_rt_dir insert_libs=""
+    for clang_rt_dir in "$(dirname "$fuzz_swift")"/../lib/clang/*/lib/darwin; do
+        [[ -d "$clang_rt_dir" ]] && break
+    done
+    for rt in libclang_rt.asan_osx_dynamic.dylib libclang_rt.ubsan_osx_dynamic.dylib; do
+        if [[ -f "$clang_rt_dir/$rt" ]]; then
+            if [[ -n "$insert_libs" ]]; then
+                insert_libs="$insert_libs:$clang_rt_dir/$rt"
+            else
+                insert_libs="$clang_rt_dir/$rt"
+            fi
+        fi
+    done
+    APKRUN_FUZZ_TARGET="$name" DYLD_INSERT_LIBRARIES="$insert_libs" "$bin" \
         -max_total_time="$seconds" -timeout=10 -rss_limit_mb=2048 \
         -artifact_prefix="$artifacts/" "$corpus"
 }

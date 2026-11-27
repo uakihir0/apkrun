@@ -81,8 +81,11 @@ toolchain_dirs() {
     return 0
 }
 sdk_dirs() {
+    # find exits nonzero when any application bundle denies a scan, even
+    # though it still prints the valid SDKs it found; pipefail would turn
+    # that into a hard failure, so swallow the status here.
     find /Applications -path '*/Platforms/MacOSX.platform/Developer/SDKs/MacOSX*.sdk' \
-        -maxdepth 9 -type d 2>/dev/null
+        -maxdepth 9 -type d 2>/dev/null || true
 }
 
 # Several Xcodes can coexist, and their SDK paths do not sort by version

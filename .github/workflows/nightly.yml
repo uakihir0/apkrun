@@ -38,6 +38,14 @@ jobs:
             exit 1
           fi
       - name: Install pinned repository tools
+        # Anonymous GitHub fetches from shared runners are rate-limited (401);
+        # authenticate every git fetch with the run's token, scoped to this
+        # step so build and test code never sees it.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Run closed acceptance gates
         run: scripts/run-gate.sh G1
@@ -76,6 +84,14 @@ jobs:
             exit 1
           fi
       - name: Install pinned repository tools
+        # Anonymous GitHub fetches from shared runners are rate-limited (401);
+        # authenticate every git fetch with the run's token, scoped to this
+        # step so build and test code never sees it.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Generate Xcode project
         run: scripts/generate-project.sh
@@ -127,6 +143,14 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Install pinned repository tools
+        # Anonymous GitHub fetches from shared runners are rate-limited (401);
+        # authenticate every git fetch with the run's token, scoped to this
+        # step so build and test code never sees it.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Verify corpus signer digests against apksigner
         run: scripts/dev/verify-corpus.sh
@@ -169,6 +193,14 @@ jobs:
           mkdir -p build/notary
           echo "$APKRUN_NOTARY_KEY_P8" | base64 -d > build/notary/key.p8
       - name: Install pinned repository tools
+        # Anonymous GitHub fetches from shared runners are rate-limited (401);
+        # authenticate every git fetch with the run's token, scoped to this
+        # step so build and test code never sees it.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Notarize and staple the Release build smoke check
         run: |
@@ -195,6 +227,14 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Install pinned repository tools
+        # Anonymous GitHub fetches from shared runners are rate-limited (401);
+        # authenticate every git fetch with the run's token, scoped to this
+        # step so build and test code never sees it.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Compute verified build cache key
         id: cache-key

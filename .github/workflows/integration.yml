@@ -38,6 +38,14 @@ jobs:
             exit 1
           fi
       - name: Install pinned repository tools
+        # Anonymous GitHub fetches from shared runners are rate-limited (401);
+        # authenticate every git fetch with the run's token, scoped to this
+        # step so build and test code never sees it.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/bootstrap
       - name: Set temporary guest artifact directory
         run: echo "APKRUN_TEST_LINUX_DIR=$RUNNER_TEMP/apkrun-test-linux" >> "$GITHUB_ENV"

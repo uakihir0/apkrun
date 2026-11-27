@@ -56,12 +56,29 @@ targets=(
 toolchain_dirs() {
     if [[ -d "${SWIFT_FUZZ_TOOLCHAIN:-}" ]]; then
         printf '%s\n' "$SWIFT_FUZZ_TOOLCHAIN"
+        return 0
     fi
-    local dir
-    for dir in "$HOME/Library/Developer/Toolchains" "/Library/Developer/Toolchains"; do
-        [[ -d "$dir" ]] || continue
-        find "$dir" -maxdepth 1 -name '*.xctoolchain' -type d
-    done | sort -r
+    # The pinned prefix comes first: an older toolchain in the user domain
+    # sorts ahead of a newer one in the system domain when the full paths
+    # are compared, but only the pinned generation is known to build and
+    # run the fuzz targets correctly.
+    local dir pass t
+    for pass in pinned others; do
+        {
+            for dir in "$HOME/Library/Developer/Toolchains" "/Library/Developer/Toolchains"; do
+                [[ -d "$dir" ]] || continue
+                find "$dir" -maxdepth 1 -name '*.xctoolchain' -type d
+            done | sort -r
+        } | while IFS= read -r t; do
+            case "$(basename "$t")" in
+                "$SWIFT_FUZZ_TOOLCHAIN"*)
+                    [[ "$pass" == pinned ]] && printf '%s\n' "$t" ;;
+                *)
+                    [[ "$pass" == others ]] && printf '%s\n' "$t" ;;
+            esac
+        done
+    done
+    return 0
 }
 sdk_dirs() {
     find /Applications -path '*/Platforms/MacOSX.platform/Developer/SDKs/MacOSX*.sdk' \

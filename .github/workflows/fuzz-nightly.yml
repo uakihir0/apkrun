@@ -86,6 +86,12 @@ jobs:
           # newest copy via restore-keys.
           key: apkrun-fuzz-corpus-${{ matrix.target }}-${{ github.ref_name }}-${{ github.run_id }}
           restore-keys: apkrun-fuzz-corpus-${{ matrix.target }}-${{ github.ref_name }}-
+      - name: Re-overlay the repository seeds
+        # The cache extraction overwrites same-path files, so an updated seed
+        # in the repository would otherwise be replaced by its older cached
+        # copy. Restoring the tracked files keeps the canonical seeds while
+        # the untracked cache-grown corpus files survive.
+        run: git restore -- Tests/Fixtures/fuzz/
       - name: Fuzz the parser for one hour
         run: |
           # libFuzzer writes new coverage into the corpus directory itself

@@ -1,0 +1,107 @@
+name: Nightly fuzzing
+
+# fuzz-long lives in its own workflow so it can run on a schedule: the
+# acceptance gates in nightly.yml need self-hosted lab runners that are not
+# registered yet (IR-295/IR-314), but fuzzing only needs the xcode-27 pool.
+# M12 #92 requires fuzz-long to run nightly, one hour per target, with the
+# corpus carried forward between runs.
+on:
+  schedule:
+    - cron: "0 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fuzz-long:
+    name: fuzz-long (${{ matrix.target }}, 1h)
+    if: github.ref == 'refs/heads/main'
+    runs-on: xcode-27
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - virtio-gpu-request
+          - resource-table
+          - guest-frame-swift
+          - container-reader
+          - apk-signing-block
+          - aapt2-badging
+          - direct-manifest
+          - fdroid-index
+          - github-releases
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install pinned repository tools
+        # Anonymous GitHub fetches from shared runners are rate-limited (401);
+        # authenticate every git fetch with the run's token, scoped to this
+        # step so build and test code never sees it.
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/bootstrap
+      - name: Compute verified build cache key
+        id: cache-key
+        run: echo "key=$(scripts/build-third-party.sh --print-cache-key virgl-runtime)" >> "$GITHUB_OUTPUT"
+      - name: Restore verified graphics libraries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v4
+        with:
+          path: ThirdParty/out
+          key: ${{ steps.cache-key.outputs.key }}
+      - name: Build pinned graphics libraries
+        run: scripts/build-third-party.sh virgl-runtime
+      - name: Install the pinned fuzz toolchain
+        run: |
+          source scripts/tool-versions.env
+          toolchain_dir="$HOME/Library/Developer/Toolchains"
+          mkdir -p "$toolchain_dir"
+          if ! compgen -G "$toolchain_dir/${SWIFT_FUZZ_TOOLCHAIN}*.xctoolchain" > /dev/null; then
+            # SWIFT_FUZZ_TOOLCHAIN is e.g. swift-6.3; swift.org publishes
+            # https://download.swift.org/<tag>/xcode/<PKG>/<PKG>-osx.pkg.
+            tag="$(printf '%s' "$SWIFT_FUZZ_TOOLCHAIN" | tr '[:upper:]' '[:lower:]')-release"
+            pkg="${SWIFT_FUZZ_TOOLCHAIN}-RELEASE"
+            curl -fsSL -o /tmp/swift.pkg "https://download.swift.org/${tag}/xcode/${pkg}/${pkg}-osx.pkg"
+            sudo installer -pkg /tmp/swift.pkg -target /
+          fi
+      - name: Restore the growing corpus
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v4
+        with:
+          # Per-target caches: matrix jobs run concurrently, so a shared
+          # cache would lose the growth of every target but the one whose
+          # job finished last.
+          path: Tests/Fixtures/fuzz/${{ matrix.target }}
+          # A unique key per run: actions/cache never overwrites an existing
+          # key, so the corpus grows every night and restores find the
+          # newest copy via restore-keys.
+          key: apkrun-fuzz-corpus-${{ matrix.target }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: apkrun-fuzz-corpus-${{ matrix.target }}-${{ github.ref_name }}-
+      - name: Re-overlay the repository seeds
+        # The cache extraction overwrites same-path files, so an updated seed
+        # in the repository would otherwise be replaced by its older cached
+        # copy. Restoring the tracked files keeps the canonical seeds while
+        # the untracked cache-grown corpus files survive.
+        run: git restore -- Tests/Fixtures/fuzz/
+      - name: Fuzz the parser for one hour
+        run: |
+          # libFuzzer writes new coverage into the corpus directory itself
+          # (Tests/Fixtures/fuzz/<target>); the cache carries it forward.
+          scripts/run-fuzz.sh "${{ matrix.target }}" --seconds 3600
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}-${{ github.sha }}
+          path: build/fuzz/
+          if-no-files-found: warn
+          retention-days: 30

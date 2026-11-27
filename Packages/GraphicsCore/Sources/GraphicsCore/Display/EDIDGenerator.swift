@@ -203,12 +203,13 @@ enum EDIDGenerator {
         bytes[8] = UInt8(timing.hFront & 0xFF)
         bytes[9] = UInt8(timing.hSync & 0xFF)
         bytes[10] = UInt8((timing.vFront & 0xF) << 4 | (timing.vSync & 0xF))
-        bytes[11] = UInt8(
-            ((timing.hFront >> 8) & 3) << 6
-                | ((timing.hSync >> 8) & 3) << 4
-                | ((timing.vFront >> 4) & 3) << 2
-                | ((timing.vSync >> 4) & 3)
-        )
+        // Broken into sub-expressions: as one UInt8(...) chain the bit shifts
+        // overload the type checker past its time limit on swift.org toolchains.
+        let hFrontHighBits = (timing.hFront >> 8) & 3
+        let hSyncHighBits = (timing.hSync >> 8) & 3
+        let vFrontHighBits = (timing.vFront >> 4) & 3
+        let vSyncHighBits = (timing.vSync >> 4) & 3
+        bytes[11] = UInt8(hFrontHighBits << 6 | hSyncHighBits << 4 | vFrontHighBits << 2 | vSyncHighBits)
         bytes[12] = UInt8(timing.widthMM & 0xFF)
         bytes[13] = UInt8(timing.heightMM & 0xFF)
         bytes[14] = UInt8(((timing.widthMM >> 8) & 0xF) << 4 | ((timing.heightMM >> 8) & 0xF))

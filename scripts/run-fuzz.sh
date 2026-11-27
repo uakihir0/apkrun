@@ -45,10 +45,14 @@ targets=(
 
 # TOOLCHAINS is ignored by swift build (the swiftbuild driver resolves the
 # compiler itself), so call the toolchain's own swift binary instead. The
-# toolchain must also compile against a macOS SDK of its own generation or
-# older: a macOS 27 SDK injects -target-arch-variant, which swift.org
-# toolchains before Swift 6.4 do not understand. Probe the installed
-# toolchains and SDKs, newest first, and use the first compatible pair.
+# toolchain must also compile against the macOS SDK. Since macOS 27 the SDK
+# overlays ship arm64e-only swiftinterfaces whose swift-module-flags embed
+# `-target-arch-variant arm64e.x1`, an argument swift.org toolchains before
+# Swift 6.4 do not understand. The flag only describes how the overlay itself
+# was built, so consumers can drop it: copy the newest SDK into
+# build/fuzz-sdk/, strip the flag from every swiftinterface, and compile
+# against the copy. Probe the installed toolchains newest first and use the
+# first one that typechecks Foundation against the patched SDK.
 toolchain_dirs() {
     if [[ -d "${SWIFT_FUZZ_TOOLCHAIN:-}" ]]; then
         printf '%s\n' "$SWIFT_FUZZ_TOOLCHAIN"
@@ -61,25 +65,40 @@ toolchain_dirs() {
 }
 sdk_dirs() {
     find /Applications -path '*/Platforms/MacOSX.platform/Developer/SDKs/MacOSX*.sdk' \
-        -maxdepth 6 -type d 2>/dev/null | sort -r
+        -maxdepth 9 -type d 2>/dev/null | sort -r
 }
-fuzz_swift=""
+
 sdk=""
+while IFS= read -r candidate_sdk; do
+    sdk="$candidate_sdk"
+    break
+done < <(sdk_dirs)
+[[ -n "$sdk" ]] || { printf 'run-fuzz: no macOS SDK found under /Applications\n' >&2; exit 78; }
+
+sdk_name="$(basename "$sdk")"
+patched="$repo_root/build/fuzz-sdk/$sdk_name"
+if [[ ! -d "$patched" ]]; then
+    rm -rf "$repo_root/build/fuzz-sdk"
+    mkdir -p "$repo_root/build/fuzz-sdk"
+    cp -R "$sdk" "$patched"
+    find "$patched" -name '*.swiftinterface' \
+        -exec sed -i '' 's/ -target-arch-variant arm64e[^ ]*//g' {} +
+fi
+sdk="$patched"
+
+fuzz_swift=""
 while IFS= read -r candidate_dir; do
-    [[ -x "$candidate_dir/usr/bin/swift" ]] || continue
-    while IFS= read -r candidate_sdk; do
-        if printf 'import Foundation\n' \
-            | "$candidate_dir/usr/bin/swift" -sdk "$candidate_sdk" -typecheck - >/dev/null 2>&1; then
-            fuzz_swift="$candidate_dir/usr/bin/swift"
-            sdk="$candidate_sdk"
-            break 2
-        fi
-    done < <(sdk_dirs)
+    [[ -x "$candidate_dir/usr/bin/swiftc" ]] || continue
+    if printf 'import Foundation\n' \
+        | "$candidate_dir/usr/bin/swiftc" -sdk "$sdk" -typecheck - >/dev/null 2>&1; then
+        fuzz_swift="$candidate_dir/usr/bin/swift"
+        break
+    fi
 done < <(toolchain_dirs)
 [[ -n "$fuzz_swift" ]] \
-    || { printf 'run-fuzz: no installed toolchain compiles against any installed macOS SDK (need %s or newer)\n' "$SWIFT_FUZZ_TOOLCHAIN" >&2; exit 78; }
+    || { printf 'run-fuzz: no installed toolchain compiles against the patched macOS SDK (need %s or newer)\n' "$SWIFT_FUZZ_TOOLCHAIN" >&2; exit 78; }
 export SDKROOT="$sdk"
-printf 'run-fuzz: %s against %s\n' "$(basename "$(dirname "$(dirname "$fuzz_swift")")")" "$(basename "$sdk")"
+printf 'run-fuzz: %s against %s (patched)\n' "$(basename "$(dirname "$(dirname "$(dirname "$fuzz_swift")")")")" "$(basename "$sdk")"
 
 run_one() {
     local product="$1" name="$2"

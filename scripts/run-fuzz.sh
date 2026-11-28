@@ -188,7 +188,9 @@ case "$selection" in
         selected=("${targets[@]}") ;;
     --changed)
         base="$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main)"
-        changed="$(git diff --name-only "$base" HEAD; git diff --name-only)"
+        # core.quotepath off: git wraps paths with non-ASCII bytes in quotes,
+        # which would defeat the line-anchored prefix matching below.
+        changed="$(git -c core.quotepath=false diff --name-only "$base" HEAD; git -c core.quotepath=false diff --name-only)"
         # The harness itself and the toolchain pin reshape every target's
         # build and run, so a change there fuzzes everything.
         fuzz_all=0

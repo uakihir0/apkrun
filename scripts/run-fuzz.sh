@@ -180,6 +180,34 @@ run_one() {
     APKRUN_FUZZ_TARGET="$name" DYLD_INSERT_LIBRARIES="$insert_libs" "$bin" \
         -max_total_time="$seconds" -timeout=10 -rss_limit_mb=2048 \
         -artifact_prefix="$artifacts/" "$corpus"
+
+    # M12 #92 step 2: merge the grown corpus back with -merge=1 so the nightly
+    # cache carries a minimized corpus instead of unbounded growth. The merge
+    # writes the coverage-minimal set into a scratch directory; corpus entries
+    # it drops are redundant. Tracked seeds always stay: they are the canonical
+    # regression inputs even when the fuzzer considers them redundant.
+    local merged
+    merged="$(mktemp -d /tmp/apkrun-fuzz-merge.XXXXXX)"
+    if compgen -G "$corpus/*" > /dev/null; then
+        APKRUN_FUZZ_TARGET="$name" DYLD_INSERT_LIBRARIES="$insert_libs" "$bin" \
+            -merge=1 -timeout=10 -rss_limit_mb=2048 "$merged" "$corpus" || {
+            printf 'run-fuzz: corpus merge failed for %s; keeping the unmerged corpus\n' "$name" >&2
+            rm -rf "$merged"
+            return 0
+        }
+        local tracked entry base
+        tracked="$(git ls-files -- "$corpus")"
+        for entry in "$corpus"/*; do
+            base="$(basename "$entry")"
+            if [[ ! -f "$merged/$base" ]] && ! grep -qF "$entry" <<< "$tracked"; then
+                rm -f "$entry"
+            fi
+        done
+        for entry in "$merged"/*; do
+            [[ -f "$entry" ]] && cp "$entry" "$corpus/"
+        done
+    fi
+    rm -rf "$merged"
 }
 
 selected=()

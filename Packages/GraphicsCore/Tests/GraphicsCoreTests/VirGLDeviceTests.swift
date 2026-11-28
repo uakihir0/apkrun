@@ -597,6 +597,9 @@ private func backingCalls(_ engine: FakeVirGLEngine) -> [String] {
         gpuRequest(.getDisplayInfo, body: .getDisplayInfo),
     ])
     try await eventually { control.completionCounts == [1, 0, 0] }
+    // The fence is created on the render thread after the first completion, so wait for it
+    // before releasing: releasing early completes nothing, and the completion is lost.
+    try await eventually { harness.engineRef.engine.calls.contains(.fence(9, context: 1)) }
     harness.engineRef.engine.releaseFences()
     try await eventually { control.completionCounts == [1, 1, 1] }
 }

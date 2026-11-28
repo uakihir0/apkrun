@@ -181,7 +181,9 @@ func consoleLogWriterSynchronizesAtSixtyFourKiBAndOnTimerFlush() async throws {
         // runner: wait for both, not just the write.
         if (contentsAfterTimerFlush?.count ?? 0) > countBeforeTimerFlush,
             fixture.fileSystem.synchronizeCallCount >= 4
-        { break }
+        {
+            break
+        }
         try await Task.sleep(for: .milliseconds(100))
         contentsAfterTimerFlush = fixture.fileSystem.contents(at: fixture.paths.consoleLogFile)
     }

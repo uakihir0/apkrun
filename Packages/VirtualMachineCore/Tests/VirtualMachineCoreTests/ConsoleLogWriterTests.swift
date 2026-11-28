@@ -177,7 +177,11 @@ func consoleLogWriterSynchronizesAtSixtyFourKiBAndOnTimerFlush() async throws {
     // CI runner the flush task can be scheduled late, so poll for the write.
     var contentsAfterTimerFlush = fixture.fileSystem.contents(at: fixture.paths.consoleLogFile)
     for _ in 0..<40 {
-        if (contentsAfterTimerFlush?.count ?? 0) > countBeforeTimerFlush { break }
+        // The write and its synchronization are separate hops on a loaded CI
+        // runner: wait for both, not just the write.
+        if (contentsAfterTimerFlush?.count ?? 0) > countBeforeTimerFlush,
+            fixture.fileSystem.synchronizeCallCount >= 4
+        { break }
         try await Task.sleep(for: .milliseconds(100))
         contentsAfterTimerFlush = fixture.fileSystem.contents(at: fixture.paths.consoleLogFile)
     }

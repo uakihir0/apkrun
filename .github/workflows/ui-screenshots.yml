@@ -1,0 +1,112 @@
+name: UI screenshots
+
+# Builds APKRun.app, launches it on the runner, and captures the screen so
+# the home UI leaves a visual trace without a lab Mac. The VM-dependent
+# surfaces cannot render on a runner (no nested virtualization), so the
+# capture shows the shell UI as far as it renders without a runtime.
+# Evidence is pushed to the ci-screenshots branch and uploaded as an artifact.
+on:
+  schedule:
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ui-screenshots-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    name: capture APKRun.app home screen
+    if: github.ref == 'refs/heads/main'
+    runs-on: xcode-27
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Cache pinned repository tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v4
+        with:
+          path: |
+            build/tools
+            Images/tools/.venv
+          key: pinned-tools-v1-${{ hashFiles('scripts/tool-versions.env') }}
+      - name: Install pinned repository tools
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+          GIT_CONFIG_VALUE_0: "https://github.com/"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/bootstrap
+      - name: Compute verified build cache key
+        id: third-party-key
+        run: echo "key=$(scripts/build-third-party.sh --print-cache-key virgl-runtime)" >> "$GITHUB_OUTPUT"
+      - name: Restore verified graphics libraries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v4
+        with:
+          path: ThirdParty/out/virgl-runtime/${{ steps.third-party-key.outputs.key }}
+          key: ${{ runner.os }}-virgl-runtime-${{ steps.third-party-key.outputs.key }}
+      - name: Verify graphics libraries
+        run: scripts/build-third-party.sh virgl-runtime
+      - name: Generate Xcode project
+        run: scripts/generate-project.sh
+      - name: Build Debug products
+        run: >-
+          xcodebuild -project APKRun.xcodeproj -scheme APKRun
+          -configuration Debug -jobs 2 -derivedDataPath build/DebugDerivedData
+          CODE_SIGN_IDENTITY=- build
+      - name: Launch the app and capture the screen
+        run: |
+          app="build/DebugDerivedData/Build/Products/Debug/APKRun.app"
+          mkdir -p build/screenshots
+          ls "$app/Contents/MacOS/" || exit 1
+          open "$app" || true
+          # The home UI needs a few seconds to render; the daemon is absent on
+          # a runner, so an error banner is still honest evidence.
+          sleep 20
+          screencapture -x build/screenshots/apkrun-home.png || echo 'screencapture failed' >&2
+          open "$app" 2>/dev/null || true
+          sleep 5
+          screencapture -x build/screenshots/apkrun-home-second.png || true
+          osascript -e 'tell application "System Events" to get name of every process whose background only is false' \
+            > build/screenshots/processes.txt 2>/dev/null || true
+          pkill -f 'APKRun.app' || true
+      - name: Upload the screenshots
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: ui-screenshots-${{ github.sha }}
+          path: build/screenshots/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Publish the screenshots to the evidence branch
+        # Artifacts need API access to read; the branch renders in the plain
+        # GitHub UI. Contents force-pushed per date keeps the branch small.
+        if: always()
+        run: |
+          if [[ ! -f build/screenshots/apkrun-home.png ]]; then
+            echo 'no capture produced; skipping publish'
+            exit 0
+          fi
+          stamp="$(date -u +%Y-%m-%d)"
+          git config user.name 'apkrun-ci'
+          git config user.email 'ci@users.noreply.github.com'
+          git fetch origin ci-screenshots 2>/dev/null || true
+          if git rev-parse --verify origin/ci-screenshots > /dev/null 2>&1; then
+            git checkout -B ci-screenshots origin/ci-screenshots
+          else
+            git checkout --orphan ci-screenshots
+            git rm -rf . 2>/dev/null || true
+          fi
+          mkdir -p "$stamp"
+          cp build/screenshots/*.png "$stamp/" 2>/dev/null || true
+          cp build/screenshots/processes.txt "$stamp/" 2>/dev/null || true
+          printf '# UI screenshots\n\nLatest capture: %s ([apkrun-home.png](%s/apkrun-home.png))\n' \
+            "$stamp" "$stamp" > README.md
+          git add .
+          git commit -q -m "capture $stamp" || echo 'nothing new to publish'
+          git push -f origin ci-screenshots

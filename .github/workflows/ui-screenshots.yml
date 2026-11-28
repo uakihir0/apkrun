@@ -107,6 +107,6 @@ jobs:
           cp build/screenshots/processes.txt "$stamp/" 2>/dev/null || true
           printf '# UI screenshots\n\nLatest capture: %s ([apkrun-home.png](%s/apkrun-home.png))\n' \
             "$stamp" "$stamp" > README.md
-          git add .
+          git add "$stamp" README.md
           git commit -q -m "capture $stamp" || echo 'nothing new to publish'
           git push -f origin ci-screenshots

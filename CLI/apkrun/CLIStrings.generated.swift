@@ -6,8 +6,10 @@ import Foundation
 /// Keyed by the English text; resolves the runtime language from
 /// Locale.preferredLanguages (ja first, then English fallback).
 enum CLIStrings {
-    /// Test hook: when set, overrides the process locale for `text(_:)` resolution.
-    nonisolated(unsafe) static var forcedLanguage: String?
+    /// Test hook: when set inside `$forcedLanguage.withValue`, overrides the process
+    /// locale for `text(_:)` resolution. Task-local so parallel tests cannot race
+    /// (a plain global let one test's reset blank another test's override).
+    @TaskLocal static var forcedLanguage: String?
 
     static func text(_ key: String) -> String {
         let ja = (forcedLanguage ?? Locale.preferredLanguages.first ?? "en")

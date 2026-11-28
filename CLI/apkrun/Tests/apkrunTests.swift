@@ -1503,49 +1503,49 @@ private let releaseBuildInfo = BuildInfo(
     /// #93: human output localizes line by line under a ja locale; interpolated
     /// literals splice their captures into the ja template in placeholder order.
     @Test func wrapGoldenJapaneseTexts() {
-        CLIStrings.forcedLanguage = "ja"
-        defer { CLIStrings.forcedLanguage = nil }
-        #expect(
-            CLIStrings.text(WrapCommandSupport.resultText(helloWrapperInfo()))
-                == golden("wrap-success-ja.txt"))
-        #expect(
-            CLIStrings.text(WrapCommandSupport.infoText(helloWrapperInfo()))
-                == golden("wrap-info-ja.txt"))
-        let verification = WrapperVerification(
-            bundleURL: URL(fileURLWithPath: "/Applications/HelloText.app"),
-            bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
-            packageID: "io.apkrun.fixture.hellotext",
-            kind: .local,
-            registered: true,
-            cdhash: "0123456789abcdef0123456789abcdef01234567"
-        )
-        #expect(
-            CLIStrings.text(WrapCommandSupport.verificationText(verification))
-                == golden("wrap-verify-valid-ja.txt"))
-        let plain = DistributionWrapperResult(
-            appURL: URL(fileURLWithPath: "/Users/devin/HelloText.app"),
-            zipURL: URL(fileURLWithPath: "/Users/devin/HelloText.zip"),
-            bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
-            cdhash: "0123456789abcdef0123456789abcdef01234567",
-            teamID: "ABCDE12345",
-            notarized: false
-        )
-        #expect(
-            CLIStrings.text(WrapCommandSupport.distributionText(plain))
-                == golden("wrap-distribution-ja.txt"))
+        CLIStrings.$forcedLanguage.withValue("ja") {
+            #expect(
+                CLIStrings.text(WrapCommandSupport.resultText(helloWrapperInfo()))
+                    == golden("wrap-success-ja.txt"))
+            #expect(
+                CLIStrings.text(WrapCommandSupport.infoText(helloWrapperInfo()))
+                    == golden("wrap-info-ja.txt"))
+            let verification = WrapperVerification(
+                bundleURL: URL(fileURLWithPath: "/Applications/HelloText.app"),
+                bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+                packageID: "io.apkrun.fixture.hellotext",
+                kind: .local,
+                registered: true,
+                cdhash: "0123456789abcdef0123456789abcdef01234567"
+            )
+            #expect(
+                CLIStrings.text(WrapCommandSupport.verificationText(verification))
+                    == golden("wrap-verify-valid-ja.txt"))
+            let plain = DistributionWrapperResult(
+                appURL: URL(fileURLWithPath: "/Users/devin/HelloText.app"),
+                zipURL: URL(fileURLWithPath: "/Users/devin/HelloText.zip"),
+                bundleID: "io.apkrun.android.io.apkrun.fixture.hellotext",
+                cdhash: "0123456789abcdef0123456789abcdef01234567",
+                teamID: "ABCDE12345",
+                notarized: false
+            )
+            #expect(
+                CLIStrings.text(WrapCommandSupport.distributionText(plain))
+                    == golden("wrap-distribution-ja.txt"))
+        }
     }
 
     /// #93/#60: `apkrun doctor` human lines pass through the same line-localizing
     /// writer as the rest of the CLI.
     @Test func doctorOutputLocalizesJapanese() {
-        CLIStrings.forcedLanguage = "ja"
-        defer { CLIStrings.forcedLanguage = nil }
-        let report = """
-            ✕ apkrund.reachable — Background service
-            Fixed: Guest Agent restart
-            ✓ vm.virtualizationSupported — Virtualization
-            """
-        #expect(CLIStrings.text(report) == golden("doctor-report-ja.txt"))
+        CLIStrings.$forcedLanguage.withValue("ja") {
+            let report = """
+                ✕ apkrund.reachable — Background service
+                Fixed: Guest Agent restart
+                ✓ vm.virtualizationSupported — Virtualization
+                """
+            #expect(CLIStrings.text(report) == golden("doctor-report-ja.txt"))
+        }
     }
 #endif
 

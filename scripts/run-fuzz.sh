@@ -216,10 +216,22 @@ case "$selection" in
         selected=("${targets[@]}") ;;
     --changed)
         base="$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main)"
-        changed="$(git diff --name-only "$base" HEAD; git diff --name-only)"
+        # core.quotepath off: git wraps paths with non-ASCII bytes in quotes,
+        # which would defeat the line-anchored prefix matching below.
+        changed="$(git -c core.quotepath=false diff --name-only "$base" HEAD; git -c core.quotepath=false diff --name-only)"
+        # The harness itself and the toolchain pin reshape every target's
+        # build and run, so a change there fuzzes everything.
+        fuzz_all=0
+        if grep -qE '^(scripts/run-fuzz\.sh|scripts/tool-versions\.env)' <<< "$changed"; then
+            fuzz_all=1
+        fi
         for row in "${targets[@]}"; do
             prefix="${row##*|}"
-            if grep -q "^${prefix}" <<< "$changed"; then
+            name="${row%%|*}"
+            # A changed seed exercises its target even when the parser is
+            # untouched; a changed module does the same through the prefix.
+            if [[ "$fuzz_all" == 1 ]] \
+                || grep -q "^${prefix}\|^Tests/Fixtures/fuzz/${name}/" <<< "$changed"; then
                 selected+=("$row")
             fi
         done

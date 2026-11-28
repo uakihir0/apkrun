@@ -1166,7 +1166,9 @@ def workflow_errors(workflow, trigger_key)
     errors << "push checks must run only for main"
   end
   workflow.fetch("jobs").each do |job_name, job|
-    expected_runner = job_name == "test-vsockd" ? "ubuntu-latest" : "xcode-27"
+    # test-vsockd and test-kotlin are Linux/JVM-only and run on the free
+    # GitHub-hosted Ubuntu pool; everything else needs the macOS 27 runtime.
+    expected_runner = %w[test-vsockd test-kotlin].include?(job_name) ? "ubuntu-latest" : "xcode-27"
     unless job["runs-on"] == expected_runner
       errors << "#{job_name} must use a fresh GitHub-hosted #{expected_runner} runner"
     end
@@ -1243,7 +1245,7 @@ def workflow_errors(workflow, trigger_key)
   unless workflow.fetch("permissions") == { "contents" => "read" }
     errors << "workflow permissions must remain contents: read"
   end
-  expected_jobs = %w[lint codegen third-party build test-swift test-graphics test-images fuzz-short test-vsockd]
+  expected_jobs = %w[lint codegen third-party build test-swift test-graphics test-images fuzz-short test-vsockd test-kotlin]
   unless workflow.fetch("jobs").keys.sort == expected_jobs.sort
     errors << "CI jobs must match the required job set"
   end

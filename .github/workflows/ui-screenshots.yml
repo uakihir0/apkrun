@@ -85,8 +85,11 @@ jobs:
           retention-days: 30
       - name: Publish the screenshots to the evidence branch
         # Artifacts need API access to read; the branch renders in the plain
-        # GitHub UI. Contents force-pushed per date keeps the branch small.
+        # GitHub UI. The checkout drops credentials, so the push authenticates
+        # with the run token scoped to this step.
         if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           if [[ ! -f build/screenshots/apkrun-home.png ]]; then
             echo 'no capture produced; skipping publish'
@@ -109,4 +112,4 @@ jobs:
             "$stamp" "$stamp" > README.md
           git add "$stamp" README.md
           git commit -q -m "capture $stamp" || echo 'nothing new to publish'
-          git push -f origin ci-screenshots
+          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}" ci-screenshots

@@ -76,6 +76,40 @@ jobs:
             echo "::notice::The runner kernel does not provide vsock_loopback; run the documented T1 command on a Linux host with AF_VSOCK loopback support."
           fi
 
+  test-kotlin:
+    name: test-kotlin
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install the Android SDK pieces the guest modules need
+        # compileSdk 37 needs the platform and build-tools even for pure JVM
+        # unit tests. ubuntu-latest ships JDK 17 as its default java.
+        run: |
+          sdk_root="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$sdk_root"
+          curl -fsSL -o "$RUNNER_TEMP/cmdtools.zip" \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q "$RUNNER_TEMP/cmdtools.zip" -d "$sdk_root"
+          mkdir -p "$sdk_root/cmdline-tools/latest"
+          mv "$sdk_root/cmdline-tools/bin" "$sdk_root/cmdline-tools/lib" \
+             "$sdk_root/cmdline-tools/NOTICE.txt" "$sdk_root/cmdline-tools/source.properties" \
+             "$sdk_root/cmdline-tools/latest/"
+          yes | "$sdk_root/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$sdk_root" --licenses > /dev/null
+          "$sdk_root/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$sdk_root" \
+            'platforms;android-37.0' 'build-tools;37.0.0' > /dev/null
+          echo "sdk.dir=$sdk_root" > Guest/local.properties
+      - name: Run the Kotlin unit tests
+        # Regression mode: the jazzer @FuzzTest cases replay their seed inputs
+        # here; fuzzing mode is the fuzz-kotlin job of fuzz-nightly.yml.
+        run: |
+          ./gradlew -p Guest --console=plain \
+            :protocol:testDebugUnitTest :guestd:testDebugUnitTest
+
+
   codegen:
     name: codegen
     runs-on: xcode-27

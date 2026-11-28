@@ -9,7 +9,7 @@ import com.code_intelligence.jazzer.junit.FuzzTest
  * '*FrameCodecFuzzTest*'` with Jazzer.
  */
 class FrameCodecFuzzTest {
-    @FuzzTest
+    @FuzzTest(maxDuration = "15m")
     fun decodeFrame(data: FuzzedDataProvider) {
         val bytes = data.consumeRemainingAsBytes()
         runCatching { FrameCodec.decode(bytes) }
@@ -26,7 +26,7 @@ class FrameCodecFuzzTest {
         }
     }
 
-    @FuzzTest
+    @FuzzTest(maxDuration = "15m")
     fun decodeBody(data: FuzzedDataProvider) {
         runCatching { FrameCodec.decodeBody(data.consumeRemainingAsBytes()) }
     }

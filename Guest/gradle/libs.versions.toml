@@ -7,6 +7,7 @@ agp = "9.4.1"
 coroutines = "1.11.0"
 junit = "4.13.2"
 jazzer = "0.24.0"
+junitJupiter = "5.11.4"
 ktfmt = "0.64"
 protobuf = "4.31.1"
 protobufPlugin = "0.10.0"
@@ -18,6 +19,10 @@ jazzer-junit = { module = "com.code-intelligence:jazzer-junit", version.ref = "j
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 ktfmt = { module = "com.facebook:ktfmt", version.ref = "ktfmt" }
 protobuf-javalite = { module = "com.google.protobuf:protobuf-javalite", version.ref = "protobuf" }
+# JUnit platform engines: jupiter runs the jazzer @FuzzTest templates, vintage keeps the
+# JUnit 4 tests running on the same platform test tasks (#92).
+junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junitJupiter" }
+junit-vintage-engine = { module = "org.junit.vintage:junit-vintage-engine", version.ref = "junitJupiter" }
 protoc = { module = "com.google.protobuf:protoc", version.ref = "protobuf" }
 
 [plugins]

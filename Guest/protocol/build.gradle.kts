@@ -27,6 +27,13 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    testOptions {
+        // @FuzzTest is a JUnit platform test template; without the platform the fuzz
+        // tests are silently never discovered. The vintage engine keeps the JUnit 4
+        // tests on the same tasks.
+        unitTests.all { it.useJUnitPlatform() }
+    }
+
     sourceSets {
         getByName("main") {
             // The protobuf plugin registers the `proto` source directory as an extension of
@@ -57,4 +64,6 @@ dependencies {
     implementation(libs.protobuf.javalite)
     testImplementation(libs.junit)
     testImplementation(libs.jazzer.junit)
+    testRuntimeOnly(libs.junit.jupiter.engine)
+    testRuntimeOnly(libs.junit.vintage.engine)
 }

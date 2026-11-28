@@ -105,3 +105,52 @@ jobs:
           path: build/fuzz/
           if-no-files-found: warn
           retention-days: 30
+
+  fuzz-kotlin:
+    name: fuzz-kotlin (jazzer, 15m per test)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install the Android SDK pieces the guest modules need
+        # M12 #92: the Kotlin fuzz tests run in fuzz-long. compileSdk 37
+        # needs the platform and build-tools even though the fuzz tests are
+        # pure JVM unit tests.
+        run: |
+          sdk_root="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$sdk_root"
+          curl -fsSL -o "$RUNNER_TEMP/cmdtools.zip" \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q "$RUNNER_TEMP/cmdtools.zip" -d "$sdk_root"
+          mkdir -p "$sdk_root/cmdline-tools/latest"
+          mv "$sdk_root/cmdline-tools/bin" "$sdk_root/cmdline-tools/lib" \
+             "$sdk_root/cmdline-tools/NOTICE.txt" "$sdk_root/cmdline-tools/source.properties" \
+             "$sdk_root/cmdline-tools/latest/"
+          yes | "$sdk_root/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$sdk_root" --licenses > /dev/null
+          "$sdk_root/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$sdk_root" \
+            'platforms;android-37.0' 'build-tools;37.0.0' > /dev/null
+          echo "sdk.dir=$sdk_root" > Guest/local.properties
+      - name: Fuzz the Kotlin parsers
+        # ubuntu-latest ships JDK 17 as its default java. JAZZER_FUZZ switches
+        # jazzer-junit from seed regression into fuzzing mode; each @FuzzTest
+        # bounds itself with maxDuration.
+        env:
+          JAZZER_FUZZ: "1"
+        run: |
+          java -version 2>&1 | head -1
+          ./gradlew -p Guest --console=plain \
+            :protocol:testDebugUnitTest :guestd:testDebugUnitTest
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: fuzz-kotlin-artifacts-${{ github.sha }}
+          path: |
+            Guest/**/crash-*
+            Guest/crash-*
+          if-no-files-found: warn
+          retention-days: 30

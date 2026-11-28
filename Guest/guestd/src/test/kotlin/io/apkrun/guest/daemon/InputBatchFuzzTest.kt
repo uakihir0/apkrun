@@ -12,7 +12,7 @@ import io.apkrun.guest.protocol.v1.InputEvent
 class InputBatchFuzzTest {
     private val bounds = DisplayBounds(width = 1920, height = 1080)
 
-    @FuzzTest
+    @FuzzTest(maxDuration = "15m")
     fun decodeAndValidate(data: FuzzedDataProvider) {
         val bytes = data.consumeRemainingAsBytes()
         val batch = runCatching { InputBatch.parseFrom(bytes) }.getOrNull() ?: return
